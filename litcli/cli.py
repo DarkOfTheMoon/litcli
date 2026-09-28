@@ -16,6 +16,7 @@ from . import pdf as pdfutil
 from . import metadata
 from .config import get_all_backends, get_backend, load_config
 from .models import AcademicItem
+from .aggregate import merge_items
 from .citation import render_intext, render_bibliography
 from .backends.base import NotSupportedError
 
@@ -108,6 +109,10 @@ def cmd_search(cfg, args) -> int:
     else:
         backend = get_backend(args.backend, cfg)
         items = backend.search(args.query, limit=args.limit)
+
+    # 聚合:仅 --all 多条时去重/合并/排序并标来源
+    if args.all and items and len(items) > 1:
+        items = merge_items(items)
 
     if args.format in ("json", "csl"):
         for it in items:
