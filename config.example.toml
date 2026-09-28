@@ -1,0 +1,11 @@
+# litcli 后端配置示例。
+# 复制到 ~/.config/litcli/config.toml,或设环境变量 LITCLI_CONFIG 指向本文件。
+# 未配置时内置默认:仅启用 zotero 后端(本地库 http://localhost:23119/api)。
+
+[backends.zotero]
+type = "zotero_local"
+base = "http://localhost:23119/api"
+
+[backends.arxiv]
+type = "arxiv"
+# 无需 key;可设无须,全部走 arXiv 开放 API
