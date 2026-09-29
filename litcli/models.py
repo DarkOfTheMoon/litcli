@@ -111,8 +111,10 @@ class AcademicItem:
         return f"{family}, {given}".strip(", ")
 
     def _default_id(self) -> str:
+        if not self.creators:
+            return f"anon_{self.year or 'noyear'}"
         first = self.creators[0].get("family", "anon") if isinstance(
-            self.creators[0], dict) else (self.creators[0] if self.creators else "anon")
+            self.creators[0], dict) else self.creators[0]
         return f"{first}_{self.year or 'noyear'}"
 
     def _bibtex_type(self) -> str:

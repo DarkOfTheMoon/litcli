@@ -37,3 +37,12 @@ class TestModels(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAcademicItemToCslEmpty(unittest.TestCase):
+    def test_empty_creators_does_not_crash(self):
+        from litcli.models import AcademicItem
+        item = AcademicItem(source="pdf", key="", title="T", creators=[], year="")
+        csl = item.to_csl()  # 原 _default_id 对空 creators 抛 IndexError
+        self.assertIn("id", csl)
+        self.assertEqual(csl["id"], "anon_noyear")
