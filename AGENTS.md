@@ -40,7 +40,7 @@ litcli 的核心是「一条文献在多个后端（Zotero / arXiv）间的读�
   - `zotero_local.py`：Zotero 10 本地 API（`localhost:23119/api`，`users/0` 本机别名，**无需 API key**）。读+写+附件，写入用 `If-Unmodified-Since-Version` 并发控制，写请求需 `Zotero-Server-ID`（惰性拉自 `/connector/ping`）。
   - `arxiv.py`：arXiv 开放 API（Atom/XML），只读 + 可拉 PDF 直链，按 arXiv id（去 `v` 版本）归一化。
 
-- **配置层**（`litcli/config.py`）：读 `~/.config/litcli/config.toml`（不支持则在 `$LITCLI_CONFIG`），`tomllib` 解析。加载优先级：显式 path → `$LITCLI_CONFIG` → `~/.config/litcli/config.toml` → **内置默认**（只有 Zotero localhost）。后端注册表用 try-import：arXiv 文件未就绪时不影响 Zotero 单后端工作。配置示例见 `config.example.toml`。
+- **配置层**（`litcli/config.py`）：读 `~/.config/litcli/config.toml`（不支持则在 `$LITCLI_CONFIG`），`tomllib` 解析。加载优先级：显式 path → `$LITCLI_CONFIG` → `~/.config/litcli/config.toml` → **内置默认**（Zotero + arXiv）。写 Zotero 需在 config 配真实 `api_key`，否则 `add`/`set` 报 401。后端注册表用 try-import：arXiv 文件未就绪时不影响 Zotero 单后端工作。配置示例见 `config.example.toml`。
 
 - **CLI 编排层**（`litcli/cli.py`）：argparse 子命令 `search/get/add/set/export/pdf/gen-meta/backends`，分发到后端。`add` 的 `--creator` 用 `"家族, 名字"`，可多次。
 
