@@ -194,6 +194,21 @@ def cmd_pdf(cfg, args) -> int:
     return 0
 
 
+def cmd_gen_meta(cfg, args) -> int:
+    """抽取本地 PDF 首页元数据 → csljson(供人工校验后 add --csl 导入)。"""
+    item = metadata.extract_metadata(args.pdf)
+    csl = item.to_csl()
+    csl["id"] = item.key or "pdf-meta"
+    out = args.out or (os.path.splitext(args.pdf)[0] + ".csl.json")
+    with open(out, "w") as f:
+        json.dump(csl, f, ensure_ascii=False, indent=2)
+    print(f"已写出 csljson: {out}")
+    print(json.dumps(csl, ensure_ascii=False, indent=2))
+    if not (item.title or item.creators or item.year):
+        print("[警告] 未抽取到任何字段,请人工校验后再导入")
+    return 0
+
+
 def cmd_backends(cfg) -> int:
     for name, b in sorted(get_all_backends(cfg).items()):
         caps = ", ".join(sorted(b.capabilities))
@@ -208,6 +223,7 @@ def main(argv=None) -> int:
         return {
             "search": cmd_search, "get": cmd_get, "add": cmd_add,
             "set": cmd_set, "export": cmd_export, "pdf": cmd_pdf,
+            "gen-meta": cmd_gen_meta,
             "backends": lambda c, a: cmd_backends(c),
         }[args.cmd](cfg, args)
     except NotSupportedError as e:
