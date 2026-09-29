@@ -44,7 +44,9 @@ PDF 全文抽取需系统有 `pdftotext`(poppler-utils)；无则 `pdf --text` �
 ```toml
 [backends.zotero]
 type = "zotero_local"
-base = "http://localhost:23119/api"   # 本机 Zotero 10 本地 API,无需 key
+base = "http://localhost:23119/api"     # 本机 Zotero 10 本地 API
+# 写(POST/PATCH/DELETE)需真实 Zotero API key;localhost key 仅可读
+# api_key = "你的-zotero-api-key"
 
 [backends.arxiv]
 type = "arxiv"
@@ -77,6 +79,6 @@ python3 -m unittest discover -s tests
 
 ## 已知限制
 
-- Zotero 写落库依赖本地 API 的写授权；本代码请求形状已由桩测验证正确，但**是否真正持久化需在 Zotero 侧环境实测**。
+- Zotero 写落库需**真实 Zotero API key**（本地 localhost key 仅为只读）：在 Zotero 偏好设置生成 key，写入 config 的 `api_key`。缺 key 时 `add`/`set` 报 `HTTP 401;写入需真实 Zotero API key`（退出码 2），不污染库；配好 key 后 `litcli add` 即可真正落库。
 - arXiv 联网在部分环境（如受限沙箱）返回 406；代码已把 HTTP 错误包装为 `RuntimeError`，`--all` 会跳过失败后端继续。
 - `citation.render_bibliography` 在无作者且无年份的极端条目下会因 `it.author` 属性缺失而崩——已知缺陷见 `citation.py`。

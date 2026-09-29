@@ -1,11 +1,12 @@
-# litcli 后端配置示例。
-# 复制到 ~/.config/litcli/config.toml,或设环境变量 LITCLI_CONFIG 指向本文件。
-# 未配置时内置默认:仅启用 zotero 后端(本地库 http://localhost:23119/api)。
+# litcli 配置示例(复制到 ~/.config/litcli/config.toml)
+# 任一缺省时回退到内置默认:本机 Zotero + arXiv(开箱即用,无需本文件)。
 
 [backends.zotero]
 type = "zotero_local"
-base = "http://localhost:23119/api"
+base = "http://localhost:23119/api"      # 本机 Zotero 10 本地 API
+# 写(POST/PATCH/DELETE)需真实 Zotero API key;localhost key 仅为只读。
+# path: Zotero → 偏好设置 → Advanced → API keys → 生成。缺省时写请求返回 401。
+# api_key = "你的-zotero-api-key"
 
 [backends.arxiv]
-type = "arxiv"
-# 无需 key;可设无须,全部走 arXiv 开放 API
+type = "arxiv"                          # 联网,只读,无需 key
