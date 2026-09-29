@@ -1,32 +1,35 @@
 ---
 name: zotero
-description: 用 litcli 命令与本地学术库(Zotero / arXiv)互操作。当用户想检索文献、添加/修改条目、导出引文、读 PDF 全文、或从本地 PDF 抽取元数据时触发。可替代 Zotero MCP——零常驻进程、按需加载省上下文。
+description: 与用户学术资料互操作——检索、读取、导出引文、读 PDF 全文、新增/修改。覆盖本机 Zotero 库与 arXiv。当用户提到"我的文献/论文库/引用/参考文献/PDF"时使用。
 ---
 
-# academic-lib 互操作(litcli)
+# Zotero / arXiv 学术互操作
 
-用 `litcli`(已装到 PATH;或 `python3 -m litcli.cli`)操作本机 Zotero 10 库与 arXiv。
-后端经 `--backend`(默认 zotero),`--all` 聚合;`litcli backends` 查看可用后端及能力。
+零依赖工具 `litcli`，后端无关：领域模型统一为 `AcademicItem`，Zotero 本地库可读可写，arXiv 联网只读。
 
-## 能力矩阵
+## 命令面（`litcli` 已在 PATH，或在 `~/Projects/Scholar/litcli` 下用 `./bin/litcli`）
 
-| 目的 | 命令 |
+后端经 `--backend`（默认 `zotero`），`--all` 跨后端聚合（去重/合并/排序，`extra["sources"]` 标来源）。
+
+| 任务 | 命令 |
 |---|---|
-| 检索(读) | `litcli search "<词>" [--backend zotero\|arxiv] [--all] [--limit N] [--format table\|json\|csl]` |
-| 单条全字段 | `litcli get <key> [--backend]` |
-| 新增(写) | `litcli add --title "..." --creator "家族, 名字" --year 2020 [--doi ...] [--url ...] [--abstract ...]` |
-| 新增(从 csljson) | `litcli add --csl <file.json> [--backend zotero]`(gen-meta 输出) |
-| 修改(写) | `litcli set <key> --title 新标题 [--abstract ...] [--year ...] [--doi ...] [--url ...]` |
+| 检索 | `litcli search "关键词" [--all] [--limit N]` |
+| 单条全字段 | `litcli get <key> [--backend ...]` |
 | 导出引文 | `litcli export <key> [--format csljson\|bibtex\|text]` |
-| 读 PDF 全文 | `litcli pdf <key> [--text [--lines N]] [--out x.pdf]` |
-| 本地 PDF 首页元数据 | `litcli gen-meta <pdf路径> [--out x.json]`(→ csljson) |
-| 后端列表 | `litcli backends` |
+| 读 PDF 全文 | `litcli pdf <key> --text` |
+| 新增 | `litcli add --title "..." --creator "家族, 名字" --year 2002 [--doi ...]` |
+| 修改 | `litcli set <key> --title "..." [--year ...]` |
+| 本地 PDF→元数据 | `litcli gen-meta <pdf> [--out X.csl.json]` |
+| 列后端 | `litcli backends` |
 
-## 关键要点
+## 环境事实
 
-- **后端默认 zotero**:本机库 `localhost:23119/api`,**无需 API key、无需开关**。`users/0` 是本机别名。
-- **写能力**:仅带 `write` 能力的后端能 `add`/`set`(zotero);arXiv 只读,会报"该后端不支持操作"。
-- **引文兜底**:`export --format csljson` 输出可喂 `pandoc --citeproc` 生成引文与参考文献表;**不依赖 Better BibTeX**。
-- **PDF 全文**:经系统 `pdftotext`;`--text` 打印前几行。
-- **gen-meta**:启发式抽 PDF 首页 title/authors/year/abstract,结果需**人工校验**后再 `add --csl` 导入。
-- 聚合 `--all` 对各后端各搜并**标注来源**,去重/排序暂不做。
+- Zotero 10 本机运行于 `localhost:23119`，本地 API 免 key（`users/0` 别名→真实库）；写请求需 `Zotero-Server-ID` + `If-Unmodified-Since-Version`（工具已自动处理）。
+- Better BibTeX 未装：引文走 `export --format csljson` 喂 `pandoc --citeproc`，不依赖 BBT。
+- 读 PDF 全文需系统 `pdftotext`；arXiv 为只读后端，add/set 会报 `[跳过]`。
+
+## 注意
+
+- `add` 返回新 key；`add`/`set` 仅对可写后端（zotero）成功，其余报错并退出码 2。
+- 跨后端聚合字段对齐用 `--all`；无 `--all` 默认仅 zotero。
+- 从 PDF 首页抽元数据的 `gen-meta` 是**启发式**，结果请人工校验后再导入，勿直接写库。

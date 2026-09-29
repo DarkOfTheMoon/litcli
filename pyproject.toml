@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "litcli"
+version = "0.1.0"
+description = "通用学术 CLI:后端无关的领域库 + 可插拔多后端(本机 Zotero / arXiv)互操作"
+requires-python = ">=3.11"
+dependencies = []  # 零第三方依赖,仅 Python 标准库
+authors = [{ name = "ZhangHuiJie" }]
+keywords = ["zotero", "arxiv", "academic", "cli", "csl"]
+
+[project.scripts]
+litcli = "litcli.cli:main"
+
+[tool.setuptools]
+packages = ["litcli", "litcli.backends"]
