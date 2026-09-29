@@ -236,6 +236,10 @@ def main(argv=None) -> int:
     except KeyError as e:
         print(f"[错误] {e}")
         return 2
+    except RuntimeError as e:
+        # 后端业务错误(HTTP 401/404/超时 等)优雅给出提示,而非堆栈
+        print(f"[错误] {e}")
+        return 2
 
 
 if __name__ == "__main__":
