@@ -75,10 +75,11 @@ def _item_to_academic(data: dict, source: str = "zotero") -> AcademicItem:
 
 class ZoteroLocalBackend(Backend):
     def __init__(self, name: str = "zotero", base: str = "http://localhost:23119/api",
-                 library: str = "0"):
+                 library: str = "0", api_key: str | None = None):
         self.name = name
         self._base = base.rstrip("/")
         self._users = f"users/{library or '0'}"
+        self._api_key = api_key
         self._server_id_val: str | None = None
 
     @property
@@ -90,32 +91,37 @@ class ZoteroLocalBackend(Backend):
     def _url(self, path: str) -> str:
         return f"{self._base}/{path.lstrip('/')}"
 
-    @staticmethod
-    def _headers() -> dict:
+    def _headers(self) -> dict:
+        # 读可伪装 localhost;真正写(POST/PATCH/DELETE)需真实 API key,否则 401。
         return {
             "Zotero-API-Version": "3",
-            "Zotero-API-Key": "localhost",
+            "Zotero-API-Key": self._api_key or "localhost",
             "Content-Type": "application/json",
         }
 
     def _server_id(self) -> str:
-        """Zotero 本地写请求需 Zotero-Server-ID(防跨实例),惰性取自 /connector/ping。
+        """Zotero 10 本地写请求需 Zotero-Server-ID(防跨实例)。
+
+        该值来自 **/api 请求的响应头**(而非 /connector/ping 的 body,后者是
+        HTML "Zotero is running"),每个 /api 响应都携带。惰性发一个极小 GET,
+        把其响应头里的 Server-ID 缓存到 _server_id_val(也在 _request 里缓存)。
 
         《注意》:缓存字段名 _server_id_val 与实例方法 _server_id 分开——若同名
         (如 self._server_id = None),会在方法体内把 self._server_id 解析成 bound
-        method,导致 ping 读取永不执行、并返回方法对象而非字符串。
+        method,导致读取永不执行、并返回方法对象而非字符串。
         """
-        if self._server_id_val is None:
-            # ping 不在 /api 下,用 base 的 origin(如 http://localhost:23119)
-            origin = urllib.parse.urlparse(self._base)
-            url = f"{origin.scheme}://{origin.netloc}/connector/ping"
-            req = urllib.request.Request(url, headers={"Zotero-API-Version": "3"}, method="GET")
+        if not self._server_id_val:
             try:
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    self._server_id_val = json.loads(resp.read()).get("serverID", "")
-            except urllib.error.URLError:
+                self._json_path(f"/{self._users}/items", {"limit": 1, "format": "json"})
+            except Exception:
                 self._server_id_val = ""
         return self._server_id_val
+
+    def _cache_server_id(self, hdr: dict) -> None:
+        """从 /api 响应头缓存 Zotero-Server-ID(写请求回传需要)。"""
+        sid = hdr.get("Zotero-Server-ID") or hdr.get("zotero-server-id")
+        if sid:
+            self._server_id_val = sid
 
     def _request(self, method: str, path: str, params: dict | None = None,
                  body: dict | None = None, extra_headers: dict | None = None):
@@ -136,9 +142,13 @@ class ZoteroLocalBackend(Backend):
         try:
             with urllib.request.urlopen(req, timeout=20) as resp:
                 raw = resp.read()
-                return resp.status, dict(resp.headers), raw
+                hdr = dict(resp.headers)
+                self._cache_server_id(hdr)
+                return resp.status, hdr, raw
         except urllib.error.HTTPError as e:
-            return e.code, dict(e.headers), e.read()
+            hdr = dict(e.headers)
+            self._cache_server_id(hdr)
+            return e.code, hdr, e.read()
 
     def _json_path(self, path: str, params: dict | None = None):
         status, headers, raw = self._request("GET", path, params)
@@ -194,7 +204,8 @@ class ZoteroLocalBackend(Backend):
             extra_headers={"If-Unmodified-Since-Version": version},
         )
         if status >= 400:
-            raise RuntimeError(f"[{self.name}] add -> HTTP {status}: {raw[:400]!r}")
+            hint = ";写入需真实 Zotero API key:请在 Zotero 偏好设置生成 key 并写入 config 的 api_key" if status == 401 else ""
+            raise RuntimeError(f"[{self.name}] add -> HTTP {status}{hint}: {raw[:250]!r}")
         resp = json.loads(raw) or {}
         ok = resp.get("successful", {}) or {}
         if ok:
@@ -224,7 +235,8 @@ class ZoteroLocalBackend(Backend):
             extra_headers={"If-Unmodified-Since-Version": str(version)},
         )
         if status >= 400:
-            raise RuntimeError(f"[{self.name}] patch {key} -> HTTP {status}: {raw[:400]!r}")
+            hint = ";写入需真实 Zotero API key:请在 Zotero 偏好设置生成 key 并写入 config 的 api_key" if status == 401 else ""
+            raise RuntimeError(f"[{self.name}] patch {key} -> HTTP {status}{hint}: {raw[:250]!r}")
         return self.get(key)
 
     # --- helpers ---

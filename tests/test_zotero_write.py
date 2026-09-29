@@ -46,7 +46,7 @@ class _Handler(BaseHTTPRequestHandler):
                               "abstractNote": "", "DOI": "", "url": ""}}]
             return self._send(data)
         if q.get("limit") == ["1"]:   # library_version 探测
-            return self._send([], extra={"Last-Modified-Version": "42"})
+            return self._send([], extra={"Last-Modified-Version": "42", "Zotero-Server-ID": "TEST-SID"})
         if "/items/" in self.path:    # get single
             return self._send({"data": {"itemType": "journalArticle", "title": "Old",
                                         "creators": [], "date": "2000", "key": "NEWKEY",
