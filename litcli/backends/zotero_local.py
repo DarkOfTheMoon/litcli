@@ -79,6 +79,7 @@ class ZoteroLocalBackend(Backend):
         self.name = name
         self._base = base.rstrip("/")
         self._users = f"users/{library or '0'}"
+        self._server_id_val: str | None = None
 
     @property
     def capabilities(self) -> set[str]:
@@ -98,18 +99,23 @@ class ZoteroLocalBackend(Backend):
         }
 
     def _server_id(self) -> str:
-        """Zotero 本地写请求需 Zotero-Server-ID(防跨实例),惰性取自 /connector/ping。"""
-        if self._server_id is None:
+        """Zotero 本地写请求需 Zotero-Server-ID(防跨实例),惰性取自 /connector/ping。
+
+        《注意》:缓存字段名 _server_id_val 与实例方法 _server_id 分开——若同名
+        (如 self._server_id = None),会在方法体内把 self._server_id 解析成 bound
+        method,导致 ping 读取永不执行、并返回方法对象而非字符串。
+        """
+        if self._server_id_val is None:
             # ping 不在 /api 下,用 base 的 origin(如 http://localhost:23119)
             origin = urllib.parse.urlparse(self._base)
             url = f"{origin.scheme}://{origin.netloc}/connector/ping"
             req = urllib.request.Request(url, headers={"Zotero-API-Version": "3"}, method="GET")
             try:
                 with urllib.request.urlopen(req, timeout=10) as resp:
-                    self._server_id = json.loads(resp.read()).get("serverID", "")
+                    self._server_id_val = json.loads(resp.read()).get("serverID", "")
             except urllib.error.URLError:
-                self._server_id = ""
-        return self._server_id
+                self._server_id_val = ""
+        return self._server_id_val
 
     def _request(self, method: str, path: str, params: dict | None = None,
                  body: dict | None = None, extra_headers: dict | None = None):
