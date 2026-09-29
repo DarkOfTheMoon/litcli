@@ -87,8 +87,9 @@ class ArxivBackend(Backend):
         return [_entry_to_item(e) for e in root.findall("a:entry", _NS)]
 
     def search(self, query: str, limit: int = 10) -> list[AcademicItem]:
-        # all: 全文(title/abstract/author)检索
-        q = f'all:"{query}"'
+        # all: 全文(title/abstract/author)检索;不带引号让 arXiv 做分词 AND,
+        # 避免用户自然长句被当作精确短语而 0 命中。
+        q = f'all:{query}'
         return self._query(q, limit)
 
     def get(self, key: str) -> AcademicItem:

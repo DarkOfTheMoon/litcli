@@ -11,8 +11,11 @@ from pathlib import Path
 
 from .backends.base import Backend
 
-# 关键:未配置时内置的默认后端(仅 Zotero,本地库)
-_INBUILT_DEFAULT = {"backends": {"zotero": {"type": "zotero_local", "base": "http://localhost:23119/api"}}}
+# 关键:未配置时内置的默认后端(本地 Zotero 可读可写 + arXiv 只读,开箱即用)
+_INBUILT_DEFAULT = {"backends": {
+    "zotero": {"type": "zotero_local", "base": "http://localhost:23119/api"},
+    "arxiv": {"type": "arxiv"},
+}}
 
 CONFIG_ENV = "LITCLI_CONFIG"
 DEFAULT_CONFIG = Path.home() / ".config" / "litcli" / "config.toml"

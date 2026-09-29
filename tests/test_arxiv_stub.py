@@ -46,7 +46,7 @@ class ArxivStubTest(unittest.TestCase):
         with mock.patch("urllib.request.urlopen", return_value=_Resp(ATOM)) as m:
             items = self.be.search("time evolution", limit=3)
         req = m.call_args[0][0]
-        self.assertIn("search_query=all%3A%22time+evolution%22", req.full_url)
+        self.assertIn("search_query=all%3Atime+evolution", req.full_url)
         self.assertIn("max_results=3", req.full_url)
         self.assertEqual(items[0].key, "2006.12345")
         self.assertEqual(items[0].title, "Wrinkled Liquid-Drop Impact")

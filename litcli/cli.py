@@ -105,7 +105,11 @@ def cmd_search(cfg, args) -> int:
             try:
                 items.extend(b.search(args.query, limit=args.limit))
             except NotImplementedError:
-                pass
+                continue
+            except (RuntimeError, urllib.error.URLError, OSError) as e:
+                # 单后端失败(未连接/HTTP 错误/超时)不拖垮整个聚合,跳过继续
+                print(f"[跳过] 后端 {name}: {e}", file=sys.stderr)
+                continue
     else:
         backend = get_backend(args.backend, cfg)
         items = backend.search(args.query, limit=args.limit)
