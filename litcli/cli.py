@@ -15,6 +15,7 @@ import urllib.request
 
 from . import pdf as pdfutil
 from . import metadata
+from . import unpaywall
 from .config import get_all_backends, get_backend, load_config
 from .models import AcademicItem
 from .aggregate import merge_items
@@ -78,6 +79,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("gen-meta", help="抽取本地 PDF 首页元数据 → csljson")
     p.add_argument("pdf", help="本地 PDF 路径")
     p.add_argument("--out", default=None, help="输出 json 路径(默认 <pdf>.csl.json)")
+
+    p = sub.add_parser("oa", help="Unpaywall 反查合法 OA 全文")
+    p.add_argument("doi")
+    p.add_argument("--email", default=None)
+    p.add_argument("--download", action="store_true", help="下载最佳 OA PDF")
+    p.add_argument("--out", default=None, help="下载保存路径")
 
     sub.add_parser("backends", help="列出已配置后端及能力")
 
@@ -220,6 +227,30 @@ def cmd_gen_meta(cfg, args) -> int:
     return 0
 
 
+def cmd_oa(cfg, args) -> int:
+    email = (args.email
+             or (cfg.get("unpaywall") or {}).get("email")
+             or os.environ.get("UNPAYWALL_EMAIL")
+             or unpaywall.DEFAULT_EMAIL)
+    info = unpaywall.resolve_oa(args.doi, email)
+    print(f"DOI {args.doi}  is_oa={info['is_oa']}  status={info['oa_status']}")
+    if info.get("title"):
+        print(f"  title: {info['title'][:70]}")
+    if info.get("best_landing"):
+        print(f"  landing: {info['best_landing']}")
+    if info.get("best_pdf"):
+        print(f"  PDF: {info['best_pdf']}")
+        if args.download:
+            raw = pdfutil.download(info["best_pdf"])
+            out = args.out or f"{args.doi.replace('/', '_')}.pdf"
+            with open(out, "wb") as f:
+                f.write(raw)
+            print(f"  已下载 {len(raw)} 字节 to {out}")
+    else:
+        print("  (暂无 OA PDF 直链)")
+    return 0
+
+
 def cmd_backends(cfg) -> int:
     for name, b in sorted(get_all_backends(cfg).items()):
         caps = ", ".join(sorted(b.capabilities))
@@ -247,6 +278,7 @@ def main(argv=None) -> int:
             "search": cmd_search, "get": cmd_get, "add": cmd_add,
             "set": cmd_set, "export": cmd_export, "pdf": cmd_pdf,
             "gen-meta": cmd_gen_meta,
+            "oa": cmd_oa,
             "backends": lambda c, a: cmd_backends(c),
         }[args.cmd](cfg, args)
     except NotSupportedError as e:
