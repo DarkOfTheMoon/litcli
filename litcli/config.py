@@ -55,6 +55,12 @@ def _registry() -> dict[str, type[Backend]]:
         reg["openalex"] = openalex.OpenAlexBackend
     except ImportError:
         pass
+    try:
+        from .backends import openlibrary
+
+        reg["openlibrary"] = openlibrary.OpenLibraryBackend
+    except ImportError:
+        pass
     return reg
 
 

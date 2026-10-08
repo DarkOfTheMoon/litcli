@@ -10,3 +10,8 @@ base = "http://localhost:23119/api"      # 本机 Zotero 10 本地 API
 
 [backends.arxiv]
 type = "arxiv"                          # 联网,只读,无需 key
+
+# 可选:开放图书数据库(书籍元数据)。默认不内置;需要时取消注释启用。
+# 部分网络环境对 openlibrary.org / googleapis.com 无路由,若搜图书无响应请自查连通性。
+[backends.openlibrary]
+type = "openlibrary"
