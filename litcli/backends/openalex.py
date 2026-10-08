@@ -141,3 +141,11 @@ class OpenAlexBackend(Backend):
         if not data:
             raise KeyError(f"[{self.name}] 未找到 {key}")
         return _work_to_item(data, self.name)
+
+    def get_attachment(self, key: str) -> bytes:
+        """下载合法 OA PDF 直链(best_oa_location 的 pdf_url)。"""
+        item = self.get(key)
+        if not item.attachments:
+            raise RuntimeError(f"[{self.name}] {key} 无 OA PDF 直链")
+        from .. import pdf as pdfutil
+        return pdfutil.download(item.attachments[0])
