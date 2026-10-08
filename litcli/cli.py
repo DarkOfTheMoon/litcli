@@ -11,6 +11,7 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.request
 
 from . import pdf as pdfutil
 from . import metadata
@@ -220,9 +221,21 @@ def cmd_backends(cfg) -> int:
     return 0
 
 
+def _apply_proxy(cfg: dict) -> None:
+    """config 配了 [network].proxy 且环境变量未设代理时,统一走该代理(校园/VPN 访问海外源)。"""
+    prog = (cfg.get("network") or {}).get("proxy")
+    if not prog:
+        return
+    if os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy"):
+        return  # 环境变量已配置,优先
+    urllib.request.install_opener(urllib.request.build_opener(
+        urllib.request.ProxyHandler({"http": prog, "https": prog})))
+
+
 def main(argv=None) -> int:
     args = _build_parser().parse_args(argv)
     cfg = load_config()
+    _apply_proxy(cfg)
     try:
         return {
             "search": cmd_search, "get": cmd_get, "add": cmd_add,

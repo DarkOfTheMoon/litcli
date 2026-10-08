@@ -50,6 +50,9 @@ base = "http://localhost:23119/api"     # 本机 Zotero 10 本地 API
 
 [backends.arxiv]
 type = "arxiv"
+
+[network]
+# proxy = "http://127.0.0.1:7890"   # 校园/VPN 访问海外源;默认读 HTTP_PROXY / HTTPS_PROXY
 ```
 
 ## 架构
