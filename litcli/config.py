@@ -15,6 +15,7 @@ from .backends.base import Backend
 _INBUILT_DEFAULT = {"backends": {
     "zotero": {"type": "zotero_local", "base": "http://localhost:23119/api"},
     "arxiv": {"type": "arxiv"},
+    "crossref": {"type": "crossref"},
 }}
 
 CONFIG_ENV = "LITCLI_CONFIG"
@@ -41,6 +42,12 @@ def _registry() -> dict[str, type[Backend]]:
         reg["arxiv"] = arxiv.ArxivBackend
     except ImportError:
         pass  # arXiv 尚未就绪时,不影响 Zotero 定义
+    try:
+        from .backends import crossref
+
+        reg["crossref"] = crossref.CrossrefBackend
+    except ImportError:
+        pass
     return reg
 
 
