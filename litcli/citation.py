@@ -43,7 +43,7 @@ def render_bibliography(items: Iterable[AcademicItem]) -> list[str]:
             for a in it.creators if isinstance(a, dict)
         )
         year = f"({it.year})." if it.year else ""
-        head = f"{creators} {year}".strip() or it.author or "Anon"
+        head = f"{creators} {year}".strip() or "Anon"
         entry = f"{head} {it.title}."
         if it.doi:
             entry += f" doi:{it.doi}"
