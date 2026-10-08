@@ -70,6 +70,28 @@ class AcademicItem:
         lines.append("}")
         return "".join(lines).replace("\n", "").replace(",}}", "}}") + "\n"
 
+    def to_ris(self) -> str:
+        """导出为 RIS(EndNote/Zotero 通用交换格式)。"""
+        ty = {"article": "JOUR", "book": "BOOK", "chapter": "CHAP",
+              "patent": "PAT", "thesis": "THES", "report": "RPRT"}.get(self.item_type, "GEN")
+        lines = [f"TY  - {ty}"]
+        for c in self.creators:
+            fam = c.get("family", "")
+            giv = c.get("given", "")
+            lines.append(f"AU  - {fam}, {giv}" if giv else f"AU  - {fam}")
+        if self.year:
+            lines.append(f"PY  - {self.year}")
+        if self.title:
+            lines.append(f"TI  - {self.title}")
+        if self.abstract:
+            lines.append(f"AB  - {self.abstract}")
+        if self.doi:
+            lines.append(f"DO  - {self.doi}")
+        if self.url:
+            lines.append(f"UR  - {self.url}")
+        lines.append("ER  -")
+        return "\n".join(lines) + "\n"
+
     @classmethod
     def from_csl(cls, csl: dict, source: str = "", key: str = "") -> "AcademicItem":
         """从 CSL JSON 构建 AcademicItem(写入后端前常需此路)。"""

@@ -46,3 +46,23 @@ class TestAcademicItemToCslEmpty(unittest.TestCase):
         csl = item.to_csl()  # 原 _default_id 对空 creators 抛 IndexError
         self.assertIn("id", csl)
         self.assertEqual(csl["id"], "anon_noyear")
+
+
+class TestAcademicItemToRis(unittest.TestCase):
+    def test_ris_default(self):
+        from litcli.models import AcademicItem
+        item = AcademicItem(source="z", key="k", title="T", item_type="article",
+                            creators=[{"family": "Smith", "given": "John"}],
+                            year="2002", doi="10.1/x", url="http://x")
+        ris = item.to_ris()
+        self.assertTrue(ris.startswith("TY  - JOUR"))
+        self.assertIn("AU  - Smith, John", ris)
+        self.assertIn("PY  - 2002", ris)
+        self.assertIn("TI  - T", ris)
+        self.assertIn("DO  - 10.1/x", ris)
+        self.assertTrue(ris.rstrip().endswith("ER  -"))
+
+    def test_ris_book_type(self):
+        from litcli.models import AcademicItem
+        it = AcademicItem(source="z", key="k", title="B", item_type="book", year="1999")
+        self.assertTrue(it.to_ris().startswith("TY  - BOOK"))

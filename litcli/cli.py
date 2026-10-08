@@ -64,9 +64,9 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_common_backend(p)
 
     p = sub.add_parser("export", help="导出引文")
-    p.add_argument("key")
+    p.add_argument("key", nargs="+", help="一个或多个条目 key")
     _add_common_backend(p)
-    p.add_argument("--format", choices=["csljson", "bibtex", "text"], default="csljson")
+    p.add_argument("--format", choices=["csljson", "bibtex", "ris", "text"], default="csljson")
 
     p = sub.add_parser("pdf", help="取 PDF 附件/全文")
     p.add_argument("key")
@@ -172,16 +172,22 @@ def cmd_set(cfg, args) -> int:
 
 def cmd_export(cfg, args) -> int:
     backend = get_backend(args.backend, cfg)
-    item = backend.get(args.key)
+    items = [backend.get(k) for k in args.key]
     if args.format == "csljson":
-        print(json.dumps(item.to_csl(), ensure_ascii=False, indent=2))
+        if len(items) == 1:
+            print(json.dumps(items[0].to_csl(), ensure_ascii=False, indent=2))
+        else:
+            print(json.dumps([i.to_csl() for i in items], ensure_ascii=False, indent=2))
     elif args.format == "bibtex":
-        print(item.to_bibtex())
+        for it in items:
+            print(it.to_bibtex())
+    elif args.format == "ris":
+        for it in items:
+            print(it.to_ris())
     else:
-        cit = render_intext([item])[0]
-        bib = render_bibliography([item])[0]
-        print(cit)
-        print(bib)
+        for it in items:
+            print(render_intext([it])[0])
+            print(render_bibliography([it])[0])
     return 0
 
 
