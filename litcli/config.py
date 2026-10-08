@@ -16,6 +16,7 @@ _INBUILT_DEFAULT = {"backends": {
     "zotero": {"type": "zotero_local", "base": "http://localhost:23119/api"},
     "arxiv": {"type": "arxiv"},
     "crossref": {"type": "crossref"},
+    "openalex": {"type": "openalex"},
 }}
 
 CONFIG_ENV = "LITCLI_CONFIG"
@@ -46,6 +47,12 @@ def _registry() -> dict[str, type[Backend]]:
         from .backends import crossref
 
         reg["crossref"] = crossref.CrossrefBackend
+    except ImportError:
+        pass
+    try:
+        from .backends import openalex
+
+        reg["openalex"] = openalex.OpenAlexBackend
     except ImportError:
         pass
     return reg
