@@ -38,17 +38,19 @@ PDF 全文抽取需系统有 `pdftotext`(poppler-utils)；无则 `pdf --text` �
 | `litcli export <id> [--format csljson\|bibtex\|ris\|text]` | 导出引文；csljson 可喂 `pandoc --citeproc`，**不依赖 Better BibTeX**（不碰 PDF） | 只读 |
 | `litcli fetch fulltext <doi> [--download] [--lines N]` | **合法全文定位**：本地库 → Unpaywall → OpenAlex OA 直链；都拿不到则**指路图书馆/代理**（不绕过付费墙） | 只读 |
 | `litcli backends` | 列出已配置后端及能力 | 只读 |
+| `litcli backends authorize [zotero]` | 主动向 Zotero **本地授权**拿写库 key 并写回 `config.toml`（`[backends.zotero].api_key`）；此后 `data add/set/del/attach` 免再授权 | 写配置 |
 
 ## 配置
 
-`~/.config/litcli/config.toml`（不支持则读 `$LITCLI_CONFIG`；无任何配置则用内置默认=仅本地 Zotero）：
+`~/.config/litcli/config.toml`（不支持则读 `$LITCLI_CONFIG`；无任何配置则用内置默认=Zotero+arXiv+crossref+openalex）：
 
 ```toml
 [backends.zotero]
 type = "zotero_local"
 base = "http://localhost:23119/api"     # 本机 Zotero 10 本地 API
-# 写(POST/PATCH/DELETE)需真实 Zotero API key;localhost key 仅可读
-# api_key = "你的-zotero-api-key"
+# 写(POST/PATCH/DELETE)需本地授权 key。运行 `litcli backends authorize zotero`,
+# 在 Zotero 本地弹框批准后自动写入下一行;无需手动生成(zotero.org 的 Web API key 不适用)。
+# api_key = "本地授权-key(backends authorize 自动写入)"
 
 [backends.arxiv]
 type = "arxiv"
@@ -91,7 +93,7 @@ python3 -m unittest discover -s tests
 
 ## 已知限制
 
-- Zotero 写落库需**真实 Zotero API key**（本地 localhost key 仅为只读）：在 Zotero 偏好设置生成 key，写入 config 的 `api_key`。缺 key 时 `data add`/`data set` 报 `HTTP 401;写入需真实 Zotero API key`（退出码 2），不污染库；配好 key 后即可真正落库。
+- Zotero **写库**（`data add/set/del/attach`）需一个写权限的 key：先跑 `litcli backends authorize zotero`，它经 Zotero 本地 API 的 `/api/local/authorize` 对你弹一次授权框，批准后把本地 key 写回 `config.toml` 的 `[backends.zotero].api_key`，此后写操作自动携带该 key、不再弹框。**无需**在 Zotero 偏好设置手动生成 key（Zotero 10 本地 API 用运行时授权派发本地 key，非 zotero.org 的 Web API key）。未授权时写操作报 `HTTP 401`（退出码 2），不污染库。
 - arXiv 联网在部分环境（如受限沙箱）返回 406；代码已把 HTTP 错误包装为 `RuntimeError`，`--all` 会跳过失败后端继续。
 - **专利检索（USPTO）需真实 API key**：免 key 可达的 Crossref/OpenAlex 公开版专利记录趋近 0，专利检索以 USPTO 为主通道。免费注册 key（`https://developer.uspto.gov` 顶部 “Get a developer key”）后写入 config 的 `api_key`；缺 key 时 `search --backend uspto` 明确提示而非堆栈。
 - **软件著作权（软著）无稳定公开 API**：中国版权保护中心登记检索需账号/验证码，无法自动化批量检索；暂不内置软著后端，属计划外缺口。

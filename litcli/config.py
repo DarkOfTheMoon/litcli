@@ -97,3 +97,70 @@ def get_backend(name: str = "zotero", config: dict | None = None) -> Backend:
 
 def get_all_backends(config: dict | None = None) -> dict[str, Backend]:
     return discover_backends(config)
+
+
+# --- 写回 config.toml(供 `backends authorize` 落 key) ---
+
+def _toml_string(text: str) -> str:
+    """把值写成 TOML 基本字符串(转义引号/反斜杠/控制符)。"""
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _upsert_key(text: str, section: str, key: str, value: str) -> str:
+    """在 [section] 内新增/替换 key = value 行;无该 section 则追加。保留其余内容。"""
+    lines = text.splitlines()
+    marker = f"[{section}]"
+    try:
+        idx = next(i for i, ln in enumerate(lines) if ln.strip() == marker)
+    except StopIteration:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.append(marker)
+        lines.append(f"{key} = {value}")
+        return "\n".join(lines) + "\n"
+    # 找到该 section 结束(下一个 [节] 或文件末尾)
+    end = idx + 1
+    while end < len(lines) and not lines[end].lstrip().startswith("["):
+        end += 1
+    replace_at = None
+    for i in range(idx + 1, end):
+        if lines[i].split("=", 1)[0].strip() == key:
+            replace_at = i
+            break
+    new_line = f"{key} = {value}"
+    if replace_at is not None:
+        lines[replace_at] = new_line
+    else:
+        lines.insert(end, new_line)
+    return "\n".join(lines) + "\n"
+
+
+def write_backend_key(name: str, key: str, path: str | Path | None = None) -> Path:
+    """把某个后端的 api_key 写回 config.toml 的 [backends.<name>] 段。
+
+    仅改写目标字段,保留文件中其它段与注释;若文件不存在则先落内置默认骨架,
+    避免丢失默认后端。返回实际写到的文件路径。
+    """
+    path = Path(path) if path else (Path(os.environ[CONFIG_ENV]) if CONFIG_ENV in os.environ else DEFAULT_CONFIG)
+    if path.exists():
+        text = path.read_text(encoding="utf-8")
+    else:
+        text = _default_toml_text()
+    text = _upsert_key(text, f"backends.{name}", "api_key", _toml_string(key))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _default_toml_text() -> str:
+    """把内置默认后端渲染为 config.toml 文本(缺失文件时作为骨架)。"""
+    lines: list[str] = []
+    for name, cfg in _INBUILT_DEFAULT["backends"].items():
+        lines.append(f"[backends.{name}]")
+        for k, v in cfg.items():
+            if isinstance(v, bool):
+                lines.append(f"{k} = {'true' if v else 'false'}")
+            else:
+                lines.append(f"{k} = {_toml_string(str(v))}")
+        lines.append("")
+    return "\n".join(lines).rstrip("\n") + "\n"

@@ -4,9 +4,10 @@
 [backends.zotero]
 type = "zotero_local"
 base = "http://localhost:23119/api"      # 本机 Zotero 10 本地 API
-# 写(POST/PATCH/DELETE)需真实 Zotero API key;localhost key 仅为只读。
-# path: Zotero → 偏好设置 → Advanced → API keys → 生成。缺省时写请求返回 401。
-# api_key = "你的-zotero-api-key"
+# 写(POST/PATCH/DELETE)需 Zotero 本地授权 key。运行 `litcli backends authorize zotero`,
+# 在 Zotero 本地弹框批准后,key 会自动写入下一行。无需手动从偏好设置生成(Zotero 10
+# 本地 API 走运行时授权派发,非 zotero.org 的 Web API key)。
+# api_key = "本地授权-key(由 backends authorize 写入,通常无需手填)"
 
 [backends.arxiv]
 type = "arxiv"                          # 联网,只读,无需 key

@@ -56,6 +56,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         self._record()
+        if "local/authorize" in self.path:
+            return self._send({"key": "AUTHKEY123", "remember": True})
         return self._send({"successful": {"0": {"key": "NEWKEY", "version": 43}}})
 
     def do_PATCH(self):
@@ -107,8 +109,10 @@ class ZoteroWriteStubTest(unittest.TestCase):
         self.assertEqual(h.get("zotero-api-version"), "3")
         self.assertEqual(h.get("zotero-server-id"), "TEST-SID")
         self.assertEqual(h.get("if-unmodified-since-version"), "42")
+        # 写头携带本地授权 key(经 /api/local/authorize 走)
+        self.assertEqual(h.get("zotero-api-key"), "AUTHKEY123")
         body = json.loads(rec[3])
-        it = body["items"][0]
+        it = body[0]
         self.assertEqual(it["itemType"], "journalArticle")
         self.assertEqual(it["title"], "Wrinkled Drop")
         self.assertEqual(it["date"], "2002")
@@ -136,7 +140,7 @@ class ZoteroWriteStubTest(unittest.TestCase):
         rec = self._find("POST", "/users/0/items")
         self.assertIsNotNone(rec)
         body = json.loads(rec[3])
-        att = body["items"][0]
+        att = body[0]
         self.assertEqual(att["itemType"], "attachment")
         self.assertEqual(att["parentItem"], "PARENTKEY")
         self.assertEqual(att["linkMode"], "linked_file")
@@ -149,7 +153,7 @@ class ZoteroWriteStubTest(unittest.TestCase):
         self.assertEqual(att_key, "NEWKEY")
         rec = self._find("POST", "/users/0/items")
         body = json.loads(rec[3])
-        att = body["items"][0]
+        att = body[0]
         self.assertEqual(att["linkMode"], "linked_url")
         self.assertEqual(att["url"], "https://oa.example/x.pdf")
 
@@ -158,6 +162,26 @@ class ZoteroWriteStubTest(unittest.TestCase):
         rec = self._find("DELETE", "/users/0/items/DKEY")
         self.assertIsNotNone(rec)
         self.assertEqual(self._headers(rec).get("if-unmodified-since-version"), "42")
+
+    def test_authorize_obtains_local_key(self):
+        key = self.be.authorize()
+        self.assertEqual(key, "AUTHKEY123")
+        # 之后写操作直接用该 key,不再重复弹授权框(第二次 authorize 仍走一次)
+        self.assertEqual(self.be._app_key_val, "AUTHKEY123")
+        rec = self._find("POST", "local/authorize")
+        self.assertIsNotNone(rec)
+        h = self._headers(rec)
+        self.assertEqual(h.get("zotero-api-version"), "3")
+        self.assertEqual(h.get("zotero-server-id"), "TEST-SID")
+
+    def test_write_key_falls_back_to_authorize(self):
+        # 无 config key 时,写操作触发 _write_key -> authorize 拿 AUTHKEY123
+        key = self.be._write_key()
+        self.assertEqual(key, "AUTHKEY123")
+        # 二调命中缓存,不重复发
+        self.be._write_key()
+        auths = [r for r in _Handler.reqlog if r[0] == "POST" and "local/authorize" in r[1]]
+        self.assertEqual(len(auths), 1)
 
 
 if __name__ == "__main__":

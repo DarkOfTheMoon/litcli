@@ -76,11 +76,13 @@ def _item_to_academic(data: dict, source: str = "zotero") -> AcademicItem:
 
 class ZoteroLocalBackend(Backend):
     def __init__(self, name: str = "zotero", base: str = "http://localhost:23119/api",
-                 library: str = "0", api_key: str | None = None):
+                 library: str = "0", api_key: str | None = None, app_name: str = "litcli"):
         self.name = name
         self._base = base.rstrip("/")
         self._users = f"users/{library or '0'}"
         self._api_key = api_key
+        self._app_name = app_name
+        self._app_key_val: str | None = None
         self._server_id_val: str | None = None
 
     @property
@@ -93,12 +95,53 @@ class ZoteroLocalBackend(Backend):
         return f"{self._base}/{path.lstrip('/')}"
 
     def _headers(self) -> dict:
-        # 读可伪装 localhost;真正写(POST/PATCH/DELETE)需真实 API key,否则 401。
+        # 读可伪装 localhost;写操作经 /api/local/authorize 获取本地 key(见 _write_key)。
+        # 读用 "localhost",写用本地授权 key(自动获取或 config 注入的 api_key)。
+        key = self._api_key or self._app_key_val or "localhost"
         return {
             "Zotero-API-Version": "3",
-            "Zotero-API-Key": self._api_key or "localhost",
+            "Zotero-API-Key": key,
             "Content-Type": "application/json",
         }
+
+    def _do_authorize(self) -> str:
+        """真实 /api/local/authorize 握手:请 Zotero 弹本地授权框,返回本地 key。"""
+        body = json.dumps({"appName": self._app_name}).encode()
+        req = urllib.request.Request(
+            self._url("local/authorize"), data=body, method="POST",
+            headers={"Zotero-API-Version": "3",
+                     "Zotero-Server-ID": self._server_id(),
+                     "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=120) as r:  # 等用户 UI 批准
+            data = json.loads(r.read())
+            return data.get("key", "")
+
+    def authorize(self) -> str:
+        """强制发起一次本地授权握手并返回 key,写进缓存(供 CLI `backends authorize`)。
+
+        每次调用都会触发 Zotero 本地授权框(除非 app 已记住授权),拿到的是本地
+        有效 key,而非 zotero.org 生成的 Web API key。失败抛 RuntimeError。
+        """
+        try:
+            key = self._do_authorize()
+        except (urllib.error.URLError, OSError) as e:
+            raise RuntimeError(f"[{self.name}] 本地授权失败: "
+                               f"{getattr(e, 'reason', e)}") from e
+        self._app_key_val = key
+        return key
+
+    def _write_key(self) -> str:
+        """写操作所需的本地授权 key。
+
+        优先级:config 注入的 api_key > 运行时 authorize 取到的 _app_key_val。
+        无 key 时调 /api/local/authorize 获取本地 API key(会触发 Zotero UI 授权框)。
+        """
+        if self._api_key:
+            return self._api_key
+        if self._app_key_val:
+            return self._app_key_val
+        self._app_key_val = self.authorize()
+        return self._app_key_val
 
     def _server_id(self) -> str:
         """Zotero 10 本地写请求需 Zotero-Server-ID(防跨实例)。
@@ -133,11 +176,18 @@ class ZoteroLocalBackend(Backend):
         headers = dict(self._headers())
         if extra_headers:
             headers.update(extra_headers)
-        # 写操作(POST/PATCH/DELETE,或带 body)需 Zotero-Server-ID
+        # 写操作(POST/PATCH/DELETE,或带 body)需 Zotero-Server-ID + 本地授权 key
         if method != "GET" or body is not None:
             sid = self._server_id()
             if sid:
                 headers.setdefault("Zotero-Server-ID", sid)
+            if not self._api_key:
+                # 惰性取本地授权 key(仅首次;config 已配 api_key 时跳过)
+                try:
+                    self._write_key()
+                except RuntimeError:
+                    pass
+                headers["Zotero-API-Key"] = self._app_key_val or "localhost"
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
@@ -199,13 +249,14 @@ class ZoteroLocalBackend(Backend):
     def add(self, item: AcademicItem) -> str:
         self._require("write")
         version = self._library_version()
-        payload = {"items": [self._to_zotero_json(item)]}
+        # 本地 API 写 body 用纯 JSON 数组(不是 Web API 的 {"items": [...]})
+        payload = [self._to_zotero_json(item)]
         status, headers, raw = self._request(
             "POST", f"/{self._users}/items", body=payload,
             extra_headers={"If-Unmodified-Since-Version": version},
         )
         if status >= 400:
-            hint = ";写入需真实 Zotero API key:请在 Zotero 偏好设置生成 key 并写入 config 的 api_key" if status == 401 else ""
+            hint = ";写需要本地授权 key,运行 `litcli backends authorize zotero`" if status == 401 else ""
             raise RuntimeError(f"[{self.name}] add -> HTTP {status}{hint}: {raw[:250]!r}")
         resp = json.loads(raw) or {}
         ok = resp.get("successful", {}) or {}
@@ -236,7 +287,7 @@ class ZoteroLocalBackend(Backend):
             extra_headers={"If-Unmodified-Since-Version": str(version)},
         )
         if status >= 400:
-            hint = ";写入需真实 Zotero API key:请在 Zotero 偏好设置生成 key 并写入 config 的 api_key" if status == 401 else ""
+            hint = ";写需要本地授权 key,运行 `litcli backends authorize zotero`" if status == 401 else ""
             raise RuntimeError(f"[{self.name}] patch {key} -> HTTP {status}{hint}: {raw[:250]!r}")
         return self.get(key)
 
@@ -249,7 +300,7 @@ class ZoteroLocalBackend(Backend):
             extra_headers={"If-Unmodified-Since-Version": version},
         )
         if status >= 400:
-            hint = ";写入需真实 Zotero API key:请在 Zotero 偏好设置生成 key 并写入 config 的 api_key" if status == 401 else ""
+            hint = ";写需要本地授权 key,运行 `litcli backends authorize zotero`" if status == 401 else ""
             raise RuntimeError(f"[{self.name}] delete {key} -> HTTP {status}{hint}: {raw[:250]!r}")
 
     def attach(self, key: str, src: str) -> str:
@@ -270,13 +321,13 @@ class ZoteroLocalBackend(Backend):
             "path": "" if is_url else src,
         }
         version = self._library_version()
-        payload = {"items": [att]}
+        payload = [att]  # 本地 API 写 body 用纯数组
         status, _, raw = self._request(
             "POST", f"/{self._users}/items", body=payload,
             extra_headers={"If-Unmodified-Since-Version": version},
         )
         if status >= 400:
-            hint = ";写入需真实 Zotero API key:请在 Zotero 偏好设置生成 key 并写入 config 的 api_key" if status == 401 else ""
+            hint = ";写需要本地授权 key,运行 `litcli backends authorize zotero`" if status == 401 else ""
             raise RuntimeError(f"[{self.name}] attach {key} -> HTTP {status}{hint}: {raw[:250]!r}")
         resp = json.loads(raw) or {}
         ok = resp.get("successful", {}) or {}

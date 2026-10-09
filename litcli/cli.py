@@ -6,6 +6,7 @@
   fetch fulltext   按 DOI 定位合法全文(只读,不碰库)
   export       导出引文(只读,不碰 PDF)
   backends     诊断
+  backends authorize [zotero]   主动向 Zotero 本地授权拿写库 key 并写回 config.toml(写配置)
 写库命令先查 backend.can("write"),只读后端抛 NotSupportedError(CLI 捕获为[跳过])。
 """
 from __future__ import annotations
@@ -21,7 +22,7 @@ from . import pdf as pdfutil
 from . import metadata
 from . import unpaywall
 from . import fulltext as fulltext_mod
-from .config import get_all_backends, get_backend, load_config
+from .config import get_all_backends, get_backend, load_config, write_backend_key
 from .models import AcademicItem
 from .aggregate import merge_items
 from .citation import render_intext, render_bibliography
@@ -50,7 +51,11 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_common_backend(p)
     p.add_argument("--format", choices=["csljson", "bibtex", "ris", "text"], default="csljson")
 
-    p = sub.add_parser("backends", help="列出已配置后端及能力(诊断)")
+    p = sub.add_parser("backends", help="后端诊断 / 授权(试运行前先 `backends authorize` 拿写库 key)")
+    bsub = p.add_subparsers(dest="backends_cmd")
+    bp = bsub.add_parser("authorize", help="主动向 Zotero 本地授权并写回 config.toml")
+    bp.add_argument("backend", nargs="?", default="zotero",
+                    help="后端名(默认 zotero;目前仅 zotero 支持本地授权)")
 
     # --- data:本地库增删改查(写库·须决策) ---
     d = sub.add_parser("data", help="本地库操作(增删改查;只读后端会提示)")
@@ -319,10 +324,39 @@ def cmd_fetch_fulltext(cfg, args) -> int:
     return 0
 
 
-def cmd_backends(cfg) -> int:
+def cmd_backends(cfg, args) -> int:
+    if getattr(args, "backends_cmd", None) == "authorize":
+        return cmd_backends_authorize(cfg, getattr(args, "backend", "zotero"))
     for name, b in sorted(get_all_backends(cfg).items()):
         caps = ", ".join(sorted(b.capabilities))
         print(f"{name:<12} caps=[{caps}]")
+    return 0
+
+
+def cmd_backends_authorize(cfg, backend: str) -> int:
+    """主动向 Zotero 本地授权拿 key,并写回 config.toml。
+
+    被授权后端需支持本地授权(实现 authorize())。成功(或已授权)后写库不再弹框。
+    """
+    try:
+        b = get_backend(backend, cfg)
+    except KeyError as e:
+        print(f"[错误] {e}")
+        return 2
+    if not hasattr(b, "authorize"):
+        print(f"[错误] 后端 '{backend}' 不支持本地授权(仅 zotero_local 提供)")
+        return 2
+    try:
+        key = b.authorize()
+    except RuntimeError as e:
+        print(f"[错误] {e}")
+        return 2
+    if not key:
+        print(f"[错误] {backend} 授权未返回 key(可能内建 key 已被占用,或未批准)")
+        return 2
+    path = write_backend_key(backend, key)
+    print(f"[ok] 已写入 {backend} 的写库 key 到 {path}")
+    print("     后续写库(data add / set / del / attach)无需再授权。")
     return 0
 
 
@@ -347,7 +381,7 @@ def main(argv=None) -> int:
         if args.cmd == "export":
             return cmd_export(cfg, args)
         if args.cmd == "backends":
-            return cmd_backends(cfg)
+            return cmd_backends(cfg, args)
         if args.cmd == "data":
             return {
                 "get": cmd_get, "add": cmd_data_add,
