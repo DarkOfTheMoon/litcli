@@ -61,6 +61,12 @@ def _registry() -> dict[str, type[Backend]]:
         reg["openlibrary"] = openlibrary.OpenLibraryBackend
     except ImportError:
         pass
+    try:
+        from .backends import uspto
+
+        reg["uspto"] = uspto.UsptoBackend
+    except ImportError:
+        pass
     return reg
 
 

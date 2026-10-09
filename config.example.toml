@@ -16,6 +16,14 @@ type = "arxiv"                          # 联网,只读,无需 key
 [backends.openlibrary]
 type = "openlibrary"
 
+# 可选:专利检索(USPTO 开放数据,key 门控)。免费注册 key:
+# https://developer.uspto.gov 顶部 "Get a developer key"。
+# 免 key 可达的 Crossref/OpenAlex 公开版专利记录趋近 0,专利检索以本后端为主通道;
+# 不填 api_key 时 search/get 会明确提示,而非静默失败。
+[backends.uspto]
+type = "uspto"
+# api_key = "你的-uspto-api-key"
+
 # 可选:统一代理(校园/VPN 访问海外学术源)。留空则默认读环境变量 HTTP_PROXY / HTTPS_PROXY。
 [network]
 # proxy = "http://127.0.0.1:7890"

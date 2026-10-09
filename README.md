@@ -51,6 +51,11 @@ base = "http://localhost:23119/api"     # 本机 Zotero 10 本地 API
 [backends.arxiv]
 type = "arxiv"
 
+# 可选:专利检索(USPTO,key 门控,免费注册)
+[backends.uspto]
+type = "uspto"
+# api_key = "你的-uspto-api-key"
+
 [network]
 # proxy = "http://127.0.0.1:7890"   # 校园/VPN 访问海外源;默认读 HTTP_PROXY / HTTPS_PROXY
 ```
@@ -67,6 +72,7 @@ litcli/
 ├── config.py      配置读取、后端发现、get_backend/get_all_backends
 ├── cli.py         argparse 编排,按 capabilities 暴露读写
 ├── backends/       base.py(Backend ABC) + zotero_local.py + arxiv.py
+│                   + crossref.py + openalex.py + openlibrary.py + uspto.py
 └── tests/          unittest 单测(stub 后端,离线)
 ```
 
@@ -85,3 +91,6 @@ python3 -m unittest discover -s tests
 - Zotero 写落库需**真实 Zotero API key**（本地 localhost key 仅为只读）：在 Zotero 偏好设置生成 key，写入 config 的 `api_key`。缺 key 时 `add`/`set` 报 `HTTP 401;写入需真实 Zotero API key`（退出码 2），不污染库；配好 key 后 `litcli add` 即可真正落库。
 - arXiv 联网在部分环境（如受限沙箱）返回 406；代码已把 HTTP 错误包装为 `RuntimeError`，`--all` 会跳过失败后端继续。
 - `citation.render_bibliography` 在无作者且无年份的极端条目下会因 `it.author` 属性缺失而崩——已知缺陷见 `citation.py`。
+- **专利检索（USPTO）需真实 API key**：免 key 可达的 Crossref/OpenAlex 公开版专利记录趋近 0，专利检索以 USPTO 为主通道。免费注册 key（`https://developer.uspto.gov` 顶部 “Get a developer key”）后写入 config 的 `api_key`；缺 key 时 `search --backend uspto` 明确提示而非堆栈。
+- **软件著作权（软著）无稳定公开 API**：中国版权保护中心登记检索需账号/验证码，无法自动化批量检索；暂不内置软著后端，属计划外缺口。
+- **Sci-Hub / ZLibrия 类盗版全文源不内置**：版权规避/盗版分发平台，刻意排除；合法全文走 Unpaywall（`litcli oa`）+ arXiv/OpenAlex 的开放获取（OA）PDF 直链。
