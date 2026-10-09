@@ -62,6 +62,10 @@ class _Handler(BaseHTTPRequestHandler):
         self._record()
         return self._send({})
 
+    def do_DELETE(self):
+        self._record()
+        return self._send({})
+
     def log_message(self, *a):
         pass
 
@@ -124,6 +128,36 @@ class ZoteroWriteStubTest(unittest.TestCase):
         items = self.be.search("drop", limit=5)
         self.assertEqual(items[0].title, "Wrinkled Drop")
         self.assertEqual(items[0].year, "2002")
+
+    def test_attach_sends_parented_attachment(self):
+        # 本地路径 → linked_file;URL → linked_url
+        att_key = self.be.attach("PARENTKEY", "/home/u/x.pdf")
+        self.assertEqual(att_key, "NEWKEY")
+        rec = self._find("POST", "/users/0/items")
+        self.assertIsNotNone(rec)
+        body = json.loads(rec[3])
+        att = body["items"][0]
+        self.assertEqual(att["itemType"], "attachment")
+        self.assertEqual(att["parentItem"], "PARENTKEY")
+        self.assertEqual(att["linkMode"], "linked_file")
+        self.assertEqual(att["contentType"], "application/pdf")
+        self.assertEqual(att["path"], "/home/u/x.pdf")
+        self.assertEqual(self._headers(rec).get("if-unmodified-since-version"), "42")
+
+    def test_attach_url_uses_linked_url(self):
+        att_key = self.be.attach("PARENTKEY", "https://oa.example/x.pdf")
+        self.assertEqual(att_key, "NEWKEY")
+        rec = self._find("POST", "/users/0/items")
+        body = json.loads(rec[3])
+        att = body["items"][0]
+        self.assertEqual(att["linkMode"], "linked_url")
+        self.assertEqual(att["url"], "https://oa.example/x.pdf")
+
+    def test_delete_sends_delete_request(self):
+        self.be.delete("DKEY")
+        rec = self._find("DELETE", "/users/0/items/DKEY")
+        self.assertIsNotNone(rec)
+        self.assertEqual(self._headers(rec).get("if-unmodified-since-version"), "42")
 
 
 if __name__ == "__main__":

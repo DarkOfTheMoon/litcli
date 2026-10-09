@@ -31,13 +31,12 @@ litcli 的核心是「一条文献在多个后端（Zotero / arXiv）间的读�
   - `models.AcademicItem` 是唯一归一化模型（`source/key/title/creators/year/abstract/doi/url/item_type/attachments/extra`），与 CSL JSON 双向转换（`to_csl` / `from_csl`）、可导 BibTeX。
   - `citation.py` 提供零依赖的 author-date in-text / 参考文献简版渲染；正统路径是 `export --format csljson` 喂 `pandoc --citeproc`，**不依赖 Better BibTeX**。
   - `pdf.py`：下载 + `pdftotext` 抽文本，后端无关的「拿到 bytes/路径 → 抽文本」。
-  - `metadata.py`：纯启发式从 PDF 首页文本猜 title/authors/year/abstract，**不调 LLM、完全离线**；`from_text_lines` 是纯函数（可脱离 pdftotext 复用）。`gen-meta` 结果需人工校验后再 `add --csl` 导入。
-  - 注意 `citation.py:46` 用了 `it.author`——`AcademicItem` 并无该字段，`render_bibliography` 在无 creators 且无 year 时会崩；这是已知缺陷。
+  - `metadata.py`：纯启发式从 PDF 首页文本猜 title/authors/year/abstract，**不调 LLM、完全离线**；`from_text_lines` 是纯函数（可脱离 pdftotext 复用）。`data add --pdf` 用它抽候选、**展示待人工核对**后才写库，不自动写。
 
 - **聚合层**（`litcli/aggregate.py`，纯函数、不碰后端不联网）：供 `search --all` 用的去重/合并/排序。身份键**优先生效 DOI**、无 DOI 退化为归一标题（`norm_title` / `norm_doi`）；`_merge_two` 只把缺失字段补给最完整记录（副本操作，不污染入参，见 `test_does_not_mutate_input`）；`extra["sources"]` 记录全部来源；排序按年份降序、同年标题升序。
 
-- **后端层**（`litcli/backends/`）：`base.py` 定义抽象 `Backend` + `capabilities`（`read`/`write`/`attachment`）。`add`/`patch` 内部先 `_require("write")`，只读后端抛 `NotSupportedError`（CLI 捕获后输出 `[跳过]` 并以退出码 2 返回）。
-  - `zotero_local.py`：Zotero 10 本地 API（`localhost:23119/api`，`users/0` 本机别名，**无需 API key**）。读+写+附件，写入用 `If-Unmodified-Since-Version` 并发控制，写请求需 `Zotero-Server-ID`（惰性拉自 `/connector/ping`）。
+- **后端层**（`litcli/backends/`）：`base.py` 定义抽象 `Backend` + `capabilities`（`read`/`write`/`attachment`）。写操作 `add`/`patch`/`delete`/`attach` 内部先 `_require("write")`，只读后端抛 `NotSupportedError`（CLI 捕获后输出 `[跳过]` 并以退出码 2 返回）。
+  - `zotero_local.py`：Zotero 10 本地 API（`localhost:23119/api`，`users/0` 本机别名，**无需 API key**）。读+写+附件，写入用 `If-Unmodified-Since-Version` 并发控制，写请求需 `Zotero-Server-ID`（惰性拉自 `/connector/ping`）。`delete` 走 DELETE，`attach` 挂 link 模式附件（本地→linked_file，URL→linked_url）。
   - `arxiv.py`：arXiv 开放 API（Atom/XML），只读 + 可拉 PDF 直链，按 arXiv id（去 `v` 版本）归一化。
   - `crossref.py` / `openalex.py`：开放元数据（DOI / 学术图谱），只读，5xx 指数退避重试；OpenAlex 摘要为倒排索引需重建。
   - `openlibrary.py`：开放图书（`search.json`），只读；**默认内置不含**（部分网络无路由），在 config 显式启用。
@@ -45,7 +44,7 @@ litcli 的核心是「一条文献在多个后端（Zotero / arXiv）间的读�
 
 - **配置层**（`litcli/config.py`）：读 `~/.config/litcli/config.toml`（不支持则在 `$LITCLI_CONFIG`），`tomllib` 解析。加载优先级：显式 path → `$LITCLI_CONFIG` → `~/.config/litcli/config.toml` → **内置默认**（Zotero + arXiv + crossref + openalex）。写 Zotero / 检索专利（uspto）均需在 config 配真实 `api_key`，否则相应操作报 401/明确提示。后端注册表用 try-import：某后端文件未就绪时不影响其它后端工作。配置示例见 `config.example.toml`。
 
-- **CLI 编排层**（`litcli/cli.py`）：argparse 子命令 `search/get/add/set/export/pdf/gen-meta/backends`，分发到后端。`add` 的 `--creator` 用 `"家族, 名字"`，可多次。
+- **CLI 编排层**（`litcli/cli.py`）：argparse 意图分族子命令：`search`（检索）、`data get/add/set/del/attach`（本地库增删改查）、`fetch fulltext`（合法全文定位）、`export`（引文产出）、`backends`（诊断）。`data add` 的 `--creator` 用 `"家族, 名字"`，可多次；`--pdf` 抽元数据候选待核对、`--csl` 走 `from_csl`、`--force` 跳过查重/半残门。
 
 ## 惯例与约定
 

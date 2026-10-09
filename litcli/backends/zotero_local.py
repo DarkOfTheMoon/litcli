@@ -7,6 +7,7 @@ If-Unmodified-Since-Version 并发控制头。
 from __future__ import annotations
 
 import json
+import os
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -238,6 +239,50 @@ class ZoteroLocalBackend(Backend):
             hint = ";写入需真实 Zotero API key:请在 Zotero 偏好设置生成 key 并写入 config 的 api_key" if status == 401 else ""
             raise RuntimeError(f"[{self.name}] patch {key} -> HTTP {status}{hint}: {raw[:250]!r}")
         return self.get(key)
+
+    def delete(self, key: str) -> None:
+        """删除条目(以及其子附件)。写库,需 API key。"""
+        self._require("write")
+        version = self._library_version()
+        status, _, raw = self._request(
+            "DELETE", f"/{self._users}/items/{key}",
+            extra_headers={"If-Unmodified-Since-Version": version},
+        )
+        if status >= 400:
+            hint = ";写入需真实 Zotero API key:请在 Zotero 偏好设置生成 key 并写入 config 的 api_key" if status == 401 else ""
+            raise RuntimeError(f"[{self.name}] delete {key} -> HTTP {status}{hint}: {raw[:250]!r}")
+
+    def attach(self, key: str, src: str) -> str:
+        """给已有条目 key 挂全文附件(link 模式引用,不复制文件内容)。
+
+        src 本地路径→linked_file,URL→linked_url。返回附件 item key。
+        """
+        self._require("write")
+        is_url = src.startswith(("http://", "https://"))
+        link_mode = "linked_url" if is_url else "linked_file"
+        att = {
+            "itemType": "attachment",
+            "parentItem": key,
+            "linkMode": link_mode,
+            "contentType": "application/pdf",
+            "title": os.path.basename(src.split("//")[-1]) if not is_url else "",
+            "url": src if is_url else "",
+            "path": "" if is_url else src,
+        }
+        version = self._library_version()
+        payload = {"items": [att]}
+        status, _, raw = self._request(
+            "POST", f"/{self._users}/items", body=payload,
+            extra_headers={"If-Unmodified-Since-Version": version},
+        )
+        if status >= 400:
+            hint = ";写入需真实 Zotero API key:请在 Zotero 偏好设置生成 key 并写入 config 的 api_key" if status == 401 else ""
+            raise RuntimeError(f"[{self.name}] attach {key} -> HTTP {status}{hint}: {raw[:250]!r}")
+        resp = json.loads(raw) or {}
+        ok = resp.get("successful", {}) or {}
+        if ok:
+            return next(iter(ok.values())).get("key", "")
+        return ""
 
     # --- helpers ---
 

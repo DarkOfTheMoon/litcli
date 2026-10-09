@@ -1,8 +1,12 @@
-"""litcli CLI 编排层:argparse 子命令,分发到对应后端。
+"""litcli CLI 编排层:argparse 意图分族,分发到对应后端。
 
-命令面(后端口经 --backend,默认 zotero;--all 聚合并标来源):
-  search  get  add  set  export  pdf  backends
-按后端 capabilities 暴露 add/set(只读后端会抛 NotSupportedError)。
+命令面(后端口经 --backend,默认 zotero):
+  search       跨后端检索候选(只读)
+  data get/add/set/del/attach   本地库增删改查(写库·须决策)
+  fetch fulltext   按 DOI 定位合法全文(只读,不碰库)
+  export       导出引文(只读,不碰 PDF)
+  backends     诊断
+写库命令先查 backend.can("write"),只读后端抛 NotSupportedError(CLI 捕获为[跳过])。
 """
 from __future__ import annotations
 
@@ -32,7 +36,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="litcli", description="通用学术 CLI(可插拔多后端)")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p = sub.add_parser("search", help="检索")
+    # --- 顶层:检索 / 产出 / 诊断 ---
+    p = sub.add_parser("search", help="跨后端检索候选(只读)")
     p.add_argument("query")
     p.add_argument("--backend", default="zotero")
     p.add_argument("--all", action="store_true", help="对全部后端聚合搜")
@@ -40,61 +45,63 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--format", choices=["table", "json", "csl"], default="table")
     p.add_argument("--no-cite", action="store_true", help="table 模式不显示 in-text 引文")
 
-    p = sub.add_parser("get", help="单条全字段")
-    p.add_argument("key")
-    _add_common_backend(p)
-    p.add_argument("--format", choices=["table", "json", "csl"], default="table")
-
-    p = sub.add_parser("add", help="新增条目(仅可写后端)")
-    p.add_argument("--csl", default=None, help="从 csljson 文件导入(优先于下面各字段)")
-    p.add_argument("--title", required=True)
-    p.add_argument("--creator", action="append", default=[], help="'家族名, 名字',可多次")
-    p.add_argument("--type", default="document")
-    p.add_argument("--year", default="")
-    p.add_argument("--doi", default="")
-    p.add_argument("--url", default="")
-    p.add_argument("--abstract", default="")
-    _add_common_backend(p)
-
-    p = sub.add_parser("set", help="修改条目字段(仅可写后端)")
-    p.add_argument("key")
-    p.add_argument("--title", default=None)
-    p.add_argument("--abstract", default=None)
-    p.add_argument("--year", default=None)
-    p.add_argument("--doi", default=None)
-    p.add_argument("--url", default=None)
-    _add_common_backend(p)
-
-    p = sub.add_parser("export", help="导出引文")
+    p = sub.add_parser("export", help="导出引文(只读,不碰 PDF)")
     p.add_argument("key", nargs="+", help="一个或多个条目 key")
     _add_common_backend(p)
     p.add_argument("--format", choices=["csljson", "bibtex", "ris", "text"], default="csljson")
 
-    p = sub.add_parser("pdf", help="取 PDF 附件/全文")
-    p.add_argument("key")
-    _add_common_backend(p)
-    p.add_argument("--text", action="store_true", help="经 pdftotext 抽文本")
-    p.add_argument("--out", default=None, help="保存路径")
-    p.add_argument("--lines", type=int, default=6, help="--text 预览行数")
+    p = sub.add_parser("backends", help="列出已配置后端及能力(诊断)")
 
-    p = sub.add_parser("gen-meta", help="抽取本地 PDF 首页元数据 → csljson")
-    p.add_argument("pdf", help="本地 PDF 路径")
-    p.add_argument("--out", default=None, help="输出 json 路径(默认 <pdf>.csl.json)")
+    # --- data:本地库增删改查(写库·须决策) ---
+    d = sub.add_parser("data", help="本地库操作(增删改查;只读后端会提示)")
+    dsub = d.add_subparsers(dest="data_cmd", required=True)
 
-    p = sub.add_parser("oa", help="Unpaywall 反查合法 OA 全文")
-    p.add_argument("doi")
-    p.add_argument("--email", default=None)
-    p.add_argument("--download", action="store_true", help="下载最佳 OA PDF")
-    p.add_argument("--out", default=None, help="下载保存路径")
+    dp = dsub.add_parser("get", help="单条全字段")
+    dp.add_argument("key")
+    _add_common_backend(dp)
+    dp.add_argument("--format", choices=["table", "json", "csl"], default="table")
 
-    p = sub.add_parser("fulltext", help="合法 OA 全文(Unpaywall→OpenAlex,无则标被墙)")
-    p.add_argument("doi")
-    p.add_argument("--email", default=None)
-    p.add_argument("--download", action="store_true", help="下载候选全文 PDF")
-    p.add_argument("--out", default=None, help="下载保存路径")
-    p.add_argument("--lines", type=int, default=6, help="下载后预览行数")
+    dp = dsub.add_parser("add", help="摄入元信息/元信息+全文")
+    dp.add_argument("--csl", default=None, help="从 csljson 文件导入(优先于各字段)")
+    dp.add_argument("--pdf", default=None, help="从本地 PDF 抽元数据(启发式,待核对)")
+    dp.add_argument("--title", default="")
+    dp.add_argument("--creator", action="append", default=[], help="'家族名, 名字',可多次")
+    dp.add_argument("--type", default="document")
+    dp.add_argument("--year", default="")
+    dp.add_argument("--doi", default="")
+    dp.add_argument("--url", default="")
+    dp.add_argument("--abstract", default="")
+    dp.add_argument("--force", action="store_true", help="跳过查重/半残门,直接写")
+    _add_common_backend(dp)
 
-    sub.add_parser("backends", help="列出已配置后端及能力")
+    dp = dsub.add_parser("set", help="修改条目字段")
+    dp.add_argument("key")
+    dp.add_argument("--title", default=None)
+    dp.add_argument("--abstract", default=None)
+    dp.add_argument("--year", default=None)
+    dp.add_argument("--doi", default=None)
+    dp.add_argument("--url", default=None)
+    _add_common_backend(dp)
+
+    dp = dsub.add_parser("del", help="删除条目")
+    dp.add_argument("key")
+    _add_common_backend(dp)
+
+    dp = dsub.add_parser("attach", help="给已有条目挂全文附件")
+    dp.add_argument("key")
+    dp.add_argument("src", help="本地路径或 URL")
+    _add_common_backend(dp)
+
+    # --- fetch:取全文/补元数据(只读,不碰库) ---
+    f = sub.add_parser("fetch", help="取全文/元数据(只读,不碰库)")
+    fsub = f.add_subparsers(dest="fetch_cmd", required=True)
+
+    fp = fsub.add_parser("fulltext", help="按 DOI 定位合法全文(本地库→Unpaywall→OpenAlex)")
+    fp.add_argument("doi")
+    fp.add_argument("--email", default=None)
+    fp.add_argument("--download", action="store_true", help="下载候选全文 PDF")
+    fp.add_argument("--out", default=None, help="保存路径")
+    fp.add_argument("--lines", type=int, default=6, help="下载后预览行数")
 
     return parser
 
@@ -156,18 +163,55 @@ def cmd_get(cfg, args) -> int:
     return 0
 
 
-def cmd_add(cfg, args) -> int:
+def cmd_data_add(cfg, args) -> int:
+    """摄入元信息(data add --title.. / --csl)或元信息+全文(data add --pdf)。
+
+    元数据唯一写入口:--pdf 时用启发式抽候选、展示待核对,用户确认/-force 才写。
+    写前过 should_import 查重/半残门,防本地库爆库。
+    """
     backend = get_backend(args.backend, cfg)
-    creators = []
-    for c in args.creator:
-        parts = [x.strip() for x in c.split(",")]
-        fam = parts[0]
-        giv = parts[1] if len(parts) > 1 else ""
-        creators.append({"family": fam, "given": giv})
-    item = AcademicItem(
-        source=args.backend, title=args.title, creators=creators, year=args.year,
-        doi=args.doi, url=args.url, abstract=args.abstract, item_type=args.type,
-    )
+    item = None
+    if args.pdf:
+        item = metadata.extract_metadata(args.pdf)
+        item.source = args.backend
+        print("--- 从 PDF 首页启发式抽取(待核对) ---")
+        print(f"  title: {item.title}")
+        print(f"  authors: {', '.join(a.get('family','') for a in item.creators) or '-'}")
+        print(f"  year: {item.year or '-'}")
+        if item.abstract:
+            print(f"  abstract: {item.abstract[:120]}")
+        if not (item.title or item.creators or item.year):
+            print("[警告] 未抽取到任何字段,建议 --csl 或手填,勿盲目写库")
+    else:
+        creators = []
+        for c in args.creator:
+            parts = [x.strip() for x in c.split(",")]
+            fam = parts[0]
+            giv = parts[1] if len(parts) > 1 else ""
+            creators.append({"family": fam, "given": giv})
+        item = AcademicItem(
+            source=args.backend, title=args.title, creators=creators, year=args.year,
+            doi=args.doi, url=args.url, abstract=args.abstract, item_type=args.type,
+        )
+        if args.csl:
+            import json as _json
+            with open(args.csl, encoding="utf-8") as f:
+                csl = _json.load(f)
+            item = AcademicItem.from_csl(csl, source=args.backend)
+
+    # 查重/半残门(仅 --force 跳过)
+    if not args.force:
+        from .aggregate import merge_items
+        try:
+            existing = backend.search(item.doi or item.title, limit=20)
+        except Exception:
+            existing = []
+        ok, reason = fulltext_mod.should_import(item, existing)
+        if not ok:
+            print(f"[跳过] {reason}")
+            print("  若要强制收录,加 --force")
+            return 2
+
     key = backend.add(item)
     print(f"已新增 [{args.backend}] key={key}")
     return 0
@@ -206,56 +250,17 @@ def cmd_export(cfg, args) -> int:
     return 0
 
 
-def cmd_pdf(cfg, args) -> int:
+def cmd_data_del(cfg, args) -> int:
     backend = get_backend(args.backend, cfg)
-    raw = backend.get_attachment(args.key)
-    if args.text:
-        text = pdfutil.extract_text(raw, max_chars=None)
-        print(pdfutil.first_lines(text, args.lines))
-        return 0
-    out = args.out or f"{args.key}.pdf"
-    with open(out, "wb") as f:
-        f.write(raw)
-    print(f"已保存 {len(raw)} 字节 to {out}")
+    backend.delete(args.key)
+    print(f"已删除 [{args.backend}] {args.key}")
     return 0
 
 
-def cmd_gen_meta(cfg, args) -> int:
-    """抽取本地 PDF 首页元数据 → csljson(供人工校验后 add --csl 导入)。"""
-    item = metadata.extract_metadata(args.pdf)
-    csl = item.to_csl()
-    csl["id"] = item.key or "pdf-meta"
-    out = args.out or (os.path.splitext(args.pdf)[0] + ".csl.json")
-    with open(out, "w") as f:
-        json.dump(csl, f, ensure_ascii=False, indent=2)
-    print(f"已写出 csljson: {out}")
-    print(json.dumps(csl, ensure_ascii=False, indent=2))
-    if not (item.title or item.creators or item.year):
-        print("[警告] 未抽取到任何字段,请人工校验后再导入")
-    return 0
-
-
-def cmd_oa(cfg, args) -> int:
-    email = (args.email
-             or (cfg.get("unpaywall") or {}).get("email")
-             or os.environ.get("UNPAYWALL_EMAIL")
-             or unpaywall.DEFAULT_EMAIL)
-    info = unpaywall.resolve_oa(args.doi, email)
-    print(f"DOI {args.doi}  is_oa={info['is_oa']}  status={info['oa_status']}")
-    if info.get("title"):
-        print(f"  title: {info['title'][:70]}")
-    if info.get("best_landing"):
-        print(f"  landing: {info['best_landing']}")
-    if info.get("best_pdf"):
-        print(f"  PDF: {info['best_pdf']}")
-        if args.download:
-            raw = pdfutil.download(info["best_pdf"])
-            out = args.out or f"{args.doi.replace('/', '_')}.pdf"
-            with open(out, "wb") as f:
-                f.write(raw)
-            print(f"  已下载 {len(raw)} 字节 to {out}")
-    else:
-        print("  (暂无 OA PDF 直链)")
+def cmd_data_attach(cfg, args) -> int:
+    backend = get_backend(args.backend, cfg)
+    att_key = backend.attach(args.key, args.src)
+    print(f"已挂全文附件 [{args.backend}] {args.key} 附件key={att_key or '-'} src={args.src}")
     return 0
 
 
@@ -266,8 +271,8 @@ def _resolve_oa_email(cfg, args) -> str:
             or unpaywall.DEFAULT_EMAIL)
 
 
-def cmd_fulltext(cfg, args) -> int:
-    """合法全文链:本地库 → Unpaywall → OpenAlex;拿不到则指路图书馆/代理。"""
+def cmd_fetch_fulltext(cfg, args) -> int:
+    """按 DOI 定位合法全文:本地库(优先)→ Unpaywall → OpenAlex;均无则指路。"""
     email = _resolve_oa_email(cfg, args)
     backends = get_all_backends(cfg)
     info = fulltext_mod.resolve_fulltext(args.doi, email, backends=backends)
@@ -276,8 +281,6 @@ def cmd_fulltext(cfg, args) -> int:
         print("  请走机构订阅 / 校际互借 / 配置代理访问;本 CLI 不绕过付费墙。")
         if info.get("errors"):
             print(f"  [解析跳过: {len(info['errors'])} 步]")
-        else:
-            print("  (各源均未命中,非网络故障)")
         return 0
 
     title = info.get("title") or ""
@@ -286,8 +289,7 @@ def cmd_fulltext(cfg, args) -> int:
     if title:
         print(f"  title: {title[:70]}")
 
-    if kind == "local":
-        # 本地库命中:附件已在手,直接落盘(无需 --download)
+    if kind == "local":  # 本地库命中:附件已在手,直接落盘
         key = info.get("key") or ""
         src = info.get("source") or "zotero"
         print(f"  本地库 [{src}] 附件已命中 (key={key})")
@@ -301,7 +303,7 @@ def cmd_fulltext(cfg, args) -> int:
             print(f"  --- {args.lines} 行预览 ---\n{pdfutil.first_lines(text, args.lines)}")
         return 0
 
-    # OA 源(Unpaywall / OpenAlex):默认只给直链,--download 才真下载
+    # OA 源:默认只给直链,--download 才真下载
     if info.get("status"):
         print(f"  oa_status: {info['status']}")
     print(f"  PDF: {info['url']}")
@@ -340,14 +342,24 @@ def main(argv=None) -> int:
     cfg = load_config()
     _apply_proxy(cfg)
     try:
-        return {
-            "search": cmd_search, "get": cmd_get, "add": cmd_add,
-            "set": cmd_set, "export": cmd_export, "pdf": cmd_pdf,
-            "gen-meta": cmd_gen_meta,
-            "oa": cmd_oa,
-            "fulltext": cmd_fulltext,
-            "backends": lambda c, a: cmd_backends(c),
-        }[args.cmd](cfg, args)
+        if args.cmd == "search":
+            return cmd_search(cfg, args)
+        if args.cmd == "export":
+            return cmd_export(cfg, args)
+        if args.cmd == "backends":
+            return cmd_backends(cfg)
+        if args.cmd == "data":
+            return {
+                "get": cmd_get, "add": cmd_data_add,
+                "set": cmd_set, "del": cmd_data_del,
+                "attach": cmd_data_attach,
+            }[args.data_cmd](cfg, args)
+        if args.cmd == "fetch":
+            return {
+                "fulltext": cmd_fetch_fulltext,
+            }[args.fetch_cmd](cfg, args)
+        print(f"[错误] 未知命令 {args.cmd}")
+        return 2
     except NotSupportedError as e:
         print(f"[跳过] {e}")
         return 2

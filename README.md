@@ -24,19 +24,20 @@ PDF 全文抽取需系统有 `pdftotext`(poppler-utils)；无则 `pdf --text` �
 
 ## 命令
 
-子命令（后端经 `--backend`，默认 `zotero`；`--all` 跨后端聚合并标来源）：
+子命令（后端经 `--backend`，默认 `zotero`；`--all` 跨后端聚合并标来源）。命令按意图分族，`search`/`fetch`/`export` 只读，`data` 写库（须决策）：
 
-| 命令 | 说明 |
-|---|---|
-| `litcli search "X" [--all] [--limit N] [--format table\|json\|csl]` | 检索；`--all` 对各后端聚合，**去重/合并/排序**，`extra["sources"]` 标全部来源 |
-| `litcli get <id> [--backend NAME]` | 单条全字段 |
-| `litcli add --title "..." [--creator "家族, 名字"]... [--year ..]` | 仅可写后端（zotero）；只读后端报 `[跳过]` 退出码 2 |
-| `litcli set <id> --title .. [--abstract ..] [--year ..]` | 同仅可写后端 |
-| `litcli export <id> [--format csljson\|bibtex\|text]` | 导出引文；csljson 可喂 `pandoc --citeproc`，**不依赖 Better BibTeX** |
-| `litcli pdf <id> [--text] [--out PATH]` | 取附件/直链 PDF；`--text` 经 pdftotext 抽取 |
-| `litcli fulltext <doi> [--download] [--lines N]` | **合法全文链**：本地库 → Unpaywall → OpenAlex OA 直链；都拿不到则**指路图书馆/代理**（不绕过付费墙） |
-| `litcli gen-meta <pdf> [--out X.json]` | 从本地 PDF 首页**离线启发式**抽元数据 → csljson（人工校验后 `add --csl` 导入） |
-| `litcli backends` | 列出已配置后端及能力 |
+| 命令 | 说明 | 读写 |
+|---|---|---|
+| `litcli search "X" [--all] [--limit N] [--format table\|json\|csl]` | 检索；`--all` 对各后端聚合，**去重/合并/排序**，`extra["sources"]` 标全部来源 | 只读 |
+| `litcli data get <id> [--format csl\|json]` | 单条全字段 | 只读 |
+| `litcli data add --title "..." [--creator "家族, 名字"]... [--year ..]` | 摄入元信息；写前过 `should_import` 查重/半残门，只读后端报 `[跳过]` | **写库** |
+| `litcli data add --pdf <file>` | 从 PDF 首页**启发式**抽候选，展示待核对后才写；不自动入库 | **写库** |
+| `litcli data set <id> --title .. [--abstract ..] [--year ..]` | 修改字段 | **写库** |
+| `litcli data del <id>` | 删除条目 | **写库** |
+| `litcli data attach <id> <本地路径\|URL>` | 给已有条目挂全文附件 | **写库** |
+| `litcli export <id> [--format csljson\|bibtex\|ris\|text]` | 导出引文；csljson 可喂 `pandoc --citeproc`，**不依赖 Better BibTeX**（不碰 PDF） | 只读 |
+| `litcli fetch fulltext <doi> [--download] [--lines N]` | **合法全文定位**：本地库 → Unpaywall → OpenAlex OA 直链；都拿不到则**指路图书馆/代理**（不绕过付费墙） | 只读 |
+| `litcli backends` | 列出已配置后端及能力 | 只读 |
 
 ## 配置
 
@@ -70,8 +71,9 @@ litcli/
 ├── pdf.py         下载 + pdftotext 抽文本(后端无关)
 ├── metadata.py    PDF 首页启发式元数据(纯函数,离线)
 ├── aggregate.py   跨后端聚合:去重/合并/排序(纯函数)
+├── fulltext.py    合法全文定位(本地→OA)+ should_import 收录查重门(纯函数)
 ├── config.py      配置读取、后端发现、get_backend/get_all_backends
-├── cli.py         argparse 编排,按 capabilities 暴露读写
+├── cli.py         argparse 意图分族编排(search/data/fetch/export),按 capabilities 暴露读写
 ├── backends/       base.py(Backend ABC) + zotero_local.py + arxiv.py
 │                   + crossref.py + openalex.py + openlibrary.py + uspto.py
 └── tests/          unittest 单测(stub 后端,离线)
@@ -89,9 +91,8 @@ python3 -m unittest discover -s tests
 
 ## 已知限制
 
-- Zotero 写落库需**真实 Zotero API key**（本地 localhost key 仅为只读）：在 Zotero 偏好设置生成 key，写入 config 的 `api_key`。缺 key 时 `add`/`set` 报 `HTTP 401;写入需真实 Zotero API key`（退出码 2），不污染库；配好 key 后 `litcli add` 即可真正落库。
+- Zotero 写落库需**真实 Zotero API key**（本地 localhost key 仅为只读）：在 Zotero 偏好设置生成 key，写入 config 的 `api_key`。缺 key 时 `data add`/`data set` 报 `HTTP 401;写入需真实 Zotero API key`（退出码 2），不污染库；配好 key 后即可真正落库。
 - arXiv 联网在部分环境（如受限沙箱）返回 406；代码已把 HTTP 错误包装为 `RuntimeError`，`--all` 会跳过失败后端继续。
-- `citation.render_bibliography` 在无作者且无年份的极端条目下会因 `it.author` 属性缺失而崩——已知缺陷见 `citation.py`。
 - **专利检索（USPTO）需真实 API key**：免 key 可达的 Crossref/OpenAlex 公开版专利记录趋近 0，专利检索以 USPTO 为主通道。免费注册 key（`https://developer.uspto.gov` 顶部 “Get a developer key”）后写入 config 的 `api_key`；缺 key 时 `search --backend uspto` 明确提示而非堆栈。
 - **软件著作权（软著）无稳定公开 API**：中国版权保护中心登记检索需账号/验证码，无法自动化批量检索；暂不内置软著后端，属计划外缺口。
-- **Sci-Hub / ZLibrия 类盗版全文源不内置**：版权规避/盗版分发平台，刻意排除；合法全文走 Unpaywall（`litcli oa`）+ arXiv/OpenAlex 的开放获取（OA）PDF 直链。
+- **Sci-Hub / ZLibrary 类盗版全文源不内置**：版权规避/盗版分发平台，刻意排除；合法全文走 `litcli fetch fulltext`（本地库→Unpaywall→OpenAlex 的开放获取版，绕不过付费墙则指路机构/馆际互借）。

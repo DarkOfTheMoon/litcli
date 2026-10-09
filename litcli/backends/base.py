@@ -60,3 +60,16 @@ class Backend(ABC):
         """修改条目字段(仅 carries 'write' 的后端)。"""
         self._require("write")
         raise NotImplementedError(f"[{self.name}] patch 未实现")
+
+    def delete(self, key: str) -> None:
+        """删除条目(仅 carries 'write' 的后端)。"""
+        self._require("write")
+        raise NotImplementedError(f"[{self.name}] delete 未实现")
+
+    def attach(self, key: str, src: str) -> str:
+        """给已有条目 key 挂全文附件,返回附件 key(仅 carries 'write' 的后端)。
+
+        src: 本地文件路径(file:// 或绝对路径)或 URL。link 模式引用,不复制内容。
+        """
+        self._require("write")
+        raise NotImplementedError(f"[{self.name}] attach 未实现")
