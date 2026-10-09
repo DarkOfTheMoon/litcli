@@ -16,6 +16,7 @@ import urllib.request
 from . import pdf as pdfutil
 from . import metadata
 from . import unpaywall
+from . import fulltext as fulltext_mod
 from .config import get_all_backends, get_backend, load_config
 from .models import AcademicItem
 from .aggregate import merge_items
@@ -85,6 +86,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--email", default=None)
     p.add_argument("--download", action="store_true", help="下载最佳 OA PDF")
     p.add_argument("--out", default=None, help="下载保存路径")
+
+    p = sub.add_parser("fulltext", help="合法 OA 全文(Unpaywall→OpenAlex,无则标被墙)")
+    p.add_argument("doi")
+    p.add_argument("--email", default=None)
+    p.add_argument("--download", action="store_true", help="下载候选全文 PDF")
+    p.add_argument("--out", default=None, help="下载保存路径")
+    p.add_argument("--lines", type=int, default=6, help="下载后预览行数")
 
     sub.add_parser("backends", help="列出已配置后端及能力")
 
@@ -251,6 +259,64 @@ def cmd_oa(cfg, args) -> int:
     return 0
 
 
+def _resolve_oa_email(cfg, args) -> str:
+    return (args.email
+            or (cfg.get("unpaywall") or {}).get("email")
+            or os.environ.get("UNPAYWALL_EMAIL")
+            or unpaywall.DEFAULT_EMAIL)
+
+
+def cmd_fulltext(cfg, args) -> int:
+    """合法全文链:本地库 → Unpaywall → OpenAlex;拿不到则指路图书馆/代理。"""
+    email = _resolve_oa_email(cfg, args)
+    backends = get_all_backends(cfg)
+    info = fulltext_mod.resolve_fulltext(args.doi, email, backends=backends)
+    if not info.get("has_fulltext"):
+        print(f"DOI {args.doi}  本地库与开放 OA 源均无该文献")
+        print("  请走机构订阅 / 校际互借 / 配置代理访问;本 CLI 不绕过付费墙。")
+        if info.get("errors"):
+            print(f"  [解析跳过: {len(info['errors'])} 步]")
+        else:
+            print("  (各源均未命中,非网络故障)")
+        return 0
+
+    title = info.get("title") or ""
+    kind = info["kind"]
+    print(f"DOI {args.doi}  全文可用 (source={kind})")
+    if title:
+        print(f"  title: {title[:70]}")
+
+    if kind == "local":
+        # 本地库命中:附件已在手,直接落盘(无需 --download)
+        key = info.get("key") or ""
+        src = info.get("source") or "zotero"
+        print(f"  本地库 [{src}] 附件已命中 (key={key})")
+        raw = info["data"]
+        out = args.out or f"{args.doi.replace('/', '_')}.pdf"
+        with open(out, "wb") as f:
+            f.write(raw)
+        print(f"  已保存 {len(raw)} 字节 to {out}")
+        if raw and args.lines:
+            text = pdfutil.extract_text(raw, max_chars=None)
+            print(f"  --- {args.lines} 行预览 ---\n{pdfutil.first_lines(text, args.lines)}")
+        return 0
+
+    # OA 源(Unpaywall / OpenAlex):默认只给直链,--download 才真下载
+    if info.get("status"):
+        print(f"  oa_status: {info['status']}")
+    print(f"  PDF: {info['url']}")
+    if args.download:
+        raw = pdfutil.download(info["url"])
+        out = args.out or f"{args.doi.replace('/', '_')}.pdf"
+        with open(out, "wb") as f:
+            f.write(raw)
+        print(f"  已下载 {len(raw)} 字节 to {out}")
+        if raw and args.lines:
+            text = pdfutil.extract_text(raw, max_chars=None)
+            print(f"  --- {args.lines} 行预览 ---\n{pdfutil.first_lines(text, args.lines)}")
+    return 0
+
+
 def cmd_backends(cfg) -> int:
     for name, b in sorted(get_all_backends(cfg).items()):
         caps = ", ".join(sorted(b.capabilities))
@@ -279,6 +345,7 @@ def main(argv=None) -> int:
             "set": cmd_set, "export": cmd_export, "pdf": cmd_pdf,
             "gen-meta": cmd_gen_meta,
             "oa": cmd_oa,
+            "fulltext": cmd_fulltext,
             "backends": lambda c, a: cmd_backends(c),
         }[args.cmd](cfg, args)
     except NotSupportedError as e:

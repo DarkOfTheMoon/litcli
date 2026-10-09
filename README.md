@@ -34,6 +34,7 @@ PDF 全文抽取需系统有 `pdftotext`(poppler-utils)；无则 `pdf --text` �
 | `litcli set <id> --title .. [--abstract ..] [--year ..]` | 同仅可写后端 |
 | `litcli export <id> [--format csljson\|bibtex\|text]` | 导出引文；csljson 可喂 `pandoc --citeproc`，**不依赖 Better BibTeX** |
 | `litcli pdf <id> [--text] [--out PATH]` | 取附件/直链 PDF；`--text` 经 pdftotext 抽取 |
+| `litcli fulltext <doi> [--download] [--lines N]` | **合法全文链**：本地库 → Unpaywall → OpenAlex OA 直链；都拿不到则**指路图书馆/代理**（不绕过付费墙） |
 | `litcli gen-meta <pdf> [--out X.json]` | 从本地 PDF 首页**离线启发式**抽元数据 → csljson（人工校验后 `add --csl` 导入） |
 | `litcli backends` | 列出已配置后端及能力 |
 

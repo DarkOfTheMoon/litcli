@@ -17,6 +17,7 @@ description: 与用户学术资料互操作——检索、读取、导出引文�
 | 单条全字段 | `litcli get <key> [--backend ...]` |
 | 导出引文 | `litcli export <key> [--format csljson\|bibtex\|text]` |
 | 读 PDF 全文 | `litcli pdf <key> --text` |
+| 找合法全文 | `litcli fulltext <doi> [--download]` 本地库→OA→指路(绕不过付费墙) |
 | 新增 | `litcli add --title "..." --creator "家族, 名字" --year 2002 [--doi ...]` |
 | 修改 | `litcli set <key> --title "..." [--year ...]` |
 | 本地 PDF→元数据 | `litcli gen-meta <pdf> [--out X.csl.json]` |
