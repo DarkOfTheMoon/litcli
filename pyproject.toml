@@ -4,15 +4,33 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "litcli"
-version = "0.1.0"
+dynamic = ["version"]
 description = "通用学术 CLI:后端无关的领域库 + 可插拔多后端(本机 Zotero / arXiv)互操作"
+readme = "README.md"
+license = {text = "MIT"}
 requires-python = ">=3.11"
 dependencies = []  # 零第三方依赖,仅 Python 标准库
 authors = [{ name = "ZhangHuiJie" }]
 keywords = ["zotero", "arxiv", "academic", "cli", "csl"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Environment :: Console",
+  "Intended Audience :: Science/Research",
+  "Topic :: Scientific/Engineering",
+]
+
+[project.urls]
+Homepage = "https://github.com/ZhangHuiJie/litcli"
+Repository = "https://github.com/ZhangHuiJie/litcli"
+Issues = "https://github.com/ZhangHuiJie/litcli/issues"
 
 [project.scripts]
 litcli = "litcli.cli:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "litcli._version.__version__"}
 
 [tool.setuptools]
 packages = ["litcli", "litcli.backends"]

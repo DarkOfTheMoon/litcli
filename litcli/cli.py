@@ -19,6 +19,7 @@ import urllib.error
 import urllib.request
 
 from . import pdf as pdfutil
+from . import __version__
 from . import metadata
 from . import unpaywall
 from . import fulltext as fulltext_mod
@@ -35,6 +36,7 @@ def _add_common_backend(p: argparse.ArgumentParser) -> None:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="litcli", description="通用学术 CLI(可插拔多后端)")
+    parser.add_argument("--version", action="version", version=f"litcli {__version__}")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     # --- 顶层:检索 / 产出 / 诊断 ---

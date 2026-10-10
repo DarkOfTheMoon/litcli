@@ -9,15 +9,15 @@
 
 ## 安装 / 运行
 
-无打包、无 `pip install` 步骤（`pyproject.toml` 仅为元数据/可选 `.local` 入口）：
+零第三方依赖，标准 Python 包安装（`pyproject.toml` 声明入口点 `litcli = "litcli.cli:main"`）。本机 Python 3.12 是 PEP 668（externally-managed）环境、默认拦系统/用户 pip 安装，`install.sh` 因此用 `pip install --break-system-packages --user .`（**非 editable**）：安装时把源码**复制**为冻结快照到用户站点（`~/.local`），console_script 落 `~/.local/bin/litcli`（已在 PATH）。生产 `litcli` 与仓库源码**解耦**——生产期间改源码**不会**波及已装版本（改代码不会导致生产出错）；发布新版本时重跑安装即可。零第三方依赖（纯标准库）故 `--break-system-packages` 无与 apt 包冲突之虞，`--user` 限定用户作用域、免 sudo。开发在仓库内走 `./bin/litcli`（独立用源码，互不影响生产）：
 
 ```bash
-# 方式一:项目内直接运行(无需安装)
-./bin/litcli search "drop"
+# 生产方式(推荐):`pip install --break-system-packages --user .`(复制快照,无 venv)
+./install.sh          # 同时复制 skill 到 ~/.claude/skills/zotero
+litcli backends       # 自测:列出已配置后端及能力
 
-# 方式二(可选):软链到 ~/.local/bin,全局可用
-./install.sh          # 同时把 skill 复制到 ~/.claude/skills/zotero
-litcli backends
+# 开发方式:仓库内直接运行(免安装,任意 cwd 可用;与生产快照隔离)
+./bin/litcli search "drop"
 ```
 
 PDF 全文抽取需系统有 `pdftotext`(poppler-utils)；无则 `pdf --text` 走空，其余功能不受影响。

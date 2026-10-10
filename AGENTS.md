@@ -4,11 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 运行与命令
 
-**零第三方依赖**：仅用 Python 3.11+ 标准库（`tomllib`、`urllib`、`xml.etree`、`subprocess`）；本机是 3.12。无 `pyproject.toml` / `setup.py`——不打包、不安装，直接用入口跑。PDF 文本抽取需系统装了 `pdftotext`（poppler-utils）。
+**零第三方依赖**：仅用 Python 3.11+ 标准库（`tomllib`、`urllib`、`xml.etree`、`subprocess`）；本机是 3.12。生产走标准包安装（`pyproject.toml` 声明入口点 `litcli = "litcli.cli:main"`）；**本机 Python 3.12 受 PEP 668（externally-managed）限制**，`install.sh` 用 **`pip install --break-system-packages --user .`（非 editable）**：安装时把源码**复制**为冻结快照到 `~/.local`，生产 `litcli` 与仓库源码**解耦**（生产期间改源码不波及已装版本）；发布新版本重跑安装。零第三方依赖故 `--break-system-packages` 无冲突之虞，`--user` 限用户作用域。开发在仓库内走 `./bin/litcli`（独立用源码，互不影响）。PDF 文本抽取需系统装了 `pdftotext`（poppler-utils）。
 
 ```bash
-# 运行 CLI：本仓库无安装步骤，二选一
-./bin/litcli <子命令>          # wrapper：把项目根注入 sys.path
+# 生产方式(推荐):./install.sh = pip install --break-system-packages --user .(复制快照,无 venv)
+./install.sh
+litcli <子命令>
+
+# 开发方式:仓库内直接跑(免安装,任意 cwd 可用;与生产快照隔离)
+./bin/litcli <子命令>            # wrapper:把项目根注入 sys.path
 python3 -m litcli.cli <子命令>  # 等价
 
 # 跑全部测试（unittest，非 pytest）

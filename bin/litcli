@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# litcli wrapper: 把项目根注入 sys.path,转发到 litcli.cli:main。
-# 配合 install.sh 软链到 ~/.local/bin;也可在项目内直接 ./bin/litcli。
+# litcli 仓库内开发入口(wrapper):把项目根注入 sys.path,转发到 litcli.cli:main。
+# 仅用于未安装时(免 pip)在仓库内调试;生产安装走 `pip install --break-system-packages --user .`(非 editable)。
+# 本脚本总是被直接调用(如 ./bin/litcli),BASH_SOURCE[0] 即真实路径,dirname/.. 推出项目根即可。
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export PYTHONPATH="${DIR}${PYTHONPATH:+:${PYTHONPATH}}"
