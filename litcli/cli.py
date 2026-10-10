@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -46,6 +47,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--all", action="store_true", help="对全部后端聚合搜")
     p.add_argument("--limit", type=int, default=10)
     p.add_argument("--format", choices=["table", "json", "csl"], default="table")
+    p.add_argument("--type", default=None, help="按条目类型过滤(article/book/chapter/patent/...),降噪声")
     p.add_argument("--no-cite", action="store_true", help="table 模式不显示 in-text 引文")
 
     p = sub.add_parser("export", help="导出引文(只读,不碰 PDF)")
@@ -55,6 +57,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("backends", help="后端诊断 / 授权(试运行前先 `backends authorize` 拿写库 key)")
     bsub = p.add_subparsers(dest="backends_cmd")
+    bsub.add_parser("list", help="列出已配置后端与能力(只读)")
+    bsub.add_parser("status", help="显示各后端授权/接入状态(只读)")
     bp = bsub.add_parser("authorize", help="主动向 Zotero 本地授权并写回 config.toml")
     bp.add_argument("backend", nargs="?", default="zotero",
                     help="后端名(默认 zotero;目前仅 zotero 支持本地授权)")
@@ -159,6 +163,11 @@ def cmd_search(cfg, args) -> int:
     if args.all and items and len(items) > 1:
         items = merge_items(items)
 
+    # --type 过滤:把噪声(书名/无关题材)挡掉;合并后再过滤,保住 --all 去重效果
+    if getattr(args, "type", None):
+        want = args.type.lower()
+        items = [it for it in items if it.item_type.lower() == want]
+
     if args.format in ("json", "csl"):
         for it in items:
             print(_present(it, args.format))
@@ -247,9 +256,32 @@ def cmd_set(cfg, args) -> int:
     return 0
 
 
+def _arxiv_id_from_key(key: str) -> str | None:
+    """从导出 key 中识别 arXiv id(如 ``arxiv/1806.09180`` 或 ``arXiv:1806.09180``)。"""
+    m = re.match(r"^\s*(?:arxiv[:/]|arXiv[:/]|arXiv)?\s*(\d{4}\.\d{4,5})(?:v\d+)?\s*$", key)
+    if m:
+        return m.group(1)
+    return None
+
+
+def _normalize_export_key(key: str, backend_name: str) -> str:
+    """导出前把 arXiv key 归一为后端可解析的形态。
+
+    - arxiv 后端:直接给裸 arXiv id(其 get 走 ``id:<key>`` 检索);
+    - 其它后端(openalex/crossref):转为 DOI ``10.48550/arxiv.<id>``,否则
+      openalex.get 会把 ``arxiv/1806.09180`` 当 OpenAlex id 查而 404。
+    """
+    aid = _arxiv_id_from_key(key)
+    if not aid:
+        return key
+    if backend_name == "arxiv":
+        return aid
+    return f"10.48550/arxiv.{aid}"
+
+
 def cmd_export(cfg, args) -> int:
     backend = get_backend(args.backend, cfg)
-    items = [backend.get(k) for k in args.key]
+    items = [backend.get(_normalize_export_key(k, args.backend)) for k in args.key]
     if args.format == "csljson":
         if len(items) == 1:
             print(json.dumps(items[0].to_csl(), ensure_ascii=False, indent=2))
@@ -431,11 +463,45 @@ def cmd_fetch_fulltext(cfg, args) -> int:
 
 
 def cmd_backends(cfg, args) -> int:
-    if getattr(args, "backends_cmd", None) == "authorize":
+    subcmd = getattr(args, "backends_cmd", None)
+    if subcmd == "authorize":
         return cmd_backends_authorize(cfg, getattr(args, "backend", "zotero"))
+    if subcmd == "status":
+        return cmd_backends_status(cfg, args)
+    # 裸 `backends` 或 `backends list`:列出已配置后端与能力(只读)
     for name, b in sorted(get_all_backends(cfg).items()):
         caps = ", ".join(sorted(b.capabilities))
         print(f"{name:<12} caps=[{caps}]")
+    return 0
+
+
+def _cfg_write_key(cfg: dict, name: str) -> str | None:
+    """取 config 里某后端的 api_key(只判有无,不打印明文)。"""
+    bcfg = (cfg.get("backends") or {}).get(name) or {}
+    k = bcfg.get("api_key")
+    return k if k else None
+
+
+def cmd_backends_status(cfg, args) -> int:
+    """各后端只读诊断:配置/能力/授权与可达性(不打印任何 key 明文)。"""
+    backends = get_all_backends(cfg)
+    if not backends:
+        print("[无后端] 请检查 ~/.config/litcli/config.toml (或 env LITCLI_CONFIG)")
+        return 0
+    print(f"后端诊断: {len(backends)} 个已配置")
+    for name, b in sorted(backends.items()):
+        caps = ", ".join(sorted(b.capabilities))
+        has_write = "write" in b.capabilities
+        if has_write:
+            auth = "已授权(有写 key)" if _cfg_write_key(cfg, name) else "未授权(写库需 backends authorize)"
+        else:
+            auth = "只读后端,无需授权"
+        # 仅对提供了 ping 的后端(zotero 本地)做轻量可达性探测,失败不致命
+        probe = ""
+        ping = getattr(b, "ping", None)
+        if callable(ping):
+            probe = "  可达" if ping() else "  [不可达:后端未运行?]"
+        print(f"  {name:<12} caps=[{caps}]  {auth}{probe}")
     return 0
 
 

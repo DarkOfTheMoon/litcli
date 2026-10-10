@@ -28,7 +28,7 @@ PDF 全文抽取需系统有 `pdftotext`(poppler-utils)；无则 `pdf --text` �
 
 | 命令 | 说明 | 读写 |
 |---|---|---|
-| `litcli search "X" [--all] [--limit N] [--format table\|json\|csl]` | 检索；`--all` 对各后端聚合，**去重/合并/排序**，`extra["sources"]` 标全部来源 | 只读 |
+| `litcli search "X" [--all] [--limit N] [--type article] [--format table\|json\|csl]` | 检索；`--all` 对各后端聚合，**去重/合并/排序**，`extra["sources"]` 标全部来源；`--type` 按条目类型过滤降噪 | 只读 |
 | `litcli data get <id> [--format csl\|json]` | 单条全字段 | 只读 |
 | `litcli data add --title "..." [--creator "家族, 名字"]... [--year ..]` | 摄入元信息；写前过 `should_import` 查重/半残门，只读后端报 `[跳过]` | **写库** |
 | `litcli data add --pdf <file>` | 从 PDF 首页**启发式**抽候选，展示待核对后才写；不自动入库 | **写库** |
@@ -37,9 +37,9 @@ PDF 全文抽取需系统有 `pdftotext`(poppler-utils)；无则 `pdf --text` �
 | `litcli data attach <id> <本地路径\|URL>` | 给已有条目挂全文附件 | **写库** |
 | `litcli data tree` | 罗列集合树(层级显示全部集合) | 只读 |
 | `litcli data members <collKey> [--no-recursive]` | 罗列某集合条目,默认递归全部子集合;按每条 `collections` 字段本地归属 | 只读 |
-| `litcli export <id> [--format csljson\|bibtex\|ris\|text]` | 导出引文；csljson 可喂 `pandoc --citeproc`，**不依赖 Better BibTeX**（不碰 PDF） | 只读 |
+| `litcli export <id> [--format csljson\|bibtex\|ris\|text]` | 导出引文；csljson 可喂 `pandoc --citeproc`，**不依赖 Better BibTeX**（不碰 PDF）；含期刊名/卷/期/页/出版社；arXiv key 如 `arxiv/1806.09180` 自动归一为 DOI | 只读 |
 | `litcli fetch fulltext <doi> [--download] [--lines N]` | **合法全文定位**：本地库 → Unpaywall → OpenAlex OA 直链；都拿不到则**指路图书馆/代理**（不绕过付费墙） | 只读 |
-| `litcli backends` | 列出已配置后端及能力 | 只读 |
+| `litcli backends list` / `status` | 列出已配置后端及能力 / 显示各后端**授权与可达状态** | 只读 |
 | `litcli backends authorize [zotero]` | 主动向 Zotero **本地授权**拿写库 key 并写回 `config.toml`（`[backends.zotero].api_key`）；此后 `data add/set/del/attach` 免再授权 | 写配置 |
 
 ## 配置

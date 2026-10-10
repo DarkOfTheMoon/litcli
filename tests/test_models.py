@@ -66,3 +66,72 @@ class TestAcademicItemToRis(unittest.TestCase):
         from litcli.models import AcademicItem
         it = AcademicItem(source="z", key="k", title="B", item_type="book", year="1999")
         self.assertTrue(it.to_ris().startswith("TY  - BOOK"))
+
+
+class TestExportContainerFields(unittest.TestCase):
+    """补全导出字段:container-title/volume/issue/page/publisher 应进入 csl/bibtex/ris。"""
+
+    ARTL = dict(source="crossref", key="10.1/abc", title="T",
+                creators=[{"family": "Smith", "given": "J"}], year="2020",
+                container_title="J. Fluid Mech.", volume="45", issue="3", page="123-130",
+                doi="10.1/abc", url="https://doi.org/10.1/abc", item_type="article")
+
+    def test_to_csl_includes_container_fields(self):
+        c = AcademicItem(**self.ARTL).to_csl()
+        self.assertEqual(c["container-title"], "J. Fluid Mech.")
+        self.assertEqual(c["volume"], "45")
+        self.assertEqual(c["issue"], "3")
+        self.assertEqual(c["page"], "123-130")
+
+    def test_to_bibtex_includes_journal_vol_pages(self):
+        b = AcademicItem(**self.ARTL).to_bibtex()
+        self.assertIn("journal = {J. Fluid Mech.}", b)
+        self.assertIn("volume  = {45}", b)
+        self.assertIn("number  = {3}", b)
+        self.assertIn("pages   = {123-130}", b)
+        self.assertTrue(b.startswith("@article{"))
+        self.assertIn("\n  ", b)  # 多行输出
+
+    def test_to_bibtex_book_uses_booktitle(self):
+        it = AcademicItem(source="crossref", key="10.1/b", title="Chapter",
+                          container_title="The Big Book", item_type="chapter")
+        self.assertIn("booktitle = {The Big Book}", it.to_bibtex())
+
+    def test_to_bibtex_article_uses_journal_not_booktitle(self):
+        it = AcademicItem(source="crossref", key="10.1/a", title="A",
+                          container_title="J. Phys.", item_type="article")
+        self.assertIn("journal = {J. Phys.}", it.to_bibtex())
+        self.assertNotIn("booktitle", it.to_bibtex())
+
+    def test_to_ris_includes_journal_vol_issue_pages(self):
+        ris = AcademicItem(**self.ARTL).to_ris()
+        self.assertIn("JF  - J. Fluid Mech.", ris)
+        self.assertIn("VL  - 45", ris)
+        self.assertIn("IS  - 3", ris)
+        self.assertIn("SP  - 123", ris)
+        self.assertIn("EP  - 130", ris)
+        self.assertIn("DO  - 10.1/abc", ris)
+
+    def test_ris_single_page_only(self):
+        it = AcademicItem(source="z", key="k", title="T", item_type="article", page="7")
+        ris = it.to_ris()
+        self.assertIn("SP  - 7", ris)
+        self.assertNotIn("EP  -", ris)
+
+    def test_from_csl_reads_container_fields(self):
+        it = AcademicItem.from_csl({"type": "article", "title": "X",
+                                    "container-title": "Nature", "volume": "1",
+                                    "issue": "2", "page": "3-4", "publisher": "ACME"})
+        self.assertEqual(it.container_title, "Nature")
+        self.assertEqual(it.volume, "1")
+        self.assertEqual(it.issue, "2")
+        self.assertEqual(it.page, "3-4")
+        self.assertEqual(it.publisher, "ACME")
+
+    def test_render_bibliography_includes_container(self):
+        from litcli.citation import render_bibliography
+        it = AcademicItem(**self.ARTL)
+        entry = render_bibliography([it])[0]
+        self.assertIn("J. Fluid Mech.", entry)
+        self.assertIn("45", entry)
+        self.assertIn("123-130", entry)

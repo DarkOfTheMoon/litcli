@@ -61,6 +61,8 @@ def _item_to_academic(data: dict, source: str = "zotero") -> AcademicItem:
     creators = [p for p in (_parse_creator(c) for c in data.get("creators", [])) if p]
     item_type = _ITEMTYPE_MAP.get(data.get("itemType", ""), "document")
     raw_date = data.get("date", "")
+    # 容器名优先 publicationTitle(期刊),退化 bookTitle/seriesTitle/encyclopediaTitle
+    container = data.get("publicationTitle") or data.get("bookTitle") or data.get("seriesTitle")
     return AcademicItem(
         source=source,
         key=data.get("key", ""),
@@ -70,6 +72,11 @@ def _item_to_academic(data: dict, source: str = "zotero") -> AcademicItem:
         abstract=data.get("abstractNote", ""),
         doi=data.get("DOI", ""),
         url=data.get("url", ""),
+        container_title=container or "",
+        volume=data.get("volume", "") or "",
+        issue=data.get("issue", "") or "",
+        page=data.get("pages", "") or "",
+        publisher=data.get("publisher", "") or "",
         item_type=item_type,
         extra={"date": raw_date, "zoteroItemType": data.get("itemType", "")},
     )
@@ -211,7 +218,11 @@ class ZoteroLocalBackend(Backend):
     # --- Backend 接口 ---
 
     def search(self, query: str, limit: int = 10) -> list[AcademicItem]:
-        headers, data = self._json_path(f"/{self._users}/items", {"q": query, "limit": limit, "format": "json"})
+        # qmode=everything 让 q 覆盖全部字段(含摘要),而非默认 titleCreatorYear;
+        # 中文/仅在摘要出现的词(如"非正交")需要此模式才命中。
+        headers, data = self._json_path(
+            f"/{self._users}/items",
+            {"q": query, "qmode": "everything", "limit": limit, "format": "json"})
         return [_item_to_academic(it["data"], self.name) for it in (data or []) if "data" in it]
 
     def get(self, key: str) -> AcademicItem:
@@ -226,6 +237,14 @@ class ZoteroLocalBackend(Backend):
             {"key": c["key"], "name": c["data"].get("name", "")}
             for c in (data or []) if "data" in c
         ]
+
+    def ping(self) -> bool:
+        """轻量可达性探测:单条/单页 GET,成功(<400)即认为本机库在运行。供 `backends status`。"""
+        try:
+            status, _, _ = self._request("GET", f"/{self._users}/items", {"limit": 1, "format": "json"})
+            return status is not None and status < 400
+        except Exception:
+            return False
 
     def _paginate(self, path: str, params: dict, size: int = 100) -> list[dict]:
         """分页拉取 path 的全部原始条目 dict,每页 size(默认100),批量间轻sleep + 单批重试。
@@ -447,6 +466,16 @@ class ZoteroLocalBackend(Backend):
         }
         if item.abstract:
             out["abstractNote"] = item.abstract
+        if item.container_title:
+            out["publicationTitle"] = item.container_title
+        if item.volume:
+            out["volume"] = item.volume
+        if item.issue:
+            out["issue"] = item.issue
+        if item.page:
+            out["pages"] = item.page
+        if item.publisher:
+            out["publisher"] = item.publisher
         if item.doi:
             out["DOI"] = item.doi
         if item.url:

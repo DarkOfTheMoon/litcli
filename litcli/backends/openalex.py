@@ -63,9 +63,35 @@ def _oa_pdf(rec: dict) -> list[str]:
     return [pdf] if pdf else []
 
 
+def _bare_doi(value: str) -> str:
+    """OpenAlex 的 doi 是完整 URL(https://doi.org/10.x);剥成裸 DOI 供身份键/导出用。"""
+    d = (value or "").strip()
+    for prefix in ("https://doi.org/", "http://doi.org/", "https://dx.doi.org/"):
+        if d.lower().startswith(prefix):
+            return d[len(prefix):]
+    return d
+
+
+def _journal_name(rec: dict) -> str:
+    src = (rec.get("primary_location") or {}).get("source") or {}
+    return src.get("display_name", "") or ""
+
+
+def _biblio(rec: dict) -> tuple[str, str, str]:
+    """OpenAlex biblio 对象 -> (volume, issue, page);page 用 first_page-last_page 拼接。"""
+    b = rec.get("biblio") or {}
+    volume = b.get("volume") or ""
+    issue = b.get("issue") or ""
+    fp = b.get("first_page") or ""
+    lp = b.get("last_page") or ""
+    page = f"{fp}-{lp}" if fp and lp else fp
+    return volume, issue, page
+
+
 def _work_to_item(rec: dict, source: str = "openalex") -> AcademicItem:
-    doi = rec.get("doi", "") or ""
+    doi = _bare_doi(rec.get("doi") or "")
     title = rec.get("display_name", "") or ""
+    volume, issue, page = _biblio(rec)
     return AcademicItem(
         source=source,
         key=doi,
@@ -75,6 +101,11 @@ def _work_to_item(rec: dict, source: str = "openalex") -> AcademicItem:
         abstract=_inverted_to_text(rec.get("abstract_inverted_index")),
         doi=doi,
         url=doi or "",
+        container_title=_journal_name(rec),
+        volume=volume,
+        issue=issue,
+        page=page,
+        publisher=rec.get("publisher", "") or "",
         item_type=_TYPE_MAP.get(rec.get("type", ""), "document"),
         attachments=_oa_pdf(rec),
     )

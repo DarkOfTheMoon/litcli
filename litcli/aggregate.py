@@ -22,8 +22,19 @@ def norm_title(title: str) -> str:
 
 
 def norm_doi(doi: str) -> str:
-    """DOI 归一:strip、小写、去尾部句点。"""
-    return (doi or "").strip().lower().rstrip(".")
+    """DOI 归一:strip、小写、去尾部句点,并剥掉 https://doi.org/ 前缀。
+
+    不同后端返回的 DOI 形态不同:Crossref 为裸 DOI(10.1103/x),OpenAlex 为
+    完整 URL(https://doi.org/10.1103/x)。不剥前缀会使身份键各异,导致 --all
+    聚合无法把同一文献的 crossref/openalex 记录合并(见 test_norm_doi_url_prefix)。
+    """
+    d = (doi or "").strip().lower().rstrip(".")
+    for prefix in ("https://doi.org/", "http://doi.org/", "https://dx.doi.org/",
+                   "http://dx.doi.org/"):
+        if d.startswith(prefix):
+            d = d[len(prefix):]
+            break
+    return d.rstrip(".")
 
 
 def identity(item: AcademicItem) -> str:
@@ -54,6 +65,16 @@ def _merge_two(primary: AcademicItem, other: AcademicItem) -> None:
         primary.abstract = other.abstract
     if not primary.url and other.url:
         primary.url = other.url
+    if not primary.container_title and other.container_title:
+        primary.container_title = other.container_title
+    if not primary.volume and other.volume:
+        primary.volume = other.volume
+    if not primary.issue and other.issue:
+        primary.issue = other.issue
+    if not primary.page and other.page:
+        primary.page = other.page
+    if not primary.publisher and other.publisher:
+        primary.publisher = other.publisher
     for a in other.attachments:
         if a not in primary.attachments:
             primary.attachments.append(a)

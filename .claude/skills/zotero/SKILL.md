@@ -14,9 +14,9 @@ description: 与用户学术资料互操作——检索、读取、导出引文�
 
 | 任务 | 命令 | 读写 |
 |---|---|---|
-| 检索候选 | `litcli search "关键词" [--all] [--limit N]` | 只读 |
+| 检索候选 | `litcli search "关键词" [--all] [--limit N] [--type article]` | 只读 |
 | 单条全字段 | `litcli data get <key> [--format csl\|json]` | 只读 |
-| 导出引文 | `litcli export <key> [--format csljson\|bibtex\|ris\|text]` | 只读 |
+| 导出引文 | `litcli export <key> [--format csljson\|bibtex\|ris\|text]`（arXiv key 如 `arxiv/1806.09180` 自动归一为 DOI；csljson/bibtex 含期刊名/卷/页/出版社） | 只读 |
 | 定位合法全文 | `litcli fetch fulltext <doi> [--download]` 本地→OA→指路(绕不过付费墙) | 只读 |
 | **新增(元信息)** | `litcli data add --title "..." --creator "家族, 名字" --year 2002 [--doi ...]` | **写库** |
 | **新增(从 PDF)** | `litcli data add --pdf <file>` 抽启发式候选→展示→人工核对后写 | **写库** |
@@ -25,7 +25,7 @@ description: 与用户学术资料互操作——检索、读取、导出引文�
 | 挂全文附件 | `litcli data attach <key> <本地路径\|URL>` | **写库** |
 | 罗列集合树 | `litcli data tree` 层级显示全部集合 | 只读 |
 | 罗列某集合条目 | `litcli data members <集合key> [--no-recursive]` 默认递归全部子集合 | 只读 |
-| 列后端 | `litcli backends` | 只读 |
+| 列后端 | `litcli backends list`（能力）· `litcli backends status`（授权/可达） | 只读 |
 | **首次写库授权** | `litcli backends authorize zotero` 弹框批准后写回 config | 写配置 |
 
 ## 环境事实

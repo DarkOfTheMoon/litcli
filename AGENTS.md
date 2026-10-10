@@ -25,7 +25,7 @@ python3 -m unittest tests.test_backends
 python3 -m unittest tests.test_models.TestModels.test_to_csl
 ```
 
-CLI 帮助用 `./bin/litcli --help`；本机 Zotero 库用 `litcli search "..."`（`--all` 跨后端聚合，`litcli backends` 看可用后端）。
+CLI 帮助用 `./bin/litcli --help`；本机 Zotero 库用 `litcli search "..."`（`--all` 跨后端聚合，`litcli backends list/status` 看可用后端与授权状态；`search --type <article|book|...>` 按类型过滤降噪；`export` 的 arXiv key 如 `arxiv/1806.09180` 会自动归一为 DOI `10.48550/arxiv.x`）。
 
 ## 架构分层（后端无关的领域层 + 可插拔后端层）
 
@@ -37,10 +37,10 @@ litcli 的核心是「一条文献在多个后端（Zotero / arXiv）间的读�
   - `pdf.py`：下载 + `pdftotext` 抽文本，后端无关的「拿到 bytes/路径 → 抽文本」。
   - `metadata.py`：纯启发式从 PDF 首页文本猜 title/authors/year/abstract，**不调 LLM、完全离线**；`from_text_lines` 是纯函数（可脱离 pdftotext 复用）。`data add --pdf` 用它抽候选、**展示待人工核对**后才写库，不自动写。
 
-- **聚合层**（`litcli/aggregate.py`，纯函数、不碰后端不联网）：供 `search --all` 用的去重/合并/排序。身份键**优先生效 DOI**、无 DOI 退化为归一标题（`norm_title` / `norm_doi`）；`_merge_two` 只把缺失字段补给最完整记录（副本操作，不污染入参，见 `test_does_not_mutate_input`）；`extra["sources"]` 记录全部来源；排序按年份降序、同年标题升序。
+- **聚合层**（`litcli/aggregate.py`，纯函数、不碰后端不联网）：供 `search --all` 用的去重/合并/排序。身份键**优先生效 DOI**、无 DOI 退化为归一标题（`norm_title` / `norm_doi`）；`norm_doi` 剥 `https://doi.org/` 前缀——Crossref 给裸 DOI、OpenAlex 给完整 URL，不剥前缀会让同一文献身份键各异而无法去重；`_merge_two` 只把缺失字段（含 container_title/volume/issue/page/publisher）补给最完整记录（副本操作，不污染入参，见 `test_does_not_mutate_input`）；`extra["sources"]` 记录全部来源；排序按年份降序、同年标题升序。注意：预印本与刊出本是两个不同 DOI/作品，语义上不应合并。
 
 - **后端层**（`litcli/backends/`）：`base.py` 定义抽象 `Backend` + `capabilities`（`read`/`write`/`attachment`）。写操作 `add`/`patch`/`delete`/`attach` 内部先 `_require("write")`，只读后端抛 `NotSupportedError`（CLI 捕获后输出 `[跳过]` 并以退出码 2 返回）。
-  - `zotero_local.py`：Zotero 10 本地 API（`localhost:23119/api`，`users/0` 本机别名，**无需 zotero.org Web API key**）。读+写+附件，写入用 `If-Unmodified-Since-Version` 并发控制，写请求需 `Zotero-Server-ID`（从 `/api` 响应头缓存，非 `/connector/ping` 的 body——后者是 HTML）。写库 key 经 `litcli backends authorize zotero` 调 `/api/local/authorize` 运行时授权并写回 `config.toml` 的 `[backends.zotero].api_key`；`delete` 走 DELETE，`attach` 挂 link 模式附件（本地→linked_file，URL→linked_url）。
+  - `zotero_local.py`：Zotero 10 本地 API（`localhost:23119/api`，`users/0` 本机别名，**无需 zotero.org Web API key**）。读+写+附件，写入用 `If-Unmodified-Since-Version` 并发控制，写请求需 `Zotero-Server-ID`（从 `/api` 响应头缓存，非 `/connector/ping` 的 body——后者是 HTML）。`search` 用 `qmode=everything`（默认 `titleCreatorYear` 漏摘要字段，中文/摘要词命中需此模式）；`ping()` 供 `backends status` 轻量探测本机库是否在运行。写库 key 经 `litcli backends authorize zotero` 调 `/api/local/authorize` 运行时授权并写回 `config.toml` 的 `[backends.zotero].api_key`；`delete` 走 DELETE，`attach` 挂 link 模式附件（本地→linked_file，URL→linked_url）。
   - `arxiv.py`：arXiv 开放 API（Atom/XML），只读 + 可拉 PDF 直链，按 arXiv id（去 `v` 版本）归一化。
   - `crossref.py` / `openalex.py`：开放元数据（DOI / 学术图谱），只读，5xx 指数退避重试；OpenAlex 摘要为倒排索引需重建。
   - `openlibrary.py`：开放图书（`search.json`），只读；**默认内置不含**（部分网络无路由），在 config 显式启用。
@@ -48,7 +48,7 @@ litcli 的核心是「一条文献在多个后端（Zotero / arXiv）间的读�
 
 - **配置层**（`litcli/config.py`）：读 `~/.config/litcli/config.toml`（不支持则在 `$LITCLI_CONFIG`），`tomllib` 解析。加载优先级：显式 path → `$LITCLI_CONFIG` → `~/.config/litcli/config.toml` → **内置默认**（Zotero + arXiv + crossref + openalex）。写 Zotero 经 `litcli backends authorize zotero` 触发 `/api/local/authorize` 运行时授权并把本地 key 写回 `[backends.zotero].api_key`（`config.write_backend_key`，手写文本 upsert 保其它段）；检索专利（uspto）需在 config 配真实 `api_key`。后端注册表用 try-import：某后端文件未就绪时不影响其它后端工作。配置示例见 `config.example.toml`。
 
-- **CLI 编排层**（`litcli/cli.py`）：argparse 意图分族子命令：`search`（检索）、`data get/add/set/del/attach/tree/members`（本地库增删改查 + 集合罗列）、`fetch fulltext`（合法全文定位）、`export`（引文产出）、`backends`（诊断）。`data add` 的 `--creator` 用 `"家族, 名字"`，可多次；`--pdf` 抽元数据候选待核对、`--csl` 走 `from_csl`、`--force` 跳过查重/半残门。`data tree` 罗列集合树（层级显示）；`data members <集合key> [--no-recursive]` 罗列某集合条目（默认递归全部子集合，靠每条 `collections` 字段本地归属——Zotero `/items?collection=X` 实际被忽略返回全库）。
+- **CLI 编排层**（`litcli/cli.py`）：argparse 意图分族子命令：`search`（检索，`--type` 按类型过滤）、`data get/add/set/del/attach/tree/members`（本地库增删改查 + 集合罗列）、`fetch fulltext`（合法全文定位）、`export`（引文产出，arXiv key 归一为 DOI）、`backends list/status/authorize`（诊断/授权）。`models.AcademicItem` 现含 `container_title/volume/issue/page/publisher`，跨后端解析 `crossref`（container-title/volume/issue/page/publisher）、`openalex`（biblio + primary_location.source + doi 裸化）、`zotero_local`（publicationTitle/volume/issue/pages/publisher）填充，`export --format csljson/bibtex/ris` 输出完整期刊/卷/页。`data add` 的 `--creator` 用 `"家族, 名字"`，可多次；`--pdf` 抽元数据候选待核对、`--csl` 走 `from_csl`、`--force` 跳过查重/半残门。`data tree` 罗列集合树（层级显示）；`data members <集合key> [--no-recursive]` 罗列某集合条目（默认递归全部子集合，靠每条 `collections` 字段本地归属——Zotero `/items?collection=X` 实际被忽略返回全库）。
 
 ## 惯例与约定
 

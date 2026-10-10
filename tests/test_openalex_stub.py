@@ -18,6 +18,9 @@ WORK = {
                     {"author": {"display_name": "Yoshua Bengio"}}],
     "abstract_inverted_index": {"We": ["0"], "review": ["1"], "deep": ["2"], "learning": ["3"]},
     "best_oa_location": {"pdf_url": "http://oa.example/x.pdf"},
+    "primary_location": {"source": {"display_name": "Nature"}},
+    "biblio": {"volume": "521", "issue": "7553", "first_page": "436", "last_page": "444"},
+    "publisher": "Nature Publishing Group",
 }
 RESULTS = {"results": [WORK]}
 
@@ -60,6 +63,22 @@ class OpenAlexStubTest(unittest.TestCase):
             self.be.get("10.1038/nature14539")
         req = m.call_args[0][0]
         self.assertIn("/doi:10.1038%2Fnature14539", req.full_url)
+
+    def test_doi_normalized_to_bare(self):
+        # OpenAlex 的 doi 是完整 URL,应存为裸 DOI(供身份键/导出标准使用)
+        with mock.patch("urllib.request.urlopen", return_value=_Resp(RESULTS)):
+            it = self.be.search("deep learning", limit=1)[0]
+        self.assertEqual(it.doi, "10.1038/nature14539")
+        self.assertNotIn("https://doi.org/", it.doi)
+
+    def test_container_volume_page_populated(self):
+        with mock.patch("urllib.request.urlopen", return_value=_Resp(RESULTS)):
+            it = self.be.search("deep learning", limit=1)[0]
+        self.assertEqual(it.container_title, "Nature")
+        self.assertEqual(it.volume, "521")
+        self.assertEqual(it.issue, "7553")
+        self.assertEqual(it.page, "436-444")
+        self.assertEqual(it.publisher, "Nature Publishing Group")
 
     def test_5xx_retries_then_success(self):
         from urllib.error import HTTPError

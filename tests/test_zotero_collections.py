@@ -119,5 +119,46 @@ class ZoteroCollectionsStubTest(unittest.TestCase):
             self.assertIn("collections", it.extra)
 
 
+class ZoteroSearchParseTest(unittest.TestCase):
+    def setUp(self):
+        self.be = ZoteroLocalBackend(name="zotero", base="http://localhost:23119/api", library="0")
+
+    def test_search_passes_qmode_everything(self):
+        # 中文/摘要字段检索需要 qmode=everything(默认 titleCreatorYear 会漏摘要)
+        from unittest import mock
+        with mock.patch.object(self.be, "_json_path") as m:
+            m.return_value = ({}, [])
+            self.be.search("非正交 扩散", limit=5)
+            _, params = m.call_args[0]
+            self.assertEqual(params["qmode"], "everything")
+            self.assertEqual(params["q"], "非正交 扩散")
+            self.assertEqual(params["limit"], 5)
+
+    def test_item_to_academic_reads_container_fields(self):
+        from litcli.backends.zotero_local import _item_to_academic
+        it = _item_to_academic({
+            "key": "K1", "itemType": "journalArticle", "title": "T",
+            "publicationTitle": "J. Fluid Mech.", "volume": "45", "issue": "3",
+            "pages": "1-9", "publisher": "ACME", "date": "2002"})
+        self.assertEqual(it.container_title, "J. Fluid Mech.")
+        self.assertEqual(it.volume, "45")
+        self.assertEqual(it.issue, "3")
+        self.assertEqual(it.page, "1-9")
+        self.assertEqual(it.publisher, "ACME")
+
+    def test_item_to_academic_falls_back_to_book_title(self):
+        from litcli.backends.zotero_local import _item_to_academic
+        it = _item_to_academic({"key": "K", "itemType": "bookSection", "title": "Ch",
+                                "bookTitle": "Big Book", "date": "2001"})
+        self.assertEqual(it.container_title, "Big Book")
+
+    def test_ping(self):
+        from unittest import mock
+        with mock.patch.object(self.be, "_request", return_value=(200, {}, b"[]")):
+            self.assertTrue(self.be.ping())
+        with mock.patch.object(self.be, "_request", return_value=(503, {}, b"")):
+            self.assertFalse(self.be.ping())
+
+
 if __name__ == "__main__":
     unittest.main()

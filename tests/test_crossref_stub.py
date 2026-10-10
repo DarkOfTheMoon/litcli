@@ -14,6 +14,8 @@ REC = {"title": ["Deep learning"],
        "published": {"date-parts": [[2015]]},
        "DOI": "10.1038/nature14539", "type": "journal-article",
        "URL": "http://dx.doi.org/10.1038/nature14539",
+       "container-title": ["Nature"], "volume": "521", "issue": "7553",
+       "page": "436-444", "publisher": "Nature Publishing Group",
        "abstract": "<jats:p>We review deep learning.</jats:p>"}
 MSG = {"message": {"items": [REC], "total-results": 1}}
 
@@ -64,6 +66,15 @@ class CrossrefStubTest(unittest.TestCase):
             self.be.get("10.1038/nature14539")
         req = m.call_args[0][0]
         self.assertEqual(req.full_url, "https://api.crossref.org/works/10.1038%2Fnature14539")
+
+    def test_container_volume_page_populated(self):
+        with mock.patch("urllib.request.urlopen", return_value=_Resp(MSG)):
+            it = self.be.search("deep learning", limit=1)[0]
+        self.assertEqual(it.container_title, "Nature")
+        self.assertEqual(it.volume, "521")
+        self.assertEqual(it.issue, "7553")
+        self.assertEqual(it.page, "436-444")
+        self.assertEqual(it.publisher, "Nature Publishing Group")
 
     def test_5xx_retries_then_success(self):
         from urllib.error import HTTPError

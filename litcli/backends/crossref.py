@@ -63,6 +63,7 @@ def _item_to_academic(rec: dict, source: str = "crossref") -> AcademicItem:
         if dp and dp[0] and dp[0][0]:
             year = str(dp[0][0])
             break
+    container = (rec.get("container-title") or [""])[0]
     return AcademicItem(
         source=source,
         key=rec.get("DOI", ""),
@@ -72,6 +73,11 @@ def _item_to_academic(rec: dict, source: str = "crossref") -> AcademicItem:
         abstract=_strip_xml(rec.get("abstract", "")),
         doi=rec.get("DOI", ""),
         url=rec.get("URL", ""),
+        container_title=container,
+        volume=rec.get("volume", "") or "",
+        issue=rec.get("issue", "") or "",
+        page=rec.get("page", "") or "",
+        publisher=rec.get("publisher", "") or "",
         item_type=_TYPE_MAP.get(rec.get("type", ""), "document"),
         attachments=_pdf_links(rec),
     )

@@ -45,6 +45,19 @@ def render_bibliography(items: Iterable[AcademicItem]) -> list[str]:
         year = f"({it.year})." if it.year else ""
         head = f"{creators} {year}".strip() or "Anon"
         entry = f"{head} {it.title}."
+        if it.container_title:
+            entry += f" {it.container_title}."
+        tail = []
+        if it.volume:
+            tail.append(f"{it.volume}")
+        if it.issue:
+            tail.append(f"({it.issue})")
+        if it.page:
+            tail.append(f"{it.page}")
+        if tail:
+            entry += " " + ", ".join(tail) + "."
+        if it.publisher:
+            entry += f" {it.publisher}."
         if it.doi:
             entry += f" doi:{it.doi}"
         if it.url:
