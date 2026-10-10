@@ -97,6 +97,17 @@ def _build_parser() -> argparse.ArgumentParser:
     dp.add_argument("src", help="本地路径或 URL")
     _add_common_backend(dp)
 
+    dp = dsub.add_parser("tree", help="罗列集合树(层级显示;只读)")
+    _add_common_backend(dp)
+
+    dp = dsub.add_parser("members", help="罗列某集合的条目(按集合过滤;只读)")
+    dp.add_argument("coll_key", help="集合 key(可用 `data tree` 查到)")
+    dp.add_argument("--no-recursive", action="store_true", default=False,
+                    help="仅该集合本身,不递归包含子集合")
+    _add_common_backend(dp)
+    dp.add_argument("--format", choices=["table", "json"], default="table")
+    dp.add_argument("--limit", type=int, default=200, help="最多罗列条数(0=不限)")
+
     # --- fetch:取全文/补元数据(只读,不碰库) ---
     f = sub.add_parser("fetch", help="取全文/元数据(只读,不碰库)")
     fsub = f.add_subparsers(dest="fetch_cmd", required=True)
@@ -269,6 +280,99 @@ def cmd_data_attach(cfg, args) -> int:
     return 0
 
 
+def _collection_path_map(backend) -> dict:
+    """由 backend.collection_tree() 建 {key: "父 / 子 / 孙"} 路径映射。"""
+    nodes = backend.collection_tree()
+    name = {n["key"]: n["name"] for n in nodes}
+    parent = {n["key"]: n["parent"] for n in nodes}
+    out = {}
+    for k in name:
+        parts, cur, seen = [], k, set()
+        while cur and cur in name and cur not in seen:
+            seen.add(cur)
+            parts.insert(0, name[cur])
+            cur = parent.get(cur)
+        out[k] = " / ".join(parts)
+    return out
+
+
+def _render_tree(nodes: list[dict]) -> str:
+    """把集合节点列表渲染为层级缩进树文本。"""
+    parent = {n["key"]: n["parent"] for n in nodes}
+    name = {n["key"]: n["name"] for n in nodes}
+    roots = [n["key"] for n in nodes if not parent.get(n["key"])]
+
+    def depth(k: str) -> int:
+        d, c = 0, k
+        while c and c in parent:
+            c = parent.get(c)
+            d += 1
+        return d
+
+    lines = []
+    seen = set()
+
+    def walk(key: str, prefix: str, is_last: bool):
+        if key in seen or not name.get(key):
+            return
+        seen.add(key)
+        if depth(key) > 0:
+            connector = "└─ " if is_last else "├─ "
+            lines.append(f"  {prefix}{connector}{name[key]}  ({key})")
+        else:
+            lines.append(f"  {name[key]}  ({key})")
+        child_keys = sorted([n["key"] for n in nodes if parent.get(n["key"]) == key],
+                            key=lambda k: name[k].lower())
+        child_prefix = prefix + ("   " if is_last else "│  ")
+        for i, ck in enumerate(child_keys):
+            walk(ck, child_prefix, i == len(child_keys) - 1)
+
+    roots.sort(key=lambda k: name[k].lower())
+    for i, rk in enumerate(roots):
+        walk(rk, "", i == len(roots) - 1)
+    return "\n".join(lines)
+
+
+def cmd_data_tree(cfg, args) -> int:
+    """罗列集合树(层级 indent 显示)。只读。"""
+    backend = get_backend(args.backend, cfg)
+    nodes = backend.collection_tree()
+    if not nodes:
+        print("[无集合]")
+        return 0
+    print(_render_tree(nodes))
+    return 0
+
+
+def cmd_data_members(cfg, args) -> int:
+    """罗列某集合(默认递归全部子集合)的条目。只读。"""
+    backend = get_backend(args.backend, cfg)
+    recursive = not getattr(args, "no_recursive", False)
+    items = backend.collection_items(args.coll_key, recursive=recursive)
+
+    if args.format == "json":
+        for it in (items[: args.limit] if args.limit else items):
+            print(json.dumps(it.to_dict(), ensure_ascii=False))
+        return 0
+
+    path_map = _collection_path_map(backend)
+    sel = path_map.get(args.coll_key, args.coll_key)
+    shown = items[: args.limit] if args.limit else items
+    note = f"(共 {len(items)} 条,出示前 {len(shown)} 条)" if args.limit and len(items) > len(shown) else ""
+    print(f"[{sel}] 命中 {len(items)} 条条目 {note}")
+    for it in shown:
+        colls = it.extra.get("collections", []) or []
+        subs = ", ".join(path_map.get(c, c) for c in colls
+                         if path_map.get(c, c) and path_map.get(c, c) != sel) or "-"
+        try:
+            cite = render_intext([it])[0]
+        except Exception:
+            cite = ""
+        authors = ", ".join(i.get("family", "") for i in it.creators) or "Anon"
+        print(f"  {it.key:<8} {authors[:22]:<22} {it.year:<5} {it.title[:50]:<50} | {subs[:46]}  {cite}")
+    return 0
+
+
 def _resolve_oa_email(cfg, args) -> str:
     return (args.email
             or (cfg.get("unpaywall") or {}).get("email")
@@ -387,6 +491,7 @@ def main(argv=None) -> int:
                 "get": cmd_get, "add": cmd_data_add,
                 "set": cmd_set, "del": cmd_data_del,
                 "attach": cmd_data_attach,
+                "tree": cmd_data_tree, "members": cmd_data_members,
             }[args.data_cmd](cfg, args)
         if args.cmd == "fetch":
             return {

@@ -47,6 +47,14 @@ class Backend(ABC):
         """列出集合/分类(仅支持的后端)。"""
         raise NotSupportedError("list_collections", self)
 
+    def collection_tree(self) -> list[dict]:
+        """列出含层级(父/子)的完整集合节点(仅支持的后端)。"""
+        raise NotSupportedError("collection_tree", self)
+
+    def collection_items(self, coll_key: str, recursive: bool = True) -> list[AcademicItem]:
+        """列出某集合(可选含全部子集合)的条目(仅支持的后端)。"""
+        raise NotSupportedError("collection_items", self)
+
     def get_attachment(self, key: str) -> bytes:
         """取主 PDF 附件字节(仅支持的后端)。"""
         raise NotSupportedError("get_attachment", self)

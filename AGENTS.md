@@ -44,7 +44,7 @@ litcli 的核心是「一条文献在多个后端（Zotero / arXiv）间的读�
 
 - **配置层**（`litcli/config.py`）：读 `~/.config/litcli/config.toml`（不支持则在 `$LITCLI_CONFIG`），`tomllib` 解析。加载优先级：显式 path → `$LITCLI_CONFIG` → `~/.config/litcli/config.toml` → **内置默认**（Zotero + arXiv + crossref + openalex）。写 Zotero 经 `litcli backends authorize zotero` 触发 `/api/local/authorize` 运行时授权并把本地 key 写回 `[backends.zotero].api_key`（`config.write_backend_key`，手写文本 upsert 保其它段）；检索专利（uspto）需在 config 配真实 `api_key`。后端注册表用 try-import：某后端文件未就绪时不影响其它后端工作。配置示例见 `config.example.toml`。
 
-- **CLI 编排层**（`litcli/cli.py`）：argparse 意图分族子命令：`search`（检索）、`data get/add/set/del/attach`（本地库增删改查）、`fetch fulltext`（合法全文定位）、`export`（引文产出）、`backends`（诊断）。`data add` 的 `--creator` 用 `"家族, 名字"`，可多次；`--pdf` 抽元数据候选待核对、`--csl` 走 `from_csl`、`--force` 跳过查重/半残门。
+- **CLI 编排层**（`litcli/cli.py`）：argparse 意图分族子命令：`search`（检索）、`data get/add/set/del/attach/tree/members`（本地库增删改查 + 集合罗列）、`fetch fulltext`（合法全文定位）、`export`（引文产出）、`backends`（诊断）。`data add` 的 `--creator` 用 `"家族, 名字"`，可多次；`--pdf` 抽元数据候选待核对、`--csl` 走 `from_csl`、`--force` 跳过查重/半残门。`data tree` 罗列集合树（层级显示）；`data members <集合key> [--no-recursive]` 罗列某集合条目（默认递归全部子集合，靠每条 `collections` 字段本地归属——Zotero `/items?collection=X` 实际被忽略返回全库）。
 
 ## 惯例与约定
 

@@ -35,6 +35,8 @@ PDF 全文抽取需系统有 `pdftotext`(poppler-utils)；无则 `pdf --text` �
 | `litcli data set <id> --title .. [--abstract ..] [--year ..]` | 修改字段 | **写库** |
 | `litcli data del <id>` | 删除条目 | **写库** |
 | `litcli data attach <id> <本地路径\|URL>` | 给已有条目挂全文附件 | **写库** |
+| `litcli data tree` | 罗列集合树(层级显示全部集合) | 只读 |
+| `litcli data members <collKey> [--no-recursive]` | 罗列某集合条目,默认递归全部子集合;按每条 `collections` 字段本地归属 | 只读 |
 | `litcli export <id> [--format csljson\|bibtex\|ris\|text]` | 导出引文；csljson 可喂 `pandoc --citeproc`，**不依赖 Better BibTeX**（不碰 PDF） | 只读 |
 | `litcli fetch fulltext <doi> [--download] [--lines N]` | **合法全文定位**：本地库 → Unpaywall → OpenAlex OA 直链；都拿不到则**指路图书馆/代理**（不绕过付费墙） | 只读 |
 | `litcli backends` | 列出已配置后端及能力 | 只读 |

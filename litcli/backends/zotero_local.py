@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -225,6 +226,88 @@ class ZoteroLocalBackend(Backend):
             {"key": c["key"], "name": c["data"].get("name", "")}
             for c in (data or []) if "data" in c
         ]
+
+    def _paginate(self, path: str, params: dict, size: int = 100) -> list[dict]:
+        """分页拉取 path 的全部原始条目 dict,每页 size(默认100),批量间轻sleep + 单批重试。
+
+        规避 Zotero 对一页过大响应偶发超时;返回所有页的原始 item dict 列表。
+        """
+        rows_all: list[dict] = []
+        start = 0
+        while True:
+            page_params = dict(params, start=start)
+            rows = None
+            for attempt in range(3):
+                try:
+                    _, data = self._json_path(path, dict(page_params, limit=size))
+                    rows = data or []
+                    break
+                except (urllib.error.URLError, OSError, RuntimeError) as e:
+                    if attempt == 2:
+                        raise RuntimeError(f"[{self.name}] 拉取 {path} start={start} 失败: {e}") from e
+                    time.sleep(0.3 * (attempt + 1))
+            rows_all.extend(rows)
+            if len(rows) < size:
+                break
+            start += size
+            time.sleep(0.2)
+        return rows_all
+
+    def collection_tree(self) -> list[dict]:
+        """拉取全部集合节点(含 parent),供 CLI 渲染集合树。分页拉全,父为 parent。"""
+        nodes = []
+        raw = self._paginate(f"/{self._users}/collections", {"format": "json"})
+        for c in raw:
+            d = c.get("data", {})
+            if d:
+                nodes.append({
+                    "key": d.get("key", ""),
+                    "name": d.get("name", ""),
+                    "parent": d.get("parentCollection", ""),
+                })
+        return nodes
+
+    def collection_items(self, coll_key: str, recursive: bool = True) -> list[AcademicItem]:
+        """列出某集合下的条目。注意:Zotero /items?collection=X 实际被忽略(返回全库),
+        因此必须拉全库 items,再按每条数据的 collections 字段做本地归属。
+
+        recursive=True 时包含该集合全部子集合的条目(递归展开集合树)。
+        返回归一化 AcademicItem(排除了附件,并带 extra["collections"]=集合 key 列表)。
+        """
+        # 1) 集合树:建立 父->子 与 任意 key 的完整后代集合集
+        nodes = self.collection_tree()
+        children: dict[str, list[str]] = {}
+        for n in nodes:
+            children.setdefault(n["parent"], []).append(n["key"])
+
+        def descendants(root: str) -> set[str]:
+            out: set[str] = set()
+            stack = [root]
+            while stack:
+                k = stack.pop()
+                if k in out:
+                    continue
+                out.add(k)
+                stack.extend(children.get(k, []))
+            return out
+
+        target = descendants(coll_key) if recursive else {coll_key}
+
+        # 2) 分页拉全库 items(排除附件),按 collections 字段本地归属
+        collected: list[AcademicItem] = []
+        raw = self._paginate(
+            f"/{self._users}/items", {"format": "json", "itemType": "-attachment"}
+        )
+        for it in raw:
+            d = it.get("data", {})
+            if not d:
+                continue
+            colls = d.get("collections") or []
+            if target & set(colls):
+                item = _item_to_academic(d, self.name)
+                item.extra["collections"] = colls
+                collected.append(item)
+        return collected
 
     def get_attachment(self, key: str) -> bytes:
         # 若 key 本身是附件条目(itemType==attachment),直接取其 file

@@ -23,6 +23,8 @@ description: 与用户学术资料互操作——检索、读取、导出引文�
 | 修改 | `litcli data set <key> --title "..." [--year ...]` | **写库** |
 | 删除 | `litcli data del <key>` | **写库** |
 | 挂全文附件 | `litcli data attach <key> <本地路径\|URL>` | **写库** |
+| 罗列集合树 | `litcli data tree` 层级显示全部集合 | 只读 |
+| 罗列某集合条目 | `litcli data members <集合key> [--no-recursive]` 默认递归全部子集合 | 只读 |
 | 列后端 | `litcli backends` | 只读 |
 | **首次写库授权** | `litcli backends authorize zotero` 弹框批准后写回 config | 写配置 |
 
