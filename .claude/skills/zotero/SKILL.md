@@ -14,7 +14,8 @@ description: 与用户学术资料互操作——检索、读取、导出引文�
 
 | 任务 | 命令 | 读写 |
 |---|---|---|
-| 检索候选 | `litcli search "关键词" [--all] [--limit N] [--type article]` | 只读 |
+| 检索候选 | `litcli search "关键词" [--all] [--limit N] [--type article] [--title ..] [--author ..] [--year ..] [--container ..] [--sort cited]` | 只读 |
+| 相关文献 | `litcli related <key> [--limit N] [--backend openalex]` OpenAlex 引文图谱；不支持的只读后端 `[跳过]` 退出码 2 | 只读 |
 | 单条全字段 | `litcli data get <key> [--format csl\|json]` | 只读 |
 | 导出引文 | `litcli export <key> [--format csljson\|bibtex\|ris\|text]`（arXiv key 如 `arxiv/1806.09180` 自动归一为 DOI；csljson/bibtex 含期刊名/卷/页/出版社） | 只读 |
 | 定位合法全文 | `litcli fetch fulltext <doi> [--download]` 本地→OA→指路(绕不过付费墙) | 只读 |

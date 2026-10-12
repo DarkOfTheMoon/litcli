@@ -134,6 +134,16 @@ class ZoteroSearchParseTest(unittest.TestCase):
             self.assertEqual(params["q"], "非正交 扩散")
             self.assertEqual(params["limit"], 5)
 
+    def test_search_folds_field_filters_into_q(self):
+        # zotero 仅单 q:字段过滤词折进 q(qmode=everything 全字段命中)
+        from unittest import mock
+        with mock.patch.object(self.be, "_json_path") as m:
+            m.return_value = ({}, [])
+            self.be.search("anisotropic", filters={"title": "mesh", "author": "Droniou", "year": "2018"})
+            _, params = m.call_args[0]
+            self.assertEqual(params["q"], "anisotropic mesh Droniou 2018")
+            self.assertEqual(params["qmode"], "everything")
+
     def test_item_to_academic_reads_container_fields(self):
         from litcli.backends.zotero_local import _item_to_academic
         it = _item_to_academic({

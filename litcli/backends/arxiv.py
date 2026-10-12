@@ -86,10 +86,24 @@ class ArxivBackend(Backend):
         root = ET.fromstring(xml)
         return [_entry_to_item(e) for e in root.findall("a:entry", _NS)]
 
-    def search(self, query: str, limit: int = 10) -> list[AcademicItem]:
-        # all: 全文(title/abstract/author)检索;不带引号让 arXiv 做分词 AND,
-        # 避免用户自然长句被当作精确短语而 0 命中。
-        q = f'all:{query}'
+    def search(self, query: str, limit: int = 10, filters: dict | None = None) -> list[AcademicItem]:
+        # all: free-text (title/abstract/author); left unquoted so arXiv does token AND,
+        # avoiding a natural user phrase being treated as an exact string (0 hits).
+        # Field filters stack with AND per arXiv syntax. ti:/au: values are quoted so a
+        # multi-word/comma value (e.g. "Droniou, J.") stays one term — unquoted it becomes
+        # a bare OR over the whole corpus.
+        filt = self._filters(filters)
+        parts = []
+        if query:
+            parts.append(f"all:{query}")
+        if filt.get("title"):
+            parts.append(f'ti:"{filt["title"]}"')
+        if filt.get("author"):
+            parts.append(f'au:"{filt["author"]}"')
+        if filt.get("year") and filt["year"].isdigit():
+            y = filt["year"]
+            parts.append(f"submittedDate:[{y}01010000 TO {y}12312359]")
+        q = " AND ".join(parts) if parts else f"all:{query}"
         return self._query(q, limit)
 
     def get(self, key: str) -> AcademicItem:

@@ -30,6 +30,7 @@ class AcademicItem:
     issue: str = ""
     page: str = ""                        # 页码区间,如 "123-130"
     publisher: str = ""
+    cited_by_count: int = 0               # citation count (OpenAlex cited_by_count / Crossref is-referenced-by-count)
     item_type: str = "document"           # CSL type: article / book / document / ...
     attachments: list[str] = field(default_factory=list)
     extra: dict = field(default_factory=dict)

@@ -62,6 +62,26 @@ class ArxivStubTest(unittest.TestCase):
         self.assertIn("max_results=1", req.full_url)
         self.assertEqual(item.key, "2006.12345")
 
+    def test_search_field_filters_and(self):
+        # 字段过滤叠加为 AND 语法:all + ti + au + submittedDate;ti/au 值包引号(多词/逗号作者名不被
+        # arXiv 按空白切分而泄成全库 OR)。假定子串(引号按加号、逗号按 %2C 编码)。
+        with mock.patch("urllib.request.urlopen", return_value=_Resp(ATOM)) as m:
+            self.be.search("finite volume", limit=3,
+                           filters={"title": "anisotropic", "author": "Bonaventura",
+                                    "year": "2018"})
+        req = m.call_args[0][0]
+        self.assertIn("search_query=all%3Afinite+volume+AND+ti%3A%22anisotropic%22"
+                      "+AND+au%3A%22Bonaventura%22+AND+submittedDate%3A%5B201801010000"
+                      "+TO+201812312359%5D", req.full_url)
+
+    def test_search_filters_only_fields(self):
+        # 无自由 query 时,仅字段词也组成合法查询
+        with mock.patch("urllib.request.urlopen", return_value=_Resp(ATOM)) as m:
+            self.be.search("", filters={"title": "mesh"})
+        req = m.call_args[0][0]
+        self.assertIn("search_query=ti%3A%22mesh%22", req.full_url)
+        self.assertTrue(m.call_count == 1)
+
     def test_http_error_wrapped(self):
         err = urllib.error.HTTPError("http://export.arxiv.org/api/query", 406,
                                      "Not Acceptable", None, None)

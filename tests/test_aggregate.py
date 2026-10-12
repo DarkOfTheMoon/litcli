@@ -105,6 +105,19 @@ class MergeTest(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertEqual(out[0].extra["sources"], ["crossref", "openalex"])
 
+    def test_merge_carries_cited_and_openalex_id(self):
+        # 只读后端(zotero 无被引数)与 openalex 同年同题:合并须带上被引数与 openalex_id,
+        # 否则 --all --sort cited 退化为全 0,`[被引 N]` 徽标消失。
+        z = AcademicItem(source="zotero", key="AB12", title="Deep learning", year="2015",
+                         abstract="abs", doi="10.1038/nature14539")
+        o = AcademicItem(source="openalex", key="10.1038/nature14539", title="Deep learning",
+                         year="2015", doi="10.1038/nature14539", cited_by_count=84467,
+                         extra={"openalex_id": "https://openalex.org/W2919115771"})
+        out = merge_items([z, o])
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].cited_by_count, 84467)
+        self.assertEqual(out[0].extra["openalex_id"], "https://openalex.org/W2919115771")
+
 
 if __name__ == "__main__":
     unittest.main()

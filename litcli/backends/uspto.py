@@ -112,7 +112,9 @@ class UsptoBackend(Backend):
             return data["patent"]["results"]
         return []
 
-    def search(self, query: str, limit: int = 10) -> list[AcademicItem]:
+    def search(self, query: str, limit: int = 10, filters: dict | None = None) -> list[AcademicItem]:
+        # Patent full-text search only uses ``fq``; field filters are ignored (the patent
+        # identity is application number/title, not bibliographic fields).
         self._require_key()
         body = {"query": {"fq": [query]}, "start": 0, "limit": limit}
         data = self._post(f"{self._base}", body)

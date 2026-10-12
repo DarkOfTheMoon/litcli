@@ -16,6 +16,7 @@ REC = {"title": ["Deep learning"],
        "URL": "http://dx.doi.org/10.1038/nature14539",
        "container-title": ["Nature"], "volume": "521", "issue": "7553",
        "page": "436-444", "publisher": "Nature Publishing Group",
+       "is-referenced-by-count": 84467,
        "abstract": "<jats:p>We review deep learning.</jats:p>"}
 MSG = {"message": {"items": [REC], "total-results": 1}}
 
@@ -75,6 +76,26 @@ class CrossrefStubTest(unittest.TestCase):
         self.assertEqual(it.issue, "7553")
         self.assertEqual(it.page, "436-444")
         self.assertEqual(it.publisher, "Nature Publishing Group")
+
+    def test_cited_by_count_parsed(self):
+        with mock.patch("urllib.request.urlopen", return_value=_Resp(MSG)):
+            it = self.be.search("deep learning", limit=1)[0]
+        self.assertEqual(it.cited_by_count, 84467)
+        self.assertIn("is-referenced-by-count", REC)
+
+    def test_search_field_filters_url(self):
+        # 字段过滤映射为 query.title/author/container-title + filter 年份区间
+        with mock.patch("urllib.request.urlopen", return_value=_Resp(MSG)) as m:
+            self.be.search("anisotropic", limit=3,
+                           filters={"title": "anisotropic", "author": "Bonaventura",
+                                    "container": "JCP", "year": "2018"})
+        req = m.call_args[0][0]
+        self.assertIn("query.bibliographic=anisotropic", req.full_url)
+        self.assertIn("query.title=anisotropic", req.full_url)
+        self.assertIn("query.author=Bonaventura", req.full_url)
+        self.assertIn("query.container-title=JCP", req.full_url)
+        self.assertIn("filter=from-pub-date%3A2018-01-01%2Cuntil-pub-date%3A2018-12-31", req.full_url)
+        self.assertIn("rows=3", req.full_url)
 
     def test_5xx_retries_then_success(self):
         from urllib.error import HTTPError

@@ -78,6 +78,7 @@ def _item_to_academic(rec: dict, source: str = "crossref") -> AcademicItem:
         issue=rec.get("issue", "") or "",
         page=rec.get("page", "") or "",
         publisher=rec.get("publisher", "") or "",
+        cited_by_count=rec.get("is-referenced-by-count") or 0,
         item_type=_TYPE_MAP.get(rec.get("type", ""), "document"),
         attachments=_pdf_links(rec),
     )
@@ -125,9 +126,19 @@ class CrossrefBackend(Backend):
                 raise err from e
         raise last  # pragma: no cover - 循环内已 raise
 
-    def search(self, query: str, limit: int = 10) -> list[AcademicItem]:
-        params = urllib.parse.urlencode({"query.bibliographic": query, "rows": limit})
-        data = self._get(f"{self._base}?{params}")
+    def search(self, query: str, limit: int = 10, filters: dict | None = None) -> list[AcademicItem]:
+        filters = self._filters(filters)
+        params: dict = {"query.bibliographic": query, "rows": limit}
+        for key, qparam in (("title", "query.title"),
+                            ("author", "query.author"),
+                            ("container", "query.container-title")):
+            val = filters.get(key)
+            if val:
+                params[qparam] = val
+        year = filters.get("year")
+        if year and year.isdigit():
+            params["filter"] = f"from-pub-date:{year}-01-01,until-pub-date:{year}-12-31"
+        data = self._get(f"{self._base}?{urllib.parse.urlencode(params)}")
         items = data.get("message", {}).get("items") or []
         return [_item_to_academic(i, self.name) for i in items]
 

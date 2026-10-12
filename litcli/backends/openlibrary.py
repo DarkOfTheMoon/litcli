@@ -84,8 +84,13 @@ class OpenLibraryBackend(Backend):
                 raise err from e
         raise last  # pragma: no cover - 循环内已 raise
 
-    def search(self, query: str, limit: int = 10) -> list[AcademicItem]:
-        params = urllib.parse.urlencode({"q": query, "limit": limit})
+    def search(self, query: str, limit: int = 10, filters: dict | None = None) -> list[AcademicItem]:
+        # Book search is a single ``q``; field words fold into free-text (secondary backend).
+        filters = self._filters(filters)
+        terms = [t for t in (query, filters.get("title"),
+                             filters.get("author"),
+                             filters.get("container")) if t]
+        params = urllib.parse.urlencode({"q": " ".join(terms), "limit": limit})
         data = self._get(f"{self._base}?{params}")
         return [_doc_to_item(d, self.name) for d in (data.get("docs") or [])]
 

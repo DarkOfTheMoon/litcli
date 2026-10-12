@@ -48,7 +48,19 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=10)
     p.add_argument("--format", choices=["table", "json", "csl"], default="table")
     p.add_argument("--type", default=None, help="按条目类型过滤(article/book/chapter/patent/...),降噪声")
+    p.add_argument("--title", default=None, help="按标题含词收窄(字段级过滤,AND)")
+    p.add_argument("--author", default=None, help="按作者姓名收窄,如 Bonaventura")
+    p.add_argument("--year", default=None, help="按发表年份收窄,如 2018")
+    p.add_argument("--container", default=None, help="按期刊/书名收窄")
+    p.add_argument("--sort", choices=["cited"], default=None,
+                   help="按被引数降序排序(默认按年份降序)")
     p.add_argument("--no-cite", action="store_true", help="table 模式不显示 in-text 引文")
+
+    pr = sub.add_parser("related", help="返回与某条目相关的文献(引文图谱;仅 openalex 支持)")
+    pr.add_argument("key")
+    pr.add_argument("--backend", default="openalex", help="相关文献后端(默认 openalex;仅 openalex 实现)")
+    pr.add_argument("--limit", type=int, default=5)
+    pr.add_argument("--format", choices=["table", "json", "csl"], default="table")
 
     p = sub.add_parser("export", help="导出引文(只读,不碰 PDF)")
     p.add_argument("key", nargs="+", help="一个或多个条目 key")
@@ -136,19 +148,32 @@ def _present(item: AcademicItem, fmt: str = "table", no_cite: bool = False) -> s
     authors = ", ".join(i.get("family", "") for i in item.creators) or "Anon"
     first = f"{item.source}/{item.key}"
     line = f"{first:<22} {authors:<24} {item.year:<5} {item.title[:60]}"
+    if item.cited_by_count:
+        line += f"   [被引 {item.cited_by_count}]"
     if not no_cite:
         cite = render_intext([item])
         line = f"{line}   {cite[0]}"
     return line
 
 
+def _search_filters(args) -> dict:
+    """Collect the CLI search ``--title/--author/--year/--container`` into a filters dict (non-empty only)."""
+    return {k: v for k, v in {
+        "title": getattr(args, "title", None),
+        "author": getattr(args, "author", None),
+        "year": getattr(args, "year", None),
+        "container": getattr(args, "container", None),
+    }.items() if v}
+
+
 def cmd_search(cfg, args) -> int:
+    filters = _search_filters(args)
     if args.all:
         backends = get_all_backends(cfg)
         items: list[AcademicItem] = []
         for name, b in backends.items():
             try:
-                items.extend(b.search(args.query, limit=args.limit))
+                items.extend(b.search(args.query, limit=args.limit, filters=filters))
             except NotImplementedError:
                 continue
             except (RuntimeError, urllib.error.URLError, OSError) as e:
@@ -157,16 +182,21 @@ def cmd_search(cfg, args) -> int:
                 continue
     else:
         backend = get_backend(args.backend, cfg)
-        items = backend.search(args.query, limit=args.limit)
+        items = backend.search(args.query, limit=args.limit, filters=filters)
 
     # 聚合:仅 --all 多条时去重/合并/排序并标来源
     if args.all and items and len(items) > 1:
         items = merge_items(items)
 
-    # --type 过滤:把噪声(书名/无关题材)挡掉;合并后再过滤,保住 --all 去重效果
+    # --type filter: drop noisy items (book titles / off-topic). Post-merge so --all dedup
+    # is preserved; kept as a CLI post-filter for cross-backend semantic consistency.
     if getattr(args, "type", None):
         want = args.type.lower()
         items = [it for it in items if it.item_type.lower() == want]
+
+    # --sort cited: descending by citation count (default is merge's year/title order).
+    if getattr(args, "sort", None) == "cited":
+        items = sorted(items, key=lambda it: -it.cited_by_count)
 
     if args.format in ("json", "csl"):
         for it in items:
@@ -176,6 +206,33 @@ def cmd_search(cfg, args) -> int:
         print(_present(it, "table", args.no_cite))
     if not items:
         print("[无结果]")
+    return 0
+
+
+def _normalize_related_key(key: str) -> str:
+    """Normalize a ``related`` key: strip a source prefix (openalex/ arxiv/ crossref/ zotero/)
+    and turn an arXiv id into its DOI, so the openalex backend's W-id/DOI lookup can resolve
+    the key forms the CLI itself emits (``extra["openalex_id"]``, table keys, exported arXiv keys)."""
+    k = key.strip()
+    for prefix in ("openalex/", "arxiv/", "crossref/", "zotero/"):
+        if k.startswith(prefix):
+            k = k[len(prefix):]
+            break
+    aid = _arxiv_id_from_key(k)
+    if aid:
+        return f"10.48550/arxiv.{aid}"
+    return k
+
+
+def cmd_related(cfg, args) -> int:
+    """Citation graph: return works related to ``key`` (only backends that implement ``related``)."""
+    backend = get_backend(args.backend, cfg)
+    items = backend.related(_normalize_related_key(args.key), args.limit)  # 未实现抛 NotSupportedError(main 兜底)
+    if not items:
+        print("[无相关]")
+        return 0
+    for it in items:
+        print(_present(it, args.format))
     return 0
 
 
@@ -550,6 +607,8 @@ def main(argv=None) -> int:
     try:
         if args.cmd == "search":
             return cmd_search(cfg, args)
+        if args.cmd == "related":
+            return cmd_related(cfg, args)
         if args.cmd == "export":
             return cmd_export(cfg, args)
         if args.cmd == "backends":

@@ -35,9 +35,30 @@ class Backend(ABC):
         if not self.can(cap):
             raise NotSupportedError(cap, self)
 
+    @staticmethod
+    def _filters(filters: dict | None) -> dict:
+        """Coerce field-filter values to str so ``int`` years don't crash ``.isdigit()``;
+        drop None/empty. Returns a fresh dict, never mutates the caller's input.
+        Every backend ``search`` normalizes through this to keep a consistent contract
+        ("map or fold into free-text, or ignore").
+        """
+        out: dict = {}
+        for k, v in (filters or {}).items():
+            if v is None:
+                continue
+            s = str(v)
+            if s:
+                out[k] = s
+        return out
+
     @abstractmethod
-    def search(self, query: str, limit: int = 10) -> list[AcademicItem]:
-        """按 query 检索,返回归一化条目。"""
+    def search(self, query: str, limit: int = 10, filters: dict | None = None) -> list[AcademicItem]:
+        """Search ``query`` and return normalized items.
+
+        ``filters``: optional field-level predicates (AND-ed), keys are
+        title/author/year/container, values str. A backend maps each to its own
+        field query; unmappable fields are folded into free text or ignored.
+        """
 
     @abstractmethod
     def get(self, key: str) -> AcademicItem:
@@ -58,6 +79,10 @@ class Backend(ABC):
     def get_attachment(self, key: str) -> bytes:
         """取主 PDF 附件字节(仅支持的后端)。"""
         raise NotSupportedError("get_attachment", self)
+
+    def related(self, key: str, limit: int = 5) -> list[AcademicItem]:
+        """返回与 key 条目相关的文献(引文图谱;仅支持的后端,如 openalex)。"""
+        raise NotSupportedError("related", self)
 
     def add(self, item: AcademicItem) -> str:
         """新增条目,返回新条目的 key/标识(仅 carries 'write' 的后端)。"""

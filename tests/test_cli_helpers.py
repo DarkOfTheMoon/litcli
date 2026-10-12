@@ -8,7 +8,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from litcli.cli import _arxiv_id_from_key, _normalize_export_key, _build_parser
+from litcli.cli import _arxiv_id_from_key, _normalize_export_key, _normalize_related_key, _build_parser
 
 
 class ArxivKeyNormalizeTest(unittest.TestCase):
@@ -32,6 +32,23 @@ class ArxivKeyNormalizeTest(unittest.TestCase):
 
     def test_non_arxiv_key_passthrough(self):
         self.assertEqual(_normalize_export_key("10.1/abc", "crossref"), "10.1/abc")
+
+
+class RelatedKeyNormalizeTest(unittest.TestCase):
+    def test_strips_source_prefix(self):
+        self.assertEqual(_normalize_related_key("openalex/10.1016/j.cma.2004.11.019"),
+                         "10.1016/j.cma.2004.11.019")
+        self.assertEqual(_normalize_related_key("zotero/AB12"), "AB12")
+
+    def test_arxiv_prefix_to_doi(self):
+        self.assertEqual(_normalize_related_key("arxiv/1806.09180"), "10.48550/arxiv.1806.09180")
+
+    def test_openalex_url_and_doi_passthrough(self):
+        # extra["openalex_id"] 形态(CLI 自带)原样交付;裸 DOI 亦不动
+        self.assertEqual(_normalize_related_key("https://openalex.org/W2919115771"),
+                         "https://openalex.org/W2919115771")
+        self.assertEqual(_normalize_related_key("10.48550/arxiv.1806.09180"),
+                         "10.48550/arxiv.1806.09180")
 
 
 class BackendsParserTest(unittest.TestCase):

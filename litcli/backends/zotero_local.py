@@ -217,12 +217,18 @@ class ZoteroLocalBackend(Backend):
 
     # --- Backend 接口 ---
 
-    def search(self, query: str, limit: int = 10) -> list[AcademicItem]:
-        # qmode=everything 让 q 覆盖全部字段(含摘要),而非默认 titleCreatorYear;
-        # 中文/仅在摘要出现的词(如"非正交")需要此模式才命中。
+    def search(self, query: str, limit: int = 10, filters: dict | None = None) -> list[AcademicItem]:
+        # qmode=everything makes ``q`` cover all fields (incl. abstract), not the default
+        # titleCreatorYear; Chinese / abstract-only terms (e.g. "非正交") need it to hit.
+        # Zotero has a single ``q``, so field words fold into it (everything-mode full-text hit).
+        filt = self._filters(filters)
+        terms = [t for t in (query, filt.get("title"), filt.get("author"), filt.get("container")) if t]
+        if filt.get("year") and filt["year"].isdigit():
+            terms.append(filt["year"])
+        q = " ".join(terms) or query
         headers, data = self._json_path(
             f"/{self._users}/items",
-            {"q": query, "qmode": "everything", "limit": limit, "format": "json"})
+            {"q": q, "qmode": "everything", "limit": limit, "format": "json"})
         return [_item_to_academic(it["data"], self.name) for it in (data or []) if "data" in it]
 
     def get(self, key: str) -> AcademicItem:

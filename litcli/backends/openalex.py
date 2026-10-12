@@ -5,6 +5,7 @@ best_oa_location 提供**合法开放获取(OA)PDF 直链**,作为 attend 不入
 """
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import time
 import urllib.error
@@ -106,8 +107,11 @@ def _work_to_item(rec: dict, source: str = "openalex") -> AcademicItem:
         issue=issue,
         page=page,
         publisher=rec.get("publisher", "") or "",
+        cited_by_count=rec.get("cited_by_count") or 0,
         item_type=_TYPE_MAP.get(rec.get("type", ""), "document"),
         attachments=_oa_pdf(rec),
+        # Keep the internal OpenAlex id (W...) so ``related`` can source inline related_works.
+        extra={"openalex_id": rec.get("id", "")},
     )
 
 
@@ -153,25 +157,89 @@ class OpenAlexBackend(Backend):
                 raise err from e
         raise last  # pragma: no cover - 循环内已 raise
 
-    def search(self, query: str, limit: int = 10) -> list[AcademicItem]:
-        params = urllib.parse.urlencode({"search": query, "per_page": limit})
-        if self._mailto:
-            params += "&mailto=" + urllib.parse.quote(self._mailto)
-        data = self._get(f"{self._base}?{params}")
-        return [_work_to_item(w, self.name) for w in (data.get("results") or [])]
+    def _with_mailto(self, url: str) -> str:
+        """Append the polite ``&mailto=`` param (OpenAlex asks for it) to a URL."""
+        if not self._mailto:
+            return url
+        sep = "&" if "?" in url else "?"
+        return f"{url}{sep}mailto={urllib.parse.quote(self._mailto)}"
 
-    def get(self, key: str) -> AcademicItem:
-        # key 可为 DOI(10... 或 https://doi.org/...)或 OpenAlex id
-        if key.startswith("https://doi.org/"):
-            key = key.split("doi.org/")[-1]
-        if key.startswith("10."):
-            url = f"{self._base}/doi:{urllib.parse.quote(key, safe='')}"
-        else:
-            url = f"{self._base}/{urllib.parse.quote(key, safe='')}"
-        data = self._get(url)
+    def _work_url(self, key: str) -> str:
+        """Build a ``/works/...`` URL from a DOI, a bare W-id, or an openalex.org URL.
+
+        Handles the exact key forms the CLI emits/serializes: ``https://openalex.org/W...``
+        (extra["openalex_id"]), a bare ``W...`` id, or a DOI (``10...`` / ``https://doi.org/...``).
+        DOIs legitimately contain ``/``, so only a domain-prefixed/openalex W-id collapses to
+        its final path segment.
+        """
+        k = (key or "").strip()
+        for prefix in ("https://openalex.org/", "http://openalex.org/",
+                       "https://api.openalex.org/works/"):
+            if k.startswith(prefix):
+                k = k[len(prefix):]
+                break
+        if k.lower().startswith(("https://doi.org/", "http://doi.org/")):
+            k = k.split("doi.org/", 1)[1]
+        if k.startswith("W") and "/" in k:
+            k = k.rsplit("/", 1)[-1]
+        k = k.rstrip("/")
+        if k.startswith("10."):
+            return f"{self._base}/doi:{urllib.parse.quote(k, safe='')}"
+        return f"{self._base}/{urllib.parse.quote(k, safe='')}"
+
+    def _work(self, key: str) -> dict:
+        """Fetch one raw work dict (single GET): DOI/W-id integration + key-miss guard."""
+        data = self._get(self._with_mailto(self._work_url(key)))
         if not data:
             raise KeyError(f"[{self.name}] 未找到 {key}")
-        return _work_to_item(data, self.name)
+        return data
+
+    def search(self, query: str, limit: int = 10, filters: dict | None = None) -> list[AcademicItem]:
+        filters = self._filters(filters)
+        # Free query + container term go into the free-text ``search`` (OpenAlex has no
+        # hard container filter; ``primary_location.source.display_name.search`` 400s).
+        terms = [t for t in (query, filters.get("container")) if t]
+        params: dict = {"search": " ".join(terms), "per_page": limit}
+        oa_filters = []
+        # OpenAlex splits ``filter`` on commas, so a value containing one (e.g. author
+        # "Bonaventura, J.") must be double-quoted or the whole query 400s.
+        for field, key in (("title.search", "title"), ("raw_author_name.search", "author")):
+            if filters.get(key):
+                oa_filters.append(f'{field}:"{filters[key]}"')
+        if filters.get("year") and filters["year"].isdigit():
+            oa_filters.append(f"publication_year:{filters['year']}")
+        if oa_filters:
+            params["filter"] = ",".join(oa_filters)
+        qs = urllib.parse.urlencode(params)
+        data = self._get(self._with_mailto(f"{self._base}?{qs}"))
+        return [_work_to_item(w, self.name) for w in (data.get("results") or [])]
+
+    def related(self, key: str, limit: int = 5) -> list[AcademicItem]:
+        """Return works related to ``key`` (OpenAlex citation graph).
+
+        Reads the parent work's inline ``related_works`` (a list of W-ids) and fetches
+        each in parallel; ``/works/{id}/related`` returns empty here, so it is unused.
+        Per-work fetch failures are skipped. Order follows the inline list.
+        """
+        rec = self._work(key)
+        ids = [(r or "").rstrip("/").split("/")[-1] for r in (rec.get("related_works") or [])[:max(limit, 0)]]
+        ids = [i for i in ids if i]
+        if not ids:
+            return []
+        tasks = {i: f"{self._base}/{urllib.parse.quote(i, safe='')}" for i in ids}
+        results: dict[int, AcademicItem] = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(ids))) as ex:
+            futures = {ex.submit(self._get, self._with_mailto(url)): i for i, url in tasks.items()}
+            for fut in concurrent.futures.as_completed(futures):
+                i = futures[fut]
+                try:
+                    results[i] = _work_to_item(fut.result(), self.name)
+                except (RuntimeError, urllib.error.URLError):
+                    continue
+        return [results[i] for i in ids if i in results]
+
+    def get(self, key: str) -> AcademicItem:
+        return _work_to_item(self._work(key), self.name)
 
     def get_attachment(self, key: str) -> bytes:
         """下载合法 OA PDF 直链(best_oa_location 的 pdf_url)。"""

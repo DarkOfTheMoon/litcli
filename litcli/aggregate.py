@@ -75,6 +75,11 @@ def _merge_two(primary: AcademicItem, other: AcademicItem) -> None:
         primary.page = other.page
     if not primary.publisher and other.publisher:
         primary.publisher = other.publisher
+    if other.cited_by_count > primary.cited_by_count:
+        primary.cited_by_count = other.cited_by_count
+    oaid = (other.extra or {}).get("openalex_id")
+    if oaid and not (primary.extra or {}).get("openalex_id"):
+        primary.extra["openalex_id"] = oaid
     for a in other.attachments:
         if a not in primary.attachments:
             primary.attachments.append(a)

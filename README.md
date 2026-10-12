@@ -28,7 +28,8 @@ PDF 全文抽取需系统有 `pdftotext`(poppler-utils)；无则 `pdf --text` �
 
 | 命令 | 说明 | 读写 |
 |---|---|---|
-| `litcli search "X" [--all] [--limit N] [--type article] [--format table\|json\|csl]` | 检索；`--all` 对各后端聚合，**去重/合并/排序**，`extra["sources"]` 标全部来源；`--type` 按条目类型过滤降噪 | 只读 |
+| `litcli search "X" [--all] [--limit N] [--type article] [--title ..] [--author ..] [--year ..] [--container ..] [--sort cited] [--format table\|json\|csl]` | 检索；`--all` 对各后端聚合，**去重/合并/排序**，`extra["sources"]` 标全部来源；`--type` 按条目类型过滤降噪；`--title/--author/--year/--container` 字段级过滤(与 query AND 叠加,各后端映射见下)；`--sort cited` 按被引数降序，table 显示 `[被引 N]` | 只读 |
+| `litcli related <key> [--limit N] [--backend openalex]` | **相关文献**：OpenAlex `related_works` 图谱(读父 work 内联 id 逐个取全量)；不支持的只读后端输出 `[跳过]` 退出码 2 | 只读 |
 | `litcli data get <id> [--format csl\|json]` | 单条全字段 | 只读 |
 | `litcli data add --title "..." [--creator "家族, 名字"]... [--year ..]` | 摄入元信息；写前过 `should_import` 查重/半残门，只读后端报 `[跳过]` | **写库** |
 | `litcli data add --pdf <file>` | 从 PDF 首页**启发式**抽候选，展示待核对后才写；不自动入库 | **写库** |
@@ -41,6 +42,15 @@ PDF 全文抽取需系统有 `pdftotext`(poppler-utils)；无则 `pdf --text` �
 | `litcli fetch fulltext <doi> [--download] [--lines N]` | **合法全文定位**：本地库 → Unpaywall → OpenAlex OA 直链；都拿不到则**指路图书馆/代理**（不绕过付费墙） | 只读 |
 | `litcli backends list` / `status` | 列出已配置后端及能力 / 显示各后端**授权与可达状态** | 只读 |
 | `litcli backends authorize [zotero]` | 主动向 Zotero **本地授权**拿写库 key 并写回 `config.toml`（`[backends.zotero].api_key`）；此后 `data add/set/del/attach` 免再授权 | 写配置 |
+
+`search` 的 `--title/--author/--year/--container` 在各后端映射如下（后端无对应字段→尽力折叠进自由查询词或忽略）：
+
+- **crossref** → `query.title` / `query.author` / `query.container-title` / `filter=from-pub-date:YYYY-01-01,until-pub-date:YYYY-12-31`（与 `query.bibliographic` 并存自动 AND）。
+- **openalex** → `filter=title.search:` / `raw_author_name.search:` / `publication_year:`；`container` 折叠进自由 `search`（`primary_location.source.display_name.search` 实测 400，非硬过滤）。
+- **arxiv** → `ti:` / `au:` / `submittedDate:[YYYY01010000 TO YYYY12312359]`，用 ` AND ` 拼 `search_query`。
+- **zotero** → 仅单 `q`，把各字段词折进 q（配合 `qmode=everything` 全字段命中）；`--type` 保持后置过滤（跨后端语义统一）。
+
+被引数 `cited_by_count`：openalex `cited_by_count`、crossref `is-referenced-by-count`；`search` table 显示 `[被引 N]`，`--sort cited` 按被引降序。
 
 ## 配置
 
@@ -77,7 +87,7 @@ litcli/
 ├── aggregate.py   跨后端聚合:去重/合并/排序(纯函数)
 ├── fulltext.py    合法全文定位(本地→OA)+ should_import 收录查重门(纯函数)
 ├── config.py      配置读取、后端发现、get_backend/get_all_backends
-├── cli.py         argparse 意图分族编排(search/data/fetch/export),按 capabilities 暴露读写
+├── cli.py         argparse 意图分族编排(search/related/data/fetch/export),按 capabilities 暴露读写
 ├── backends/       base.py(Backend ABC) + zotero_local.py + arxiv.py
 │                   + crossref.py + openalex.py + openlibrary.py + uspto.py
 └── tests/          unittest 单测(stub 后端,离线)
