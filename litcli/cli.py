@@ -165,6 +165,8 @@ def _present(item: AcademicItem, fmt: str = "table", no_cite: bool = False) -> s
 def _print_items(items: list[AcademicItem], fmt: str, no_cite: bool, empty_msg: str) -> int:
     """Render a list of items (json/csl single-line blocks, or table rows) + ``empty_msg`` fallback."""
     if fmt in ("json", "csl"):
+        if not items:
+            print("[]")  # machine-readable empty list, not a silent blank stdout
         for it in items:
             print(_present(it, fmt, no_cite))
         return 0
@@ -241,10 +243,10 @@ _EDGE_METHODS = {"refs": "references", "citing": "citing", "related": "related"}
 def _cmd_edge(cfg, args, method: str) -> int:
     """Shared edge-traversal command: dispatch ``method`` (references/citing/related) on one backend."""
     backend = get_backend(args.backend, cfg)
-    # 未实现会抛 NotSupportedError(main 兜底)
-    items = getattr(backend, method)(_normalize_related_key(args.key), args.limit)
-    if args.sort == "cited":
-        items = sorted(items, key=_cited_key)
+    # Only openalex implements the graph edges; the rest raise NotSupportedError (caught in main).
+    # Ordering (by citation count) is owned by the backend, selected here via ``sort_cited``.
+    items = getattr(backend, method)(_normalize_related_key(args.key), args.limit,
+                                     sort_cited=(args.sort == "cited"))
     return _print_items(items, args.format, args.no_cite, "[无相关]")
 
 
@@ -297,7 +299,6 @@ def cmd_data_add(cfg, args) -> int:
 
     # 查重/半残门(仅 --force 跳过)
     if not args.force:
-        from .aggregate import _cited_key, merge_items
         try:
             existing = backend.search(item.doi or item.title, limit=20)
         except Exception:

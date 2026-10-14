@@ -91,7 +91,7 @@ def _year_key(year: str) -> int:
 
 
 def _cited_key(item: AcademicItem) -> int:
-    """被引数降序排序键(无被引记录按 0 处理)。"""
+    """Citation-count descending sort key (treats no-citation records as 0)."""
     return -item.cited_by_count
 
 

@@ -25,7 +25,7 @@ python3 -m unittest tests.test_backends
 python3 -m unittest tests.test_models.TestModels.test_to_csl
 ```
 
-CLI 帮助用 `./bin/litcli --help`；本机 Zotero 库用 `litcli search "..."`（`--all` 跨后端聚合，`litcli backends list/status` 看可用后端与授权状态；`search --type <article|book|...>` 按类型过滤降噪，`--title/--author/--year/--container` 字段级过滤、`--sort cited` 按被引降序；`litcli refs <key>`(该文的参考文献/回溯找奠基)、`litcli citing <key>`(引用该文的文献/前向找跟进)、`litcli related <key>`(语义相关文献)——三者均 OpenAlex 引文图谱、默认按被引降序；`export` 的 arXiv key 如 `arxiv/1806.09180` 会自动归一为 DOI `10.48550/arxiv.x`）。
+CLI 帮助用 `./bin/litcli --help`；本机 Zotero 库用 `litcli search "..."`（`--all` 跨后端聚合，`litcli backends list/status` 看可用后端与授权状态；`search --type <article|book|...>` 按类型过滤降噪，`--title/--author/--year/--container` 字段级过滤、`--sort cited` 按被引降序；`litcli refs <key>`(该文的参考文献/回溯找奠基)、`litcli citing <key>`(引用该文的文献/前向找跟进)、`litcli related <key>`(语义相关文献)——三者均 OpenAlex 引文图谱、默认按被引降序；`related` 默认按语义相关度内联序、`--sort cited` 才按被引降序（`refs`/`citing` 天然按被引降序）。`export` 的 arXiv key 如 `arxiv/1806.09180` 会自动归一为 DOI `10.48550/arxiv.x`）。
 
 ## 架构分层（后端无关的领域层 + 可插拔后端层）
 

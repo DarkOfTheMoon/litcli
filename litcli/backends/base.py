@@ -80,16 +80,16 @@ class Backend(ABC):
         """取主 PDF 附件字节(仅支持的后端)。"""
         raise NotSupportedError("get_attachment", self)
 
-    def related(self, key: str, limit: int = 5) -> list[AcademicItem]:
+    def related(self, key: str, limit: int = 5, sort_cited: bool = False) -> list[AcademicItem]:
         """Return works semantically related to ``key`` (citation-graph neighbors; openalex only)."""
         raise NotSupportedError("related", self)
 
-    def references(self, key: str, limit: int = 5) -> list[AcademicItem]:
-        """Return the works ``key`` cites (backward bibliography; openalex only)."""
+    def references(self, key: str, limit: int = 5, sort_cited: bool = True) -> list[AcademicItem]:
+        """Return the works ``key`` cites (backward bibliography, ranked by citation count; openalex only)."""
         raise NotSupportedError("references", self)
 
-    def citing(self, key: str, limit: int = 5) -> list[AcademicItem]:
-        """Return the works that cite ``key`` (forward; openalex only)."""
+    def citing(self, key: str, limit: int = 5, sort_cited: bool = True) -> list[AcademicItem]:
+        """Return the works that cite ``key`` (forward, ranked by citation count; openalex only)."""
         raise NotSupportedError("citing", self)
 
     def add(self, item: AcademicItem) -> str:

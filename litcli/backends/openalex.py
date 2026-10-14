@@ -6,7 +6,9 @@ best_oa_location 提供**合法开放获取(OA)PDF 直链**,作为 attend 不入
 from __future__ import annotations
 
 import concurrent.futures
+import http.client
 import json
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -227,68 +229,79 @@ class OpenAlexBackend(Backend):
             return []
         results: dict[str, AcademicItem] = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(ids))) as ex:
-            futures = {ex.submit(self._get, self._with_mailto(f"{self._base}/{urllib.parse.quote(i, safe='')}")): i
+            futures = {ex.submit(self._get, self._with_mailto(self._work_url(i))): i
                        for i in ids}
             for fut in concurrent.futures.as_completed(futures):
                 i = futures[fut]
                 try:
                     results[i] = _work_to_item(fut.result(), self.name)
-                except (RuntimeError, urllib.error.URLError):
+                except (RuntimeError, http.client.HTTPException, OSError, ValueError):
+                    # Skip per-id failures (HTTP 404/5xx, non-JSON body, truncated/timeout).
                     continue
         return [results[i] for i in ids if i in results]
 
     def _inline_works(self, key: str, field: str, limit: int = 5,
-                      sort: bool = False, budget: int | None = None) -> list[AcademicItem]:
+                      sort_cited: bool = False) -> list[AcademicItem]:
         """Fetch a parent work's inline W-id list (``field``) in parallel into items.
 
-        Preserves inline order and skips per-id fetch failures. ``sort`` ranks by citation
-        count (importance). ``budget`` caps how many W-ids are fetched (default: all).
+        ``sort_cited`` ranks by citation count so the most important works surface: it
+        fetches the FULL inline set, then sorts and truncates to ``limit`` (a truncated
+        mid-list top-``limit`` would silently drop the highest-cited works past ``limit``).
+        Without it the natural inline order is kept and only the first ``limit`` ids are
+        fetched. Per-work fetch failures are skipped.
         """
         limit = max(0, limit)
         rec = self._work(key)
         ids = [_wid(r) for r in (rec.get(field) or [])]
-        if budget is not None:
-            ids = ids[:min(len(ids), budget)]
-        items = self._fetch_works(ids)
-        if sort:
+        if sort_cited:
+            items = self._fetch_works(ids)
             items.sort(key=_cited_key)
-        return items[:limit]
+            return items[:limit]
+        return self._fetch_works(ids[:limit])[:limit]
 
-    def related(self, key: str, limit: int = 5) -> list[AcademicItem]:
+    def related(self, key: str, limit: int = 5, sort_cited: bool = False) -> list[AcademicItem]:
         """Return works semantically related to ``key`` (OpenAlex ``related_works``).
 
         Reads the parent work's inline ``related_works`` (a list of W-ids) and fetches
         each in parallel; ``/works/{id}/related`` returns empty here, so it is unused.
-        Per-work fetch failures are skipped. Order follows the inline list.
+        Per-work fetch failures are skipped. Order follows the inline list unless
+        ``sort_cited`` ranks by citation count (which fetches the full set first).
         """
-        return self._inline_works(key, "related_works", limit, budget=limit)
+        return self._inline_works(key, "related_works", limit, sort_cited)
 
-    def references(self, key: str, limit: int = 5) -> list[AcademicItem]:
+    def references(self, key: str, limit: int = 5, sort_cited: bool = True) -> list[AcademicItem]:
         """Return the works ``key`` cites (backward bibliography: inline ``referenced_works``).
 
-        The foundational works a paper builds on; fetched in parallel and ranked by
-        citation count (importance) before truncating to ``limit``. A fetch budget of
-        ``max(limit, 50)`` bounds work on reference-dense reviews.
+        The foundational works a paper builds on; the FULL inline set is fetched in
+        parallel and ranked by citation count so the most-cited foundations surface
+        before truncating to ``limit``. ``sort_cited`` keeps the uniform edge signature
+        but the by-citation ranking is unconditional (the bibliography contract).
         """
-        return self._inline_works(key, "referenced_works", limit, sort=True, budget=max(limit, 50))
+        return self._inline_works(key, "referenced_works", limit, True)
 
-    def citing(self, key: str, limit: int = 5) -> list[AcademicItem]:
+    def citing(self, key: str, limit: int = 5, sort_cited: bool = True) -> list[AcademicItem]:
         """Return works that cite ``key`` (forward), via ``/works?filter=cites:<wid>``.
 
         The citing works arrive as full records in one request (no per-work fetch);
         sorted server-side by citation count so the most impactful follow-ups come first.
+        ``sort_cited`` is part of the uniform edge signature but the ranking is always
+        honored. A bare ``W...`` / ``https://openalex.org/W...`` key skips the parent GET;
+        a DOI key resolves via ``_work``.
         """
         limit = max(0, limit)
-        wid = _wid(key)
-        if not wid.startswith("W"):
-            # A DOI/arXiv key must resolve to a W-id via the parent record; a bare
-            # W-id (the common case, from ``extra["openalex_id"]``) needs no GET.
+        per_page = min(max(limit, 1), 200)  # OpenAlex per_page is bounded to [1, 200].
+        wid = None
+        if not key.strip().startswith("10."):
+            candidate = _wid(key)
+            if re.fullmatch(r"W\d+", candidate):
+                wid = candidate
+        if wid is None:
             rec = self._work(key)
             wid = _wid(rec.get("id") or "")
         if not wid:
             raise RuntimeError(f"[{self.name}] {key} 解析不到 OpenAlex 内部 id")
         data = self._get(self._with_mailto(
-            f"{self._base}?filter=cites:{wid}&per_page={limit}&sort=cited_by_count:desc"))
+            f"{self._base}?filter=cites:{wid}&per_page={per_page}&sort=cited_by_count:desc"))
         return [_work_to_item(w, self.name) for w in (data.get("results") or [])][:limit]
 
     def get(self, key: str) -> AcademicItem:

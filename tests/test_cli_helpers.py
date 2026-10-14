@@ -82,5 +82,19 @@ class BackendsParserTest(unittest.TestCase):
             self.assertEqual(a.format, "json")
 
 
+class PrintItemsTest(unittest.TestCase):
+    def test_json_empty_prints_empty_list(self):
+        # Empty json/csl results must emit a machine-readable ``[]``, not a silent stdout.
+        import contextlib
+        import io
+        from litcli.cli import _print_items
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = _print_items([], "json", False, "[无相关]")
+        self.assertEqual(rc, 0)
+        self.assertEqual(buf.getvalue().strip(), "[]")
+
+
 if __name__ == "__main__":
     unittest.main()

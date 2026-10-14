@@ -145,7 +145,8 @@ class OpenAlexStubTest(unittest.TestCase):
         self.assertTrue(any("/works/W589102260" in u for u in urls))
 
     def test_references_parallel_and_cited_sorted(self):
-        # references:父 work 的 referenced_works 并行拉取,按被引降序截断(重要奠基在前)。
+        # references: parent work's inline referenced_works are fetched in parallel and
+        # truncated to top-limit by citation count (most important foundations first).
         r1 = {"id": "https://openalex.org/W2088845016", "display_name": "R1",
               "publication_year": 2019, "type": "article", "cited_by_count": 3}
         r2 = {"id": "https://openalex.org/W589102260", "display_name": "R2",
@@ -165,7 +166,7 @@ class OpenAlexStubTest(unittest.TestCase):
         self.assertEqual([it.title for it in items], ["R1", "R2"])
 
     def test_citing_uses_cites_filter_sorted(self):
-        # citing:filter=cites:<wid>&sort=cited_by_count:desc,单请求拿全量,无逐条拉取。
+        # citing: single ``filter=cites:<wid>&sort=cited_by_count:desc`` request, no per-work fetch.
         r1 = {"id": "https://openalex.org/W2088845016", "display_name": "C1",
               "publication_year": 2016, "type": "article", "cited_by_count": 900}
         r2 = {"id": "https://openalex.org/W589102260", "display_name": "C2",
@@ -188,7 +189,7 @@ class OpenAlexStubTest(unittest.TestCase):
         self.assertIn("sort=cited_by_count:desc", cite_url)
 
     def test_references_not_supported_on_other_backends(self):
-        # 非 openalex 只读后端对 references/citing 抛 NotSupportedError(CLI 兜底 [跳过])
+        # Non-openalex read-only backends raise NotSupportedError for references/citing.
         from litcli.backends.crossref import CrossrefBackend
         from litcli.backends.base import NotSupportedError
         be = CrossrefBackend(mailto="t@e.com")
@@ -211,6 +212,85 @@ class OpenAlexStubTest(unittest.TestCase):
             with self.assertRaises(RuntimeError) as ctx:
                 self.be.get("10.1/nope")
         self.assertIn("404", str(ctx.exception))
+
+    def _multiref_resp(self, parent):
+        from urllib.request import Request
+
+        low = {"id": "https://openalex.org/W1", "display_name": "Low",
+               "publication_year": 2019, "type": "article", "cited_by_count": 1}
+        mid = {"id": "https://openalex.org/W2", "display_name": "Mid",
+               "publication_year": 2020, "type": "article", "cited_by_count": 5}
+        high = {"id": "https://openalex.org/W3", "display_name": "High",
+                "publication_year": 2021, "type": "article", "cited_by_count": 100}
+
+        def _resp_for(req: Request, *a, **kw):
+            u = req.full_url
+            if "/W1" in u:
+                return _Resp(low)
+            if "/W2" in u:
+                return _Resp(mid)
+            if "/W3" in u:
+                return _Resp(high)
+            return _Resp(parent)
+
+        return _resp_for, {"W1": low, "W2": mid, "W3": high}
+
+    def test_references_fetches_full_set_before_sort(self):
+        # references pulls the FULL inline referenced_works, then ranks by citation count, so a
+        # highest-cited work sitting past ``limit`` in the unordered inline list still surfaces.
+        parent = dict(WORK, referenced_works=[
+            "https://openalex.org/W1", "https://openalex.org/W2", "https://openalex.org/W3"])
+        _resp_for, _ = self._multiref_resp(parent)
+        with mock.patch("urllib.request.urlopen", side_effect=_resp_for) as m:
+            items = self.be.references("10.1038/nature14539", limit=1)
+        self.assertEqual([it.title for it in items], ["High"])
+        # All three inline ids are fetched (not truncated to limit before ranking).
+        fetched = set(call[0][0].full_url for call in m.call_args_list)
+        for url in fetched:
+            self.assertTrue("/W1" in url or "/W2" in url or "/W3" in url or "doi:" in url,
+                            f"unexpected URL {url}")
+
+    def test_related_natural_order_respects_limit(self):
+        # related (no --sort cited): only the first ``limit`` inline neighbors are fetched.
+        parent = dict(WORK, related_works=[
+            "https://openalex.org/W1", "https://openalex.org/W2", "https://openalex.org/W3"])
+        _resp_for, _ = self._multiref_resp(parent)
+        with mock.patch("urllib.request.urlopen", side_effect=_resp_for) as m:
+            items = self.be.related("10.1038/nature14539", limit=1)
+        self.assertEqual([it.title for it in items], ["Low"])
+        fetched = [call[0][0].full_url for call in m.call_args_list]
+        # Only the first neighbor (W1) is fetched when not ranking by citation count.
+        self.assertFalse(any("/W2" in u or "/W3" in u for u in fetched))
+
+    def test_citing_caps_per_page(self):
+        # OpenAlex per_page is bounded to [1, 200]; avoid a 400 on --limit 250.
+        from urllib.request import Request
+
+        def _resp_for(req: Request, *a, **kw):
+            if "filter=cites" in req.full_url:
+                return _Resp({"results": [WORK]})
+            return _Resp(WORK)
+
+        with mock.patch("urllib.request.urlopen", side_effect=_resp_for) as m:
+            self.be.citing("10.1038/nature14539", limit=250)
+        cite_url = next(m.call_args_list[i][0][0].full_url
+                        for i in range(m.call_count) if "filter=cites" in m.call_args_list[i][0][0].full_url)
+        self.assertIn("per_page=200", cite_url)
+
+    def test_citing_zero_limit_no_400(self):
+        from urllib.request import Request
+
+        def _resp_for(req: Request, *a, **kw):
+            if "filter=cites" in req.full_url:
+                return _Resp({"results": [WORK]})
+            return _Resp(WORK)
+
+        with mock.patch("urllib.request.urlopen", side_effect=_resp_for) as m:
+            items = self.be.citing("10.1038/nature14539", limit=0)
+        self.assertEqual(items, [])
+        cite_url = next(m.call_args_list[i][0][0].full_url
+                        for i in range(m.call_count) if "filter=cites" in m.call_args_list[i][0][0].full_url)
+        self.assertIn("per_page=1", cite_url)
 
 
 if __name__ == "__main__":
