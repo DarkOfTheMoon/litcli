@@ -90,6 +90,11 @@ def _year_key(year: str) -> int:
     return -int(year) if year.isdigit() else 0
 
 
+def _cited_key(item: AcademicItem) -> int:
+    """被引数降序排序键(无被引记录按 0 处理)。"""
+    return -item.cited_by_count
+
+
 def merge_items(items: list[AcademicItem]) -> list[AcademicItem]:
     """去重 + 合并 + 排序。
 

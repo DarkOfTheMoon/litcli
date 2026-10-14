@@ -70,6 +70,17 @@ class BackendsParserTest(unittest.TestCase):
         a = _build_parser().parse_args(["search", "q"])
         self.assertIsNone(a.type)
 
+    def test_edge_subcommands_share_options(self):
+        p = _build_parser()
+        for cmd in ("refs", "citing", "related"):
+            a = p.parse_args([cmd, "10.1/x", "--limit", "7", "--sort", "cited",
+                              "--backend", "openalex", "--format", "json"])
+            self.assertEqual(a.cmd, cmd)
+            self.assertEqual(a.limit, 7)
+            self.assertEqual(a.sort, "cited")
+            self.assertEqual(a.backend, "openalex")
+            self.assertEqual(a.format, "json")
+
 
 if __name__ == "__main__":
     unittest.main()

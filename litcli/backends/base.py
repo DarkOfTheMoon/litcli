@@ -81,8 +81,16 @@ class Backend(ABC):
         raise NotSupportedError("get_attachment", self)
 
     def related(self, key: str, limit: int = 5) -> list[AcademicItem]:
-        """返回与 key 条目相关的文献(引文图谱;仅支持的后端,如 openalex)。"""
+        """Return works semantically related to ``key`` (citation-graph neighbors; openalex only)."""
         raise NotSupportedError("related", self)
+
+    def references(self, key: str, limit: int = 5) -> list[AcademicItem]:
+        """Return the works ``key`` cites (backward bibliography; openalex only)."""
+        raise NotSupportedError("references", self)
+
+    def citing(self, key: str, limit: int = 5) -> list[AcademicItem]:
+        """Return the works that cite ``key`` (forward; openalex only)."""
+        raise NotSupportedError("citing", self)
 
     def add(self, item: AcademicItem) -> str:
         """新增条目,返回新条目的 key/标识(仅 carries 'write' 的后端)。"""

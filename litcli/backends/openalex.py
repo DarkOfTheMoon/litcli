@@ -12,6 +12,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from ..aggregate import _cited_key
 from ..models import AcademicItem
 from .base import Backend
 
@@ -71,6 +72,11 @@ def _bare_doi(value: str) -> str:
         if d.lower().startswith(prefix):
             return d[len(prefix):]
     return d
+
+
+def _wid(value: str) -> str:
+    """Extract the trailing W-id from an OpenAlex id (``https://openalex.org/W...`` or bare ``W...``)."""
+    return (value or "").rstrip("/").split("/")[-1]
 
 
 def _journal_name(rec: dict) -> str:
@@ -214,22 +220,15 @@ class OpenAlexBackend(Backend):
         data = self._get(self._with_mailto(f"{self._base}?{qs}"))
         return [_work_to_item(w, self.name) for w in (data.get("results") or [])]
 
-    def related(self, key: str, limit: int = 5) -> list[AcademicItem]:
-        """Return works related to ``key`` (OpenAlex citation graph).
-
-        Reads the parent work's inline ``related_works`` (a list of W-ids) and fetches
-        each in parallel; ``/works/{id}/related`` returns empty here, so it is unused.
-        Per-work fetch failures are skipped. Order follows the inline list.
-        """
-        rec = self._work(key)
-        ids = [(r or "").rstrip("/").split("/")[-1] for r in (rec.get("related_works") or [])[:max(limit, 0)]]
+    def _fetch_works(self, ids: list[str]) -> list[AcademicItem]:
+        """Parallel-fetch W-ids into AcademicItems, preserving id order, skipping per-id failures."""
         ids = [i for i in ids if i]
         if not ids:
             return []
-        tasks = {i: f"{self._base}/{urllib.parse.quote(i, safe='')}" for i in ids}
-        results: dict[int, AcademicItem] = {}
+        results: dict[str, AcademicItem] = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(ids))) as ex:
-            futures = {ex.submit(self._get, self._with_mailto(url)): i for i, url in tasks.items()}
+            futures = {ex.submit(self._get, self._with_mailto(f"{self._base}/{urllib.parse.quote(i, safe='')}")): i
+                       for i in ids}
             for fut in concurrent.futures.as_completed(futures):
                 i = futures[fut]
                 try:
@@ -237,6 +236,60 @@ class OpenAlexBackend(Backend):
                 except (RuntimeError, urllib.error.URLError):
                     continue
         return [results[i] for i in ids if i in results]
+
+    def _inline_works(self, key: str, field: str, limit: int = 5,
+                      sort: bool = False, budget: int | None = None) -> list[AcademicItem]:
+        """Fetch a parent work's inline W-id list (``field``) in parallel into items.
+
+        Preserves inline order and skips per-id fetch failures. ``sort`` ranks by citation
+        count (importance). ``budget`` caps how many W-ids are fetched (default: all).
+        """
+        limit = max(0, limit)
+        rec = self._work(key)
+        ids = [_wid(r) for r in (rec.get(field) or [])]
+        if budget is not None:
+            ids = ids[:min(len(ids), budget)]
+        items = self._fetch_works(ids)
+        if sort:
+            items.sort(key=_cited_key)
+        return items[:limit]
+
+    def related(self, key: str, limit: int = 5) -> list[AcademicItem]:
+        """Return works semantically related to ``key`` (OpenAlex ``related_works``).
+
+        Reads the parent work's inline ``related_works`` (a list of W-ids) and fetches
+        each in parallel; ``/works/{id}/related`` returns empty here, so it is unused.
+        Per-work fetch failures are skipped. Order follows the inline list.
+        """
+        return self._inline_works(key, "related_works", limit, budget=limit)
+
+    def references(self, key: str, limit: int = 5) -> list[AcademicItem]:
+        """Return the works ``key`` cites (backward bibliography: inline ``referenced_works``).
+
+        The foundational works a paper builds on; fetched in parallel and ranked by
+        citation count (importance) before truncating to ``limit``. A fetch budget of
+        ``max(limit, 50)`` bounds work on reference-dense reviews.
+        """
+        return self._inline_works(key, "referenced_works", limit, sort=True, budget=max(limit, 50))
+
+    def citing(self, key: str, limit: int = 5) -> list[AcademicItem]:
+        """Return works that cite ``key`` (forward), via ``/works?filter=cites:<wid>``.
+
+        The citing works arrive as full records in one request (no per-work fetch);
+        sorted server-side by citation count so the most impactful follow-ups come first.
+        """
+        limit = max(0, limit)
+        wid = _wid(key)
+        if not wid.startswith("W"):
+            # A DOI/arXiv key must resolve to a W-id via the parent record; a bare
+            # W-id (the common case, from ``extra["openalex_id"]``) needs no GET.
+            rec = self._work(key)
+            wid = _wid(rec.get("id") or "")
+        if not wid:
+            raise RuntimeError(f"[{self.name}] {key} 解析不到 OpenAlex 内部 id")
+        data = self._get(self._with_mailto(
+            f"{self._base}?filter=cites:{wid}&per_page={limit}&sort=cited_by_count:desc"))
+        return [_work_to_item(w, self.name) for w in (data.get("results") or [])][:limit]
 
     def get(self, key: str) -> AcademicItem:
         return _work_to_item(self._work(key), self.name)

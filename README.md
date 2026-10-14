@@ -29,7 +29,9 @@ PDF 全文抽取需系统有 `pdftotext`(poppler-utils)；无则 `pdf --text` �
 | 命令 | 说明 | 读写 |
 |---|---|---|
 | `litcli search "X" [--all] [--limit N] [--type article] [--title ..] [--author ..] [--year ..] [--container ..] [--sort cited] [--format table\|json\|csl]` | 检索；`--all` 对各后端聚合，**去重/合并/排序**，`extra["sources"]` 标全部来源；`--type` 按条目类型过滤降噪；`--title/--author/--year/--container` 字段级过滤(与 query AND 叠加,各后端映射见下)；`--sort cited` 按被引数降序，table 显示 `[被引 N]` | 只读 |
-| `litcli related <key> [--limit N] [--backend openalex]` | **相关文献**：OpenAlex `related_works` 图谱(读父 work 内联 id 逐个取全量)；不支持的只读后端输出 `[跳过]` 退出码 2 | 只读 |
+| `litcli refs <key> [--limit N] [--sort cited] [--backend openalex]` | **参考文献(回溯找奠基)**：该文所引用的文献(OpenAlex `referenced_works`，并行拉取，默认按被引降序——把奠基文献按重要性排出来) | 只读 |
+| `litcli citing <key> [--limit N] [--sort cited] [--backend openalex]` | **引用该文的文献(前向找跟进)**：`/works?filter=cites:<W-id>` 单请求，默认按被引降序(重要跟进在前) | 只读 |
+| `litcli related <key> [--limit N] [--sort cited] [--backend openalex]` | **语义相关文献**：OpenAlex `related_works` 邻居；不支持的只读后端输出 `[跳过]` 退出码 2 | 只读 |
 | `litcli data get <id> [--format csl\|json]` | 单条全字段 | 只读 |
 | `litcli data add --title "..." [--creator "家族, 名字"]... [--year ..]` | 摄入元信息；写前过 `should_import` 查重/半残门，只读后端报 `[跳过]` | **写库** |
 | `litcli data add --pdf <file>` | 从 PDF 首页**启发式**抽候选，展示待核对后才写；不自动入库 | **写库** |

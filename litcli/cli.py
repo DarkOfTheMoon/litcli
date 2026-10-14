@@ -26,7 +26,7 @@ from . import unpaywall
 from . import fulltext as fulltext_mod
 from .config import get_all_backends, get_backend, load_config, write_backend_key
 from .models import AcademicItem
-from .aggregate import merge_items
+from .aggregate import _cited_key, merge_items
 from .citation import render_intext, render_bibliography
 from .backends.base import NotSupportedError
 
@@ -56,11 +56,17 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="按被引数降序排序(默认按年份降序)")
     p.add_argument("--no-cite", action="store_true", help="table 模式不显示 in-text 引文")
 
-    pr = sub.add_parser("related", help="返回与某条目相关的文献(引文图谱;仅 openalex 支持)")
-    pr.add_argument("key")
-    pr.add_argument("--backend", default="openalex", help="相关文献后端(默认 openalex;仅 openalex 实现)")
-    pr.add_argument("--limit", type=int, default=5)
-    pr.add_argument("--format", choices=["table", "json", "csl"], default="table")
+    for name, help_ in (("refs", "参考文献(bibliography):该文所引用的文献,回溯找奠基"),
+                        ("citing", "引用该文的文献(前向追踪,按被引降序)"),
+                        ("related", "语义相关文献(OpenAlex related_works,邻居)")):
+        pg = sub.add_parser(name, help=help_)
+        pg.add_argument("key")
+        pg.add_argument("--backend", default="openalex", help="后端(默认 openalex;仅 openalex 实现)")
+        pg.add_argument("--limit", type=int, default=5)
+        pg.add_argument("--format", choices=["table", "json", "csl"], default="table")
+        pg.add_argument("--sort", choices=["cited"], default=None,
+                        help="按被引数降序(默认 refs/citing 已按被引降序;此开关对 related 生效)")
+        pg.add_argument("--no-cite", action="store_true", help="table 模式不显示 in-text 引文")
 
     p = sub.add_parser("export", help="导出引文(只读,不碰 PDF)")
     p.add_argument("key", nargs="+", help="一个或多个条目 key")
@@ -156,6 +162,19 @@ def _present(item: AcademicItem, fmt: str = "table", no_cite: bool = False) -> s
     return line
 
 
+def _print_items(items: list[AcademicItem], fmt: str, no_cite: bool, empty_msg: str) -> int:
+    """Render a list of items (json/csl single-line blocks, or table rows) + ``empty_msg`` fallback."""
+    if fmt in ("json", "csl"):
+        for it in items:
+            print(_present(it, fmt, no_cite))
+        return 0
+    for it in items:
+        print(_present(it, "table", no_cite))
+    if not items:
+        print(empty_msg)
+    return 0
+
+
 def _search_filters(args) -> dict:
     """Collect the CLI search ``--title/--author/--year/--container`` into a filters dict (non-empty only)."""
     return {k: v for k, v in {
@@ -196,17 +215,9 @@ def cmd_search(cfg, args) -> int:
 
     # --sort cited: descending by citation count (default is merge's year/title order).
     if getattr(args, "sort", None) == "cited":
-        items = sorted(items, key=lambda it: -it.cited_by_count)
+        items = sorted(items, key=_cited_key)
 
-    if args.format in ("json", "csl"):
-        for it in items:
-            print(_present(it, args.format))
-        return 0
-    for it in items:
-        print(_present(it, "table", args.no_cite))
-    if not items:
-        print("[无结果]")
-    return 0
+    return _print_items(items, args.format, args.no_cite, "[无结果]")
 
 
 def _normalize_related_key(key: str) -> str:
@@ -224,16 +235,17 @@ def _normalize_related_key(key: str) -> str:
     return k
 
 
-def cmd_related(cfg, args) -> int:
-    """Citation graph: return works related to ``key`` (only backends that implement ``related``)."""
+_EDGE_METHODS = {"refs": "references", "citing": "citing", "related": "related"}
+
+
+def _cmd_edge(cfg, args, method: str) -> int:
+    """Shared edge-traversal command: dispatch ``method`` (references/citing/related) on one backend."""
     backend = get_backend(args.backend, cfg)
-    items = backend.related(_normalize_related_key(args.key), args.limit)  # 未实现抛 NotSupportedError(main 兜底)
-    if not items:
-        print("[无相关]")
-        return 0
-    for it in items:
-        print(_present(it, args.format))
-    return 0
+    # 未实现会抛 NotSupportedError(main 兜底)
+    items = getattr(backend, method)(_normalize_related_key(args.key), args.limit)
+    if args.sort == "cited":
+        items = sorted(items, key=_cited_key)
+    return _print_items(items, args.format, args.no_cite, "[无相关]")
 
 
 def cmd_get(cfg, args) -> int:
@@ -285,7 +297,7 @@ def cmd_data_add(cfg, args) -> int:
 
     # 查重/半残门(仅 --force 跳过)
     if not args.force:
-        from .aggregate import merge_items
+        from .aggregate import _cited_key, merge_items
         try:
             existing = backend.search(item.doi or item.title, limit=20)
         except Exception:
@@ -607,8 +619,8 @@ def main(argv=None) -> int:
     try:
         if args.cmd == "search":
             return cmd_search(cfg, args)
-        if args.cmd == "related":
-            return cmd_related(cfg, args)
+        if args.cmd in _EDGE_METHODS:
+            return _cmd_edge(cfg, args, _EDGE_METHODS[args.cmd])
         if args.cmd == "export":
             return cmd_export(cfg, args)
         if args.cmd == "backends":

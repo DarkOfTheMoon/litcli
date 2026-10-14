@@ -24,6 +24,7 @@ WORK = {
     "publisher": "Nature Publishing Group",
     "cited_by_count": 84467,
     "related_works": ["https://openalex.org/W2088845016", "https://openalex.org/W589102260"],
+    "referenced_works": ["https://openalex.org/W2088845016", "https://openalex.org/W589102260"],
 }
 RESULTS = {"results": [WORK]}
 
@@ -142,6 +143,58 @@ class OpenAlexStubTest(unittest.TestCase):
         self.assertIn("/doi:10.1038%2Fnature14539", urls[0])
         self.assertTrue(any("/works/W2088845016" in u for u in urls))
         self.assertTrue(any("/works/W589102260" in u for u in urls))
+
+    def test_references_parallel_and_cited_sorted(self):
+        # references:父 work 的 referenced_works 并行拉取,按被引降序截断(重要奠基在前)。
+        r1 = {"id": "https://openalex.org/W2088845016", "display_name": "R1",
+              "publication_year": 2019, "type": "article", "cited_by_count": 3}
+        r2 = {"id": "https://openalex.org/W589102260", "display_name": "R2",
+              "publication_year": 2020, "type": "article", "cited_by_count": 1}
+
+        from urllib.request import Request
+        def _resp_for(req: Request, *a, **kw):
+            u = req.full_url
+            if "W2088845016" in u:
+                return _Resp(r1)
+            if "W589102260" in u:
+                return _Resp(r2)
+            return _Resp(WORK)
+
+        with mock.patch("urllib.request.urlopen", side_effect=_resp_for) as m:
+            items = self.be.references("10.1038/nature14539", limit=2)
+        self.assertEqual([it.title for it in items], ["R1", "R2"])
+
+    def test_citing_uses_cites_filter_sorted(self):
+        # citing:filter=cites:<wid>&sort=cited_by_count:desc,单请求拿全量,无逐条拉取。
+        r1 = {"id": "https://openalex.org/W2088845016", "display_name": "C1",
+              "publication_year": 2016, "type": "article", "cited_by_count": 900}
+        r2 = {"id": "https://openalex.org/W589102260", "display_name": "C2",
+              "publication_year": 2017, "type": "article", "cited_by_count": 100}
+
+        from urllib.request import Request
+        def _resp_for(req: Request, *a, **kw):
+            u = req.full_url
+            if "filter=cites" in u:
+                return _Resp({"results": [r1, r2]})
+            return _Resp(WORK)
+
+        with mock.patch("urllib.request.urlopen", side_effect=_resp_for) as m:
+            items = self.be.citing("10.1038/nature14539", limit=2)
+        self.assertEqual(len(items), 2)
+        self.assertEqual([it.title for it in items], ["C1", "C2"])
+        cite_url = next(m.call_args_list[i][0][0].full_url
+                        for i in range(m.call_count) if "filter=cites" in m.call_args_list[i][0][0].full_url)
+        self.assertIn("filter=cites:W2919115771", cite_url)
+        self.assertIn("sort=cited_by_count:desc", cite_url)
+
+    def test_references_not_supported_on_other_backends(self):
+        # 非 openalex 只读后端对 references/citing 抛 NotSupportedError(CLI 兜底 [跳过])
+        from litcli.backends.crossref import CrossrefBackend
+        from litcli.backends.base import NotSupportedError
+        be = CrossrefBackend(mailto="t@e.com")
+        for method in ("references", "citing"):
+            with self.assertRaises(NotSupportedError):
+                getattr(be, method)("10.1/x", 5)
 
     def test_5xx_retries_then_success(self):
         from urllib.error import HTTPError
