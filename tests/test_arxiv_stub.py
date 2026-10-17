@@ -97,6 +97,37 @@ class ArxivStubTest(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 self.be.search("x")
 
+    def test_429_retries_then_succeeds(self):
+        # A rate-limit HTTP 429 must back off and retry, then succeed on a later attempt.
+        err = urllib.error.HTTPError("http://export.arxiv.org/api/query", 429,
+                                     "Rate exceeded.", None, None)
+        with mock.patch("urllib.request.urlopen", side_effect=[err, _Resp(ATOM)]) as m, \
+             mock.patch("litcli.backends.arxiv.time.sleep") as sleep:
+            items = self.be.search("x")
+        self.assertEqual(items[0].key, "2006.12345")
+        self.assertEqual(m.call_count, 2)
+        self.assertEqual(sleep.call_args[0][0], 2.0)  # first backoff is 2s
+
+    def test_429_exhausted_raises_clear_message(self):
+        err = urllib.error.HTTPError("http://export.arxiv.org/api/query", 429,
+                                     "Rate exceeded.", None, None)
+        with mock.patch("urllib.request.urlopen", side_effect=[err, err, err]) as m, \
+             mock.patch("litcli.backends.arxiv.time.sleep"):
+            with self.assertRaises(RuntimeError) as ctx:
+                self.be.search("x")
+        self.assertIn("arXiv rate-limited", str(ctx.exception))
+        self.assertEqual(m.call_count, 3)  # all retry attempts used
+
+    def test_ua_is_descriptive_and_contacts(self):
+        # arXiv expects a descriptive UA; mailto joins the polite pool and must be in the header.
+        be = ArxivBackend(name="arxiv", mailto="me@example.com")
+        with mock.patch("urllib.request.urlopen", return_value=_Resp(ATOM)) as m:
+            be.search("x")
+        req = m.call_args[0][0]
+        ua = [v for k, v in req.header_items() if k.lower() == "user-agent"][0]
+        self.assertIn("litcli/0.1", ua)
+        self.assertIn("me@example.com", ua)
+
 
 if __name__ == "__main__":
     unittest.main()

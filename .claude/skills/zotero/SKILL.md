@@ -38,6 +38,7 @@ description: 与用户学术资料互操作——检索、读取、导出引文�
 - **写库前先授权一次**：`litcli backends authorize zotero` → 本地弹框批准 → key 写入 `[backends.zotero].api_key`，此后写操作自动携带、不再弹框。未授权时 `data set/del/attach` 报 `HTTP 401`（退出码 2）。
 - Better BibTeX 未装：引文走 `export --format csljson` 喂 `pandoc --citeproc`，不依赖 BBT。
 - 读 PDF 全文需系统 `pdftotext`；只读后端（arxiv/crossref/openalex/uspto）的 `data` 写操作报 `[skipped]`。
+- arXiv 按 IP 限速：连发可能 `HTTP 429 Rate exceeded.`（已退避重试）；检索若失败，隔几秒再试，或给 `[backends.arxiv]` 配 `mailto`。
 
 ## 注意
 

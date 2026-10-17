@@ -51,7 +51,7 @@ PDF 全文抽取依赖系统 `pdftotext`（poppler-utils）；缺失时返回空
 
 - **crossref** → `query.title` / `query.author` / `query.container-title` / `filter=from-pub-date:YYYY-01-01,until-pub-date:YYYY-12-31`（与 `query.bibliographic` 并存，自动 AND）。
 - **openalex** → `filter=title.search:` / `raw_author_name.search:` / `publication_year:`；`container` 折叠进自由 `search`（`primary_location.source.display_name.search` 实测 400，非硬过滤）。
-- **arxiv** → `ti:` / `au:` / `submittedDate:[YYYY01010000 TO YYYY12312359]`，用 ` AND ` 拼 `search_query`。
+- **arxiv** → `ti:` / `au:` / `submittedDate:[YYYY01010000 TO YYYY12312359]`，用 ` AND ` 拼 `search_query`。按 IP 限速，连发可能 `HTTP 429 Rate exceeded.`，已按 2s/4s 退避重试；可配 `[backends.arxiv].mailto` 加入礼貌池。
 - **zotero** → 仅单 `q`，把字段词折进 `q`（配合 `qmode=everything` 全字段命中）；`--type` 保持后置过滤（跨后端语义统一）。
 
 被引数 `cited_by_count`：openalex `cited_by_count`、crossref `is-referenced-by-count`；`search` table 显示 `[cited N]`，`--sort cited` 按被引降序。
@@ -63,7 +63,7 @@ PDF 全文抽取依赖系统 `pdftotext`（poppler-utils）；缺失时返回空
 | 后端 | 能力 | 说明 |
 |---|---|---|
 | `zotero` | read / write / attachment | Zotero 10 本地 API（`localhost:23119/api`），免 zotero.org 的 Web API key；写库需一次运行时授权 |
-| `arxiv` | read / attachment | 开放 Atom API；可解析 PDF 直链，按 arXiv id（去 v 版本）归一化 |
+| `arxiv` | read / attachment | 开放 Atom API；可解析 PDF 直链，按 arXiv id（去 v 版本）归一化；按 IP 限速（429 退避重试 + 可配 mailto） |
 | `crossref` | read | DOI 开放元数据；5xx 指数退避重试 |
 | `openalex` | read | 学术图谱；摘要为倒排索引需重建；唯一实现引文图谱（refs/citing/related） |
 | `openlibrary` | read | 开放图书 `search.json`；默认不内置，显式启用 |

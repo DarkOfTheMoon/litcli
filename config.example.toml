@@ -12,6 +12,9 @@ base = "http://localhost:23119/api"      # 本机 Zotero 10 本地 API
 
 [backends.arxiv]
 type = "arxiv"                          # 联网,只读,无需 key
+# arXiv 开放 API 按 IP 限速,短时间连发会返回 HTTP 429 "Rate exceeded."(litcli 已按 2s/4s
+# 退避重试并给出明确提示)。填一个可联系邮箱可降低被限速概率;仅建议,无需真校验。
+# mailto = "you@example.com"
 
 [backends.crossref]
 type = "crossref"                       # 内置默认,无需 key

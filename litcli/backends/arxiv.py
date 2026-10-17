@@ -5,6 +5,7 @@ attachment). Items are normalized to AcademicItem by arXiv id (e.g. 2006.12345).
 """
 from __future__ import annotations
 
+import time
 import re
 import urllib.error
 import urllib.parse
@@ -20,6 +21,10 @@ _NS = {"a": "http://www.w3.org/2005/Atom",
 
 _API = "https://export.arxiv.org/api/query"
 _PDF = "https://arxiv.org/pdf"
+
+# arXiv's API rate-limits per IP and (2023+) expects a descriptive user-agent; a bare/generic
+# UA or a burst can get a 429 "Rate exceeded."  We retry throttle/5xx with backoff and say so.
+_RETRYABLE = frozenset({429, 500, 502, 503, 504})
 
 
 def _short_id(eid: str) -> str:
@@ -61,28 +66,49 @@ def _entry_to_item(e: ET.Element) -> AcademicItem:
 
 
 class ArxivBackend(Backend):
-    def __init__(self, name: str = "arxiv", max_results: int = 10):
+    def __init__(self, name: str = "arxiv", max_results: int = 10, mailto: str = ""):
         self.name = name
         self._max = max_results
+        self._mailto = mailto
 
     @property
     def capabilities(self) -> set[str]:
         return {"read", "attachment"}  # read-only, but can pull PDF direct links
 
+    def _ua(self) -> str:
+        """A descriptive user-agent (arXiv expects tool + contact); mailto helps polite-pool pacing."""
+        contact = f"; mailto:{self._mailto}" if self._mailto else ""
+        return f"litcli/0.1 (academic search CLI{contact})"
+
+    def _error_message(self, code: int, reason: str) -> str:
+        if code == 429:
+            return (f"[{self.name}] arXiv rate-limited (HTTP 429): the API is throttling this network; "
+                    f"wait a moment and retry, or set a mailto in [backends.arxiv] to join the polite pool")
+        return f"[{self.name}] arXiv request failed HTTP {code}: {reason}"
+
     def _query(self, search_query: str, limit: int) -> list[AcademicItem]:
         params = urllib.parse.urlencode({"search_query": search_query, "max_results": limit})
         url = f"{_API}?{params}"
         req = urllib.request.Request(url, headers={
-            "User-Agent": "litcli/0.1 (research protocol)",
+            "User-Agent": self._ua(),
             "Accept": "application/atom+xml",
         })
-        try:
-            with urllib.request.urlopen(req, timeout=25) as resp:
-                xml = resp.read()
-        except urllib.error.HTTPError as e:
-            raise RuntimeError(f"[{self.name}] arXiv request failed HTTP {e.code}: {e.reason}") from e
-        except urllib.error.URLError as e:
-            raise RuntimeError(f"[{self.name}] arXiv unreachable: {e.reason}") from e
+        last = None
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(req, timeout=25) as resp:
+                    xml = resp.read()
+                break
+            except urllib.error.HTTPError as e:
+                if e.code in _RETRYABLE and attempt < 2:
+                    time.sleep(2.0 * (attempt + 1))  # arXiv caps ~1 req/3s: back off on throttle/5xx
+                    last = e
+                    continue
+                raise RuntimeError(self._error_message(e.code, e.reason)) from e
+            except urllib.error.URLError as e:
+                raise RuntimeError(f"[{self.name}] arXiv unreachable: {e.reason}") from e
+        else:
+            raise RuntimeError(self._error_message(last.code, getattr(last, "reason", ""))) from last
         root = ET.fromstring(xml)
         return [_entry_to_item(e) for e in root.findall("a:entry", _NS)]
 
