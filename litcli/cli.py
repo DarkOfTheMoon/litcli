@@ -29,7 +29,7 @@ from . import unpaywall
 from . import fulltext as fulltext_mod
 from .config import get_all_backends, get_backend, load_config, write_backend_key
 from .models import AcademicItem
-from .aggregate import _cited_key, merge_items
+from .aggregate import cited_key, merge_items
 from .citation import render_intext, render_bibliography
 from .completions import SHELL_CHOICES, build_spec, render as render_completion
 from .backends.base import NotSupportedError
@@ -108,6 +108,7 @@ def _build_parser() -> argparse.ArgumentParser:
     dp.add_argument("--url", default="")
     dp.add_argument("--abstract", default="")
     dp.add_argument("--force", action="store_true", help="skip dedup / completeness gate and write directly")
+    dp.add_argument("--yes", action="store_true", help="skip the interactive confirmation prompt (for --pdf; --force already implies this)")
     _add_common_backend(dp)
 
     dp = dsub.add_parser("set", help="modify item fields")
@@ -204,9 +205,9 @@ def cmd_search(cfg, args) -> int:
                 items.extend(b.search(args.query, limit=args.limit, filters=filters))
             except NotImplementedError:
                 continue
-            except (RuntimeError, urllib.error.URLError, OSError) as e:
-                # A single backend failure (not connected / HTTP error / timeout) must not
-                # bring down the whole aggregation; skip and continue.
+            except (RuntimeError, urllib.error.URLError, OSError, ValueError, SyntaxError) as e:
+                # A single backend failure (not connected / HTTP error / timeout / non-JSON body /
+                # malformed XML) must not bring down the whole aggregation; skip and continue.
                 print(f"[skipped] backend {name}: {e}", file=sys.stderr)
                 continue
     else:
@@ -225,7 +226,7 @@ def cmd_search(cfg, args) -> int:
 
     # --sort cited: descending by citation count (default is merge's year/title order).
     if getattr(args, "sort", None) == "cited":
-        items = sorted(items, key=_cited_key)
+        items = sorted(items, key=cited_key)
 
     return _print_items(items, args.format, args.no_cite, "[no results]")
 
@@ -273,7 +274,9 @@ def cmd_data_add(cfg, args) -> int:
     """Ingest metadata (``data add --title..`` / ``--csl``) or metadata + fulltext (``data add --pdf``).
 
     The only write entry point for metadata: with ``--pdf`` it extracts candidates heuristically,
-    shows them for review, and writes only on user confirmation / ``--force``.
+    shows them for review, and writes only after an interactive confirmation. ``--force`` skips the
+    dedup / completeness gate; ``--yes`` skips the interactive prompt (both together let you write
+    without any prompt).
     Written entries pass the ``should_import`` dedup / completeness gate to prevent the local
     store from exploding.
     """
@@ -317,6 +320,18 @@ def cmd_data_add(cfg, args) -> int:
         if not ok:
             print(f"[skipped] {reason}")
             print("  To force-add, use --force")
+            return 2
+
+    # Heuristic metadata (--pdf) is noisy: confirm before mutating the library, unless --yes/--force.
+    # In a non-interactive context (no TTY, piped) input() raises EOFError -> cancel (safe default).
+    if args.pdf and not (args.force or args.yes):
+        print("  Confirm writing this item to the library? [y/N]", end=" ", flush=True)
+        try:
+            answer = input().strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = "n"
+        if answer not in ("y", "yes"):
+            print("[skipped] user cancelled")
             return 2
 
     key = backend.add(item)
@@ -499,7 +514,8 @@ def cmd_fetch_fulltext(cfg, args) -> int:
     """Locate legitimate fulltext by DOI: local store (first) → Unpaywall → OpenAlex; if none, point the user elsewhere."""
     email = _resolve_oa_email(cfg, args)
     backends = get_all_backends(cfg)
-    info = fulltext_mod.resolve_fulltext(args.doi, email, backends=backends)
+    info = fulltext_mod.resolve_fulltext(args.doi, email, backends=backends,
+                                         openalex_backend=backends.get("openalex"))
     if not info.get("has_fulltext"):
         print(f"DOI {args.doi}  no such work in the local store or open OA sources")
         print("  Use institutional access / interlibrary loan / a proxy; this CLI does not bypass paywalls.")
@@ -637,9 +653,9 @@ def _apply_proxy(cfg: dict) -> None:
 
 def main(argv=None) -> int:
     args = _build_parser().parse_args(argv)
-    cfg = load_config()
-    _apply_proxy(cfg)
     try:
+        cfg = load_config()
+        _apply_proxy(cfg)
         if args.cmd == "search":
             return cmd_search(cfg, args)
         if args.cmd in _EDGE_METHODS:
@@ -669,8 +685,11 @@ def main(argv=None) -> int:
     except KeyError as e:
         print(f"[error] {e}")
         return 2
-    except RuntimeError as e:
-        # Backend business errors (HTTP 401/404/timeout, etc.) are surfaced gracefully, not as a stack trace.
+    except (RuntimeError, ValueError, SyntaxError, OSError) as e:
+        # Backend business errors (HTTP 401/404/timeout) and data-shape failures (non-JSON response,
+        # malformed XML, config TOML syntax) are surfaced gracefully, never as a raw stack trace.
+        # (json.JSONDecodeError -> ValueError, ET.ParseError -> SyntaxError, TOMLDecodeError -> ValueError,
+        #  URLError -> OSError.)
         print(f"[error] {e}")
         return 2
 

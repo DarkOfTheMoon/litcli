@@ -11,14 +11,15 @@ import concurrent.futures
 import http.client
 import json
 import re
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
-from ..aggregate import _cited_key
+from ..aggregate import cited_key
 from ..models import AcademicItem
-from .base import Backend
+from .base import Backend, retry_json
 
 _API = "https://api.openalex.org/works"
 
@@ -69,6 +70,12 @@ def _oa_pdf(rec: dict) -> list[str]:
     return [pdf] if pdf else []
 
 
+def _oa_landing(rec: dict) -> str:
+    """The work's canonical landing page (best_oa_location/primary_location), if any."""
+    loc = rec.get("best_oa_location") or rec.get("primary_location") or {}
+    return loc.get("landing_page_url") or ""
+
+
 def _bare_doi(value: str) -> str:
     """OpenAlex's doi is a full URL (https://doi.org/10.x); strip it to a bare DOI for identity keys/export."""
     d = (value or "").strip()
@@ -103,6 +110,9 @@ def _work_to_item(rec: dict, source: str = "openalex") -> AcademicItem:
     doi = _bare_doi(rec.get("doi") or "")
     title = rec.get("display_name", "") or ""
     volume, issue, page = _biblio(rec)
+    # ``url`` is a real resolvable landing URL (consistently with the other backends), not a bare
+    # DOI: prefer https://doi.org/<doi>, then the OA landing page, then the work's openalex.org page.
+    url = f"https://doi.org/{doi}" if doi else (_oa_landing(rec) or rec.get("id", ""))
     return AcademicItem(
         source=source,
         key=doi,
@@ -111,7 +121,7 @@ def _work_to_item(rec: dict, source: str = "openalex") -> AcademicItem:
         year=str(rec.get("publication_year") or ""),
         abstract=_inverted_to_text(rec.get("abstract_inverted_index")),
         doi=doi,
-        url=doi or "",
+        url=url,
         container_title=_journal_name(rec),
         volume=volume,
         issue=issue,
@@ -125,13 +135,37 @@ def _work_to_item(rec: dict, source: str = "openalex") -> AcademicItem:
     )
 
 
+class _RateLimiter:
+    """Spacing limiter: at least ``min_interval`` seconds between successive ``wait`` calls.
+
+    Thread-safe (a lock guards the schedule). The first call does not block, so a single
+    interactive request is unthrottled; a parallel batch (like ``_fetch_works``) is spaced out.
+    """
+
+    def __init__(self, min_interval: float):
+        self._min = min_interval
+        self._lock = threading.Lock()
+        self._next = 0.0
+
+    def wait(self) -> None:
+        with self._lock:
+            now = time.monotonic()
+            delay = self._next - now
+            if delay > 0:
+                time.sleep(delay)
+                now = time.monotonic()
+            self._next = max(now, self._next) + self._min
+
+
 class OpenAlexBackend(Backend):
     def __init__(self, name: str = "openalex", mailto: str = "",
-                 base: str = _API, max_results: int = 10):
+                 base: str = _API, max_results: int = 10, rate_per_sec: float = 10.0):
         self.name = name
         self._base = base.rstrip("/")
         self._mailto = mailto
         self._max = max_results
+        # Polite-pool pacing: cap the request rate so parallel graph fetches don't throttle/ban us.
+        self._limiter = _RateLimiter(1.0 / rate_per_sec if rate_per_sec > 0 else 0.0)
 
     @property
     def capabilities(self) -> set[str]:
@@ -144,28 +178,9 @@ class OpenAlexBackend(Backend):
         }
 
     def _get(self, url: str) -> dict:
-        """GET and parse JSON; do limited exponential-backoff retries on 5xx / network errors."""
-        req = urllib.request.Request(url, headers=self._headers())
-        last: RuntimeError | None = None
-        for attempt in range(3):
-            try:
-                with urllib.request.urlopen(req, timeout=25) as r:
-                    return json.loads(r.read())
-            except urllib.error.HTTPError as e:
-                err = RuntimeError(f"[{self.name}] HTTP {e.code}: {e.reason}")
-                if e.code >= 500 and attempt < 2:
-                    time.sleep(0.5 * (attempt + 1))
-                    last = err
-                    continue
-                raise err from e
-            except urllib.error.URLError as e:
-                err = RuntimeError(f"[{self.name}] unreachable: {e.reason}")
-                if attempt < 2:
-                    time.sleep(0.5 * (attempt + 1))
-                    last = err
-                    continue
-                raise err from e
-        raise last  # pragma: no cover - already raised inside the loop
+        """GET, pacing the polite-pool request rate, then parse with 5xx/network retries."""
+        self._limiter.wait()
+        return retry_json(url, self._headers(), self.name, timeout=25)
 
     def _with_mailto(self, url: str) -> str:
         """Append the polite ``&mailto=`` param (OpenAlex asks for it) to a URL."""
@@ -257,7 +272,7 @@ class OpenAlexBackend(Backend):
         ids = [_wid(r) for r in (rec.get(field) or [])]
         if sort_cited:
             items = self._fetch_works(ids)
-            items.sort(key=_cited_key)
+            items.sort(key=cited_key)
             return items[:limit]
         return self._fetch_works(ids[:limit])[:limit]
 

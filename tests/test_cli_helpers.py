@@ -96,5 +96,53 @@ class PrintItemsTest(unittest.TestCase):
         self.assertEqual(buf.getvalue().strip(), "[]")
 
 
+class MainCatchTest(unittest.TestCase):
+    def test_config_syntax_error_surfaces_as_error(self):
+        # A malformed config.toml (TOMLDecodeError) must surface as [error] exit 2, never a traceback.
+        import contextlib, io, tomllib
+        from unittest import mock
+        import litcli.cli as cli
+
+        with mock.patch("litcli.cli.load_config", side_effect=tomllib.TOMLDecodeError("bad config")), \
+             mock.patch("litcli.cli._apply_proxy"):
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = cli.main(["search", "x"])
+        self.assertEqual(rc, 2)
+        self.assertIn("[error]", buf.getvalue())
+        self.assertNotIn("Traceback", buf.getvalue())
+
+    def test_search_all_skips_valueerror_backend(self):
+        # A single backend returning a non-JSON body (ValueError) must be skipped, not crash --all.
+        import argparse, contextlib, io
+        from unittest import mock
+        from litcli.cli import cmd_search
+        from litcli.models import AcademicItem
+
+        class _Raises:
+            def __init__(self, name="bad"):
+                self.name = name
+            def search(self, *a, **k):
+                raise ValueError("non-JSON body")
+
+        class _Ok:
+            def __init__(self, name="ok"):
+                self.name = name
+            def search(self, *a, **k):
+                return [AcademicItem(source="ok", key="k", title="Good", year="2020")]
+
+        args = argparse.Namespace(all=True, query="x", limit=10, format="table",
+                                  no_cite=False, type=None, sort=None, backend="zotero",
+                                  title=None, author=None, year=None, container=None)
+        out = io.StringIO()
+        err = io.StringIO()
+        with mock.patch("litcli.cli.get_all_backends", return_value={"bad": _Raises(), "ok": _Ok()}):
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = cmd_search({}, args)
+        self.assertEqual(rc, 0)
+        self.assertIn("[skipped]", err.getvalue())
+        self.assertIn("Good", out.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -151,6 +151,8 @@ def write_backend_key(name: str, key: str, path: str | Path | None = None) -> Pa
     text = _upsert_key(text, f"backends.{name}", "api_key", _toml_string(key))
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
+    # The file now holds a credential (api_key); keep it readable only by the owner.
+    os.chmod(path, 0o600)
     return path
 
 

@@ -22,7 +22,7 @@ description: 与用户学术资料互操作——检索、读取、导出引文�
 | 导出引文 | `litcli export <key> [--format csljson\|bibtex\|ris\|text]`（arXiv key 如 `arxiv/1806.09180` 自动归一为 DOI；csljson/bibtex 含期刊名/卷/页/出版社） | 只读 |
 | 定位合法全文 | `litcli fetch fulltext <doi> [--download]` 本地→OA→指路(绕不过付费墙) | 只读 |
 | **新增(元信息)** | `litcli data add --title "..." --creator "家族, 名字" --year 2002 [--doi ...]` | **写库** |
-| **新增(从 PDF)** | `litcli data add --pdf <file>` 抽启发式候选→展示→人工核对后写 | **写库** |
+| **新增(从 PDF)** | `litcli data add --pdf <file>` 抽启发式候选→展示→**交互确认(y/N)**→写；`--yes` 跳过确认 | **写库** |
 | 修改 | `litcli data set <key> --title "..." [--year ...]` | **写库** |
 | 删除 | `litcli data del <key>` | **写库** |
 | 挂全文附件 | `litcli data attach <key> <本地路径\|URL>` | **写库** |
@@ -43,5 +43,5 @@ description: 与用户学术资料互操作——检索、读取、导出引文�
 
 - `data add` 返回新 key；写库仅对可写后端（zotero）成功，其余报错并退出码 2。
 - `data add` 写前过 `should_import` 查重/半残门：同 DOI/题已存在、或缺标题/缺作者且缺年份 → 拒绝，需 `--force` 覆盖。
-- `data add --pdf` 是**启发式**候选，结果请人工核对后再写，勿盲目入库。
+- `data add --pdf` 是**启发式**候选，写前会交互确认（y/N）请核对；非交互/脚本用 `--yes` 跳过确认。勿盲目入库。
 - 跨后端聚合字段对齐用 `--all`；无 `--all` 默认仅 zotero。

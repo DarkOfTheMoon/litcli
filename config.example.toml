@@ -1,5 +1,6 @@
 # litcli 配置示例(复制到 ~/.config/litcli/config.toml)
-# 任一缺省时回退到内置默认:本机 Zotero + arXiv(开箱即用,无需本文件)。
+# 任一缺省时回退到内置默认:本机 Zotero + arXiv + Crossref + OpenAlex(开箱即用,无需本文件)。
+# 下列 [backends.*] 段用于显式覆盖默认 / 启用可选后端(openlibrary / uspto)。
 
 [backends.zotero]
 type = "zotero_local"
@@ -11,6 +12,15 @@ base = "http://localhost:23119/api"      # 本机 Zotero 10 本地 API
 
 [backends.arxiv]
 type = "arxiv"                          # 联网,只读,无需 key
+
+[backends.crossref]
+type = "crossref"                       # 内置默认,无需 key
+
+[backends.openalex]
+type = "openalex"                       # 内置默认,无需 key
+# OpenAlex polite pool:库是免费城域,填一个可联系的邮箱可提升稳定/速率上限。
+# 开着即可(无需真校验);请求以 ~10 req/s 限速,并随每请求附 mailto 参数。
+# mailto = "you@example.com"
 
 # 可选:开放图书数据库(书籍元数据)。默认不内置;需要时取消注释启用。
 # 部分网络环境对 openlibrary.org / googleapis.com 无路由,若搜图书无响应请自查连通性。

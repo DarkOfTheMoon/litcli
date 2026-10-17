@@ -75,6 +75,19 @@ class OpenAlexStubTest(unittest.TestCase):
         self.assertEqual(it.doi, "10.1038/nature14539")
         self.assertNotIn("https://doi.org/", it.doi)
 
+    def test_url_is_real_landing_not_bare_doi(self):
+        # url must be a resolvable URL (consistent with other backends), not a bare DOI string.
+        with mock.patch("urllib.request.urlopen", return_value=_Resp(RESULTS)):
+            it = self.be.search("deep learning", limit=1)[0]
+        self.assertEqual(it.url, "https://doi.org/10.1038/nature14539")
+
+    def test_url_falls_back_to_oa_landing_when_no_doi(self):
+        no_doi = dict(WORK, doi="")
+        no_doi["best_oa_location"]["landing_page_url"] = "https://example.com/landing"
+        with mock.patch("urllib.request.urlopen", return_value=_Resp({"results": [no_doi]})):
+            it = self.be.search("deep learning", limit=1)[0]
+        self.assertEqual(it.url, "https://example.com/landing")
+
     def test_container_volume_page_populated(self):
         with mock.patch("urllib.request.urlopen", return_value=_Resp(RESULTS)):
             it = self.be.search("deep learning", limit=1)[0]

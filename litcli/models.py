@@ -6,6 +6,7 @@ export, and citation rendering.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field, asdict
 
 
@@ -43,13 +44,18 @@ class AcademicItem:
         csl: dict = {
             "type": self.item_type or "document",
             "title": self.title,
-            "author": list(self.creators),
+            "author": self._csl_authors(),
         }
         year = self.year.strip()
         if year:
-            # CSL uses date-parts: [[year, month, day]]
+            # CSL uses date-parts: [[year, month, day]]; "2020-03-12" splits into components,
+            # but a non-numeric year ("2020 (in press)") must not crash the export.
             parts = [int(p) for p in year.split("-")[:3] if p.isdigit()]
-            csl["issued"] = {"date-parts": [parts or [int(year)]]}
+            if not parts:
+                m = re.search(r"(?:19|20)\d{2}", year)
+                parts = [int(m.group(0))] if m else []
+            if parts:
+                csl["issued"] = {"date-parts": [parts]}
         if self.abstract:
             csl["abstract"] = self.abstract
         if self.container_title:
@@ -74,7 +80,7 @@ class AcademicItem:
         """Export to BibTeX (fallback formatting without BBT): multi-line, with journal/volume/issue/pages/publisher."""
         entry = self._bibtex_type()
         fid = self.key or self._default_id().replace(":", "")
-        out = [f"@{entry}{{{fid},", f"  title   = {{{self.title}}},"]
+        out = [f"@{entry}{{{fid},", f"  title   = {{{self._one_line(self.title)}}},"]
         if self.creators:
             out.append(f"  author  = {{{' and '.join(self._author_str(a) for a in self.creators)}}},")
         if self.year:
@@ -82,7 +88,7 @@ class AcademicItem:
         # journal name goes in journal (article/paper-conference); book/chapter container in booktitle
         if self.container_title:
             container_key = "booktitle" if self.item_type in ("chapter", "book") else "journal"
-            out.append(f"  {container_key} = {{{self.container_title}}},")
+            out.append(f"  {container_key} = {{{self._one_line(self.container_title)}}},")
         if self.volume:
             out.append(f"  volume  = {{{self.volume}}},")
         if self.issue:
@@ -90,7 +96,7 @@ class AcademicItem:
         if self.page:
             out.append(f"  pages   = {{{self.page}}},")
         if self.publisher:
-            out.append(f"  publisher = {{{self.publisher}}},")
+            out.append(f"  publisher = {{{self._one_line(self.publisher)}}},")
         if self.doi:
             out.append(f"  doi     = {{{self.doi}}},")
         if self.url:
@@ -104,15 +110,21 @@ class AcademicItem:
               "patent": "PAT", "thesis": "THES", "report": "RPRT"}.get(self.item_type, "GEN")
         lines = [f"TY  - {ty}"]
         for c in self.creators:
+            lit = c.get("literal", "")
             fam = c.get("family", "")
             giv = c.get("given", "")
-            lines.append(f"AU  - {fam}, {giv}" if giv else f"AU  - {fam}")
+            if lit:
+                lines.append(f"AU  - {lit}")
+            elif giv:
+                lines.append(f"AU  - {fam}, {giv}")
+            else:
+                lines.append(f"AU  - {fam}")
         if self.year:
             lines.append(f"PY  - {self.year}")
         if self.title:
-            lines.append(f"TI  - {self.title}")
+            lines.append(f"TI  - {self._one_line(self.title)}")
         if self.container_title:
-            lines.append(f"JF  - {self.container_title}")
+            lines.append(f"JF  - {self._one_line(self.container_title)}")
         if self.volume:
             lines.append(f"VL  - {self.volume}")
         if self.issue:
@@ -122,9 +134,10 @@ class AcademicItem:
             if ep:
                 lines.append(f"EP  - {ep}")
         if self.publisher:
-            lines.append(f"PB  - {self.publisher}")
+            lines.append(f"PB  - {self._one_line(self.publisher)}")
         if self.abstract:
-            lines.append(f"AB  - {self.abstract}")
+            # A multi-line abstract must not leak a bare line into a line-oriented record.
+            lines.append(f"AB  - {self._one_line(self.abstract)}")
         if self.doi:
             lines.append(f"DO  - {self.doi}")
         if self.url:
@@ -173,9 +186,39 @@ class AcademicItem:
 
     @staticmethod
     def _author_str(a: dict) -> str:
+        if a.get("literal"):
+            return a.get("literal", "")
         given = a.get("given", "")
         family = a.get("family", "")
         return f"{family}, {given}".strip(", ")
+
+    def _csl_authors(self) -> list[dict]:
+        """Normalize creators to CSL author objects: keep only family/given/literal and drop malformed entries.
+
+        A creator may arrive as a dict with a ``literal`` (non-person agent, e.g. an institution) or
+        with unexpected keys; CSL only understands ``family``/``given``/``literal``. Emitting the raw
+        dict would produce a malformed ``author`` array.
+        """
+        out = []
+        for a in self.creators:
+            if not isinstance(a, dict):
+                continue
+            if a.get("literal"):
+                out.append({"literal": a["literal"]})
+            else:
+                norm = {}
+                if a.get("family"):
+                    norm["family"] = a["family"]
+                if a.get("given"):
+                    norm["given"] = a["given"]
+                if norm:
+                    out.append(norm)
+        return out
+
+    @staticmethod
+    def _one_line(value: str) -> str:
+        """Collapse whitespace (incl. embedded newlines/tabs) to single spaces for line-oriented formats."""
+        return " ".join((value or "").split())
 
     def _page_range(self) -> list[tuple[str, str]]:
         """Split a page string into (start, end) pairs for RIS SP/EP."""

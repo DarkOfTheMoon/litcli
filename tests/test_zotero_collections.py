@@ -119,6 +119,21 @@ class ZoteroCollectionsStubTest(unittest.TestCase):
         for it in items:
             self.assertIn("collections", it.extra)
 
+    def test_non_recursive_skips_collection_tree(self):
+        # `data members <coll> --no-recursive` only needs this collection's direct members, so it
+        # must not paginate the collection tree (a real cost on a large library with many collections).
+        from unittest import mock
+        calls = []
+
+        def fake_paginate(path, params, size=100):
+            calls.append(path)
+            return COLLECTIONS if "/collections" in path else ITEMS
+
+        with mock.patch.object(self.be, "_paginate", side_effect=fake_paginate):
+            items = self.be.collection_items("R1", recursive=False)
+        self.assertEqual({it.key for it in items}, {"A"})
+        self.assertFalse(any("/collections" in p for p in calls))
+
 
 class ZoteroSearchParseTest(unittest.TestCase):
     def setUp(self):

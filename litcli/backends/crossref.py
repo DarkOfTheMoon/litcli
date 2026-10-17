@@ -14,7 +14,7 @@ import urllib.parse
 import urllib.request
 
 from ..models import AcademicItem
-from .base import Backend
+from .base import Backend, retry_json
 
 _API = "https://api.crossref.org/works"
 
@@ -106,27 +106,7 @@ class CrossrefBackend(Backend):
     def _get(self, url: str) -> dict:
         """GET and parse JSON; do limited exponential-backoff retries on 5xx / network errors
         (Crossref occasionally 5xxs)."""
-        req = urllib.request.Request(url, headers=self._headers())
-        last: RuntimeError | None = None
-        for attempt in range(3):
-            try:
-                with urllib.request.urlopen(req, timeout=25) as r:
-                    return json.loads(r.read())
-            except urllib.error.HTTPError as e:
-                err = RuntimeError(f"[{self.name}] HTTP {e.code}: {e.reason}")
-                if e.code >= 500 and attempt < 2:
-                    time.sleep(0.5 * (attempt + 1))
-                    last = err
-                    continue
-                raise err from e
-            except urllib.error.URLError as e:
-                err = RuntimeError(f"[{self.name}] unreachable: {e.reason}")
-                if attempt < 2:
-                    time.sleep(0.5 * (attempt + 1))
-                    last = err
-                    continue
-                raise err from e
-        raise last  # pragma: no cover - already raised inside the loop
+        return retry_json(url, self._headers(), self.name, timeout=25)
 
     def search(self, query: str, limit: int = 10, filters: dict | None = None) -> list[AcademicItem]:
         filters = self._filters(filters)

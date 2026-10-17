@@ -92,8 +92,9 @@ def _year_key(year: str) -> int:
     return -int(year) if year.isdigit() else 0
 
 
-def _cited_key(item: AcademicItem) -> int:
-    """Citation-count descending sort key (treats no-citation records as 0)."""
+def cited_key(item: AcademicItem) -> int:
+    """Citation-count descending sort key (treats no-citation records as 0). Public so backends
+    and the CLI can rank by citation without importing a private symbol."""
     return -item.cited_by_count
 
 

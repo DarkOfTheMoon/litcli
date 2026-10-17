@@ -12,7 +12,7 @@ import urllib.parse
 import urllib.request
 
 from ..models import AcademicItem
-from .base import Backend
+from .base import Backend, retry_json
 
 _SEARCH = "https://openlibrary.org/search.json"
 _SITE = "https://openlibrary.org"
@@ -62,27 +62,7 @@ class OpenLibraryBackend(Backend):
         return {"User-Agent": "litcli/0.1 (library research)", "Accept": "application/json"}
 
     def _get(self, url: str) -> dict:
-        req = urllib.request.Request(url, headers=self._headers())
-        last: RuntimeError | None = None
-        for attempt in range(3):
-            try:
-                with urllib.request.urlopen(req, timeout=20) as r:
-                    return json.loads(r.read())
-            except urllib.error.HTTPError as e:
-                err = RuntimeError(f"[{self.name}] HTTP {e.code}: {e.reason}")
-                if e.code >= 500 and attempt < 2:
-                    time.sleep(0.5 * (attempt + 1))
-                    last = err
-                    continue
-                raise err from e
-            except urllib.error.URLError as e:
-                err = RuntimeError(f"[{self.name}] unreachable: {e.reason}")
-                if attempt < 2:
-                    time.sleep(0.5 * (attempt + 1))
-                    last = err
-                    continue
-                raise err from e
-        raise last  # pragma: no cover - already raised inside the loop
+        return retry_json(url, self._headers(), self.name, timeout=20)
 
     def search(self, query: str, limit: int = 10, filters: dict | None = None) -> list[AcademicItem]:
         # Book search is a single ``q``; field words fold into free-text (secondary backend).

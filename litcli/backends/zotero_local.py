@@ -312,24 +312,30 @@ class ZoteroLocalBackend(Backend):
         expanding the collection tree). Returns normalized AcademicItems (attachments excluded, and
         carries extra["collections"] = the list of collection keys).
         """
-        # 1) Collection tree: build the parent->child map and the full descendant set for any key
-        nodes = self.collection_tree()
-        children: dict[str, list[str]] = {}
-        for n in nodes:
-            children.setdefault(n["parent"], []).append(n["key"])
+        # 1) Resolve the target set of collection keys. Only when recursive do we need the tree:
+        # computing descendants requires the parent->child map, and that map costs a full
+        # collection-tree pagination. For a non-recursive listing of one collection's direct members
+        # we can skip that entirely (a real saving on a large-library `data members --no-recursive`).
+        if recursive:
+            nodes = self.collection_tree()
+            children: dict[str, list[str]] = {}
+            for n in nodes:
+                children.setdefault(n["parent"], []).append(n["key"])
 
-        def descendants(root: str) -> set[str]:
-            out: set[str] = set()
-            stack = [root]
-            while stack:
-                k = stack.pop()
-                if k in out:
-                    continue
-                out.add(k)
-                stack.extend(children.get(k, []))
-            return out
+            def descendants(root: str) -> set[str]:
+                out: set[str] = set()
+                stack = [root]
+                while stack:
+                    k = stack.pop()
+                    if k in out:
+                        continue
+                    out.add(k)
+                    stack.extend(children.get(k, []))
+                return out
 
-        target = descendants(coll_key) if recursive else {coll_key}
+            target = descendants(coll_key)
+        else:
+            target = {coll_key}
 
         # 2) Paginate the whole library's items (excluding attachments), attribute locally via the collections field
         collected: list[AcademicItem] = []

@@ -17,6 +17,7 @@ from __future__ import annotations
 import urllib.error
 
 from . import unpaywall
+from .aggregate import norm_doi
 from .models import AcademicItem
 
 # A resolver: takes a doi, returns a candidate dict or None.
@@ -27,7 +28,8 @@ Resolver = callable
 
 
 def _norm_doi(d: str) -> str:
-    return (d or "").strip().lower()
+    """Normalize a DOI consistently with aggregate.norm_doi (strip doi.org prefix, case, trailing dots)."""
+    return norm_doi(d)
 
 
 def _from_local(doi: str, backends: dict | None = None) -> dict | None:
@@ -67,15 +69,12 @@ def _from_unpaywall(doi: str, email: str) -> dict | None:
             "status": info.get("oa_status", "")}
 
 
-def _from_openalex(doi: str, email: str) -> dict | None:
-    """OpenAlex best_oa_location.pdf_url (the aggregated OA direct link)."""
-    try:
-        from .backends import openalex
-    except ImportError:
+def _from_openalex(doi: str, backend) -> dict | None:
+    """OpenAlex best_oa_location.pdf_url via an injected OA backend (domain stays backend-agnostic)."""
+    if backend is None:
         return None
     try:
-        b = openalex.OpenAlexBackend(mailto=email)
-        item: AcademicItem = b.get(doi)
+        item: AcademicItem = backend.get(doi)
     except (RuntimeError, urllib.error.URLError, OSError, KeyError):
         return None
     if item.attachments:
@@ -84,16 +83,18 @@ def _from_openalex(doi: str, email: str) -> dict | None:
     return None
 
 
-def _default_resolvers(email: str, backends: dict | None = None) -> list[Resolver]:
+def _default_resolvers(email: str, backends: dict | None = None,
+                       openalex_backend=None) -> list[Resolver]:
     return [
         lambda d: _from_local(d, backends),
         lambda d: _from_unpaywall(d, email),
-        lambda d: _from_openalex(d, email),
+        lambda d: _from_openalex(d, openalex_backend),
     ]
 
 
 def resolve_fulltext(doi: str, email: str = unpaywall.DEFAULT_EMAIL,
                      backends: dict | None = None,
+                     openalex_backend=None,
                      resolvers: list[Resolver] | None = None) -> dict:
     """Find legitimate fulltext by DOI, priority: local store → OA sources.
 
@@ -102,7 +103,7 @@ def resolve_fulltext(doi: str, email: str = unpaywall.DEFAULT_EMAIL,
     reasons, for the CLI to point the user elsewhere).
     """
     if resolvers is None:
-        resolvers = _default_resolvers(email, backends)
+        resolvers = _default_resolvers(email, backends, openalex_backend)
     errors: list[str] = []
     for r in resolvers:
         try:

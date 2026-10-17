@@ -33,7 +33,7 @@ PDF 全文抽取依赖系统 `pdftotext`（poppler-utils）；缺失时返回空
 | `litcli related <key> [--limit N] [--sort cited] [--backend openalex]` | 语义相关文献（OpenAlex `related_works` 邻居）；不支持的后端输出 `[skipped]`，退出码 2 | 只读 |
 | `litcli data get <key> [--format table\|json\|csl]` | 单条全字段 | 只读 |
 | `litcli data add --title "..." [--creator "家族, 名字"]... [--year ..]` | 摄入元信息；写前过 `should_import` 查重/半残门；不支持的后端报 `[skipped]` | **写库** |
-| `litcli data add --pdf <file>` | 从 PDF 首页**启发式**抽候选，待人工核对后写入 | **写库** |
+| `litcli data add --pdf <file>` | 从 PDF 首页**启发式**抽候选，展示后经交互确认（y/N）才写库；`--yes` 跳过确认 | **写库** |
 | `litcli data set <key> --title .. [--abstract ..] [--year ..]` | 修改字段 | **写库** |
 | `litcli data del <key>` | 删除条目 | **写库** |
 | `litcli data attach <key> <本地路径\|URL>` | 给已有条目挂全文附件 | **写库** |

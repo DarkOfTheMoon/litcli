@@ -135,3 +135,40 @@ class TestExportContainerFields(unittest.TestCase):
         self.assertIn("J. Fluid Mech.", entry)
         self.assertIn("45", entry)
         self.assertIn("123-130", entry)
+
+
+class TestExportHardening(unittest.TestCase):
+    """Export boundary: a non-numeric year or a multiline/literal-author field must not crash or corrupt output."""
+
+    def test_to_csl_non_numeric_year_does_not_crash(self):
+        it = AcademicItem(title="T", year="2020 (in press)", item_type="article")
+        c = it.to_csl()
+        self.assertEqual(c["issued"]["date-parts"], [[2020]])
+
+    def test_to_csl_garbled_year_no_issued_key(self):
+        it = AcademicItem(title="T", year="in press", item_type="article")
+        c = it.to_csl()
+        self.assertNotIn("issued", c)
+
+    def test_ris_multiline_abstract_flattened(self):
+        it = AcademicItem(title="T", item_type="article", abstract="line1\nline2\nline3")
+        ris = it.to_ris()
+        self.assertIn("AB  - line1 line2 line3", ris)
+        self.assertEqual(ris.count("\n"), ris.count("  - ") + ris.count("ER  -"))
+
+    def test_bibtex_multiline_title_flattened(self):
+        it = AcademicItem(title="A title\nwith a break", creators=[{"family": "A"}])
+        self.assertIn("title   = {A title with a break}", it.to_bibtex())
+
+    def test_literal_author_renders_in_ris_and_bibtex(self):
+        it = AcademicItem(title="T", creators=[{"literal": "MIT"}], year="2020")
+        self.assertIn("AU  - MIT", it.to_ris())
+        self.assertIn("author  = {MIT}", it.to_bibtex())
+
+    def test_csl_author_with_literal(self):
+        it = AcademicItem(title="T", creators=[{"literal": "MIT"}])
+        self.assertEqual(it.to_csl()["author"], [{"literal": "MIT"}])
+
+    def test_csl_author_strips_unknown_keys(self):
+        it = AcademicItem(title="T", creators=[{"family": "A", "given": "B", "ORCID": "x"}])
+        self.assertEqual(it.to_csl()["author"], [{"family": "A", "given": "B"}])

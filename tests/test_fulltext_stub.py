@@ -78,5 +78,14 @@ class FulltextStubTest(unittest.TestCase):
         self.assertIsNone(ft._from_local("10.1/x", {"arxiv": NoAttach()}))
 
 
+class NormDoiTest(unittest.TestCase):
+    def test_strips_doi_org_prefix(self):
+        # Must agree with aggregate.norm_doi so local-first resolution matches bare-DOI lookups.
+        self.assertEqual(ft._norm_doi("https://doi.org/10.1/x"), "10.1/x")
+        self.assertEqual(ft._norm_doi("10.1/X "), "10.1/x")
+        self.assertEqual(ft._norm_doi("http://dx.doi.org/10.1/y."), "10.1/y")
+        self.assertEqual(ft._norm_doi(""), "")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -7,9 +7,45 @@ NotSupportedError.
 """
 from __future__ import annotations
 
+import json
+import time
+import urllib.error
+import urllib.request
+
 from abc import ABC, abstractmethod
 
 from ..models import AcademicItem
+
+
+def retry_json(url: str, headers: dict, name: str, timeout: int = 25,
+               attempts: int = 3) -> dict:
+    """GET ``url`` and parse JSON, retrying with exponential backoff on 5xx / network errors.
+
+    Shared by the HTTP read-only backends (crossref/openalex/openlibrary); each caller keeps its
+    own ``timeout`` and ``name`` (for the error prefix). Raises ``RuntimeError`` after the final
+    attempt. Mirrors the original per-backend behavior exactly, just deduplicated.
+    """
+    req = urllib.request.Request(url, headers=headers)
+    last: RuntimeError | None = None
+    for attempt in range(attempts):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            err = RuntimeError(f"[{name}] HTTP {e.code}: {e.reason}")
+            if e.code >= 500 and attempt < attempts - 1:
+                time.sleep(0.5 * (attempt + 1))
+                last = err
+                continue
+            raise err from e
+        except urllib.error.URLError as e:
+            err = RuntimeError(f"[{name}] unreachable: {e.reason}")
+            if attempt < attempts - 1:
+                time.sleep(0.5 * (attempt + 1))
+                last = err
+                continue
+            raise err from e
+    raise last  # pragma: no cover - already raised inside the loop
 
 
 class NotSupportedError(NotImplementedError):

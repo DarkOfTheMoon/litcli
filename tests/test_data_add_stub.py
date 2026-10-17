@@ -33,7 +33,7 @@ def _item(title="T", creators=None, year="2020", doi=""):
 
 def _args(**over):
     d = dict(backend="zotero", pdf=None, csl=None, title="T", creator=[],
-             type="document", year="2020", doi="", url="", abstract="", force=False)
+             type="document", year="2020", doi="", url="", abstract="", force=False, yes=False)
     d.update(over)
     return argparse.Namespace(**d)
 
@@ -43,10 +43,20 @@ class DataAddStubTest(unittest.TestCase):
         fb = _FakeBackend()
         with mock.patch("litcli.cli.metadata.extract_metadata", return_value=_item(title="Deep learning", doi="10.1/x")), \
              mock.patch("litcli.cli.get_backend", return_value=fb):
-            rc = cmd_data_add({}, _args(pdf="/tmp/a.pdf"))
+            rc = cmd_data_add({}, _args(pdf="/tmp/a.pdf", yes=True))
         self.assertEqual(rc, 0)
         self.assertEqual(len(fb.added), 1)
         self.assertEqual(fb.added[0].title, "Deep learning")
+
+    def test_pdf_heuristic_cancel_does_not_write(self):
+        # Without --yes/--force the confirm prompt must be answered; a negative answer cancels the write.
+        fb = _FakeBackend()
+        with mock.patch("litcli.cli.metadata.extract_metadata", return_value=_item(title="Deep learning", doi="10.1/x")), \
+             mock.patch("litcli.cli.get_backend", return_value=fb), \
+             mock.patch("builtins.input", return_value="n"):
+            rc = cmd_data_add({}, _args(pdf="/tmp/a.pdf"))
+        self.assertEqual(rc, 2)
+        self.assertEqual(len(fb.added), 0)
 
     def test_duplicate_doi_rejected_without_force(self):
         fb = _FakeBackend(existing=[_item(doi="10.1/x", title="Old")])

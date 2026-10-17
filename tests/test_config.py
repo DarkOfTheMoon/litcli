@@ -68,6 +68,16 @@ class TestConfig(unittest.TestCase):
         config.write_backend_key("zotero", 'a"b\\c', path=cfg)
         self.assertIn("api_key = \"a\\\"b\\\\c\"", cfg.read_text())
 
+    def test_write_backend_key_restricts_permissions(self):
+        # The file holds a credential; it must be owner-only regardless of the umask.
+        import os
+        d = Path(tempfile.mkdtemp())
+        cfg = d / "config.toml"
+        cfg.write_text("[backends.zotero]\n", encoding="utf-8")
+        os.chmod(cfg, 0o644)
+        config.write_backend_key("zotero", "KEY", path=cfg)
+        self.assertEqual(os.stat(cfg).st_mode & 0o777, 0o600)
+
 
 if __name__ == "__main__":
     unittest.main()
