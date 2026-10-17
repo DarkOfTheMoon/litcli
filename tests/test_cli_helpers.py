@@ -1,6 +1,6 @@
-"""CLI 助手函数桩测:arXiv key 归一化 + backends 子命令面 + search --type。
+"""CLI helper-function stub tests: arXiv key normalization + backends subcommand surface + search --type.
 
-不联网;只测纯函数与 argparse 面(不实例化后端/不发起请求)。
+No network; only pure functions and the argparse surface (no backend instantiation, no requests).
 """
 import sys
 import os
@@ -26,7 +26,7 @@ class ArxivKeyNormalizeTest(unittest.TestCase):
         self.assertEqual(_normalize_export_key("arxiv/1806.09180", "arxiv"), "1806.09180")
 
     def test_normalize_for_other_backend_uses_doi(self):
-        # 非 arxiv 后端(openalex/crossref)需 DOI 形态才能解析,否则被当 OpenAlex id 查而 404
+        # Non-arxiv backends (openalex/crossref) need DOI form to resolve, otherwise queried as an OpenAlex id -> 404
         self.assertEqual(_normalize_export_key("arxiv/1806.09180", "openalex"),
                          "10.48550/arxiv.1806.09180")
 
@@ -44,7 +44,7 @@ class RelatedKeyNormalizeTest(unittest.TestCase):
         self.assertEqual(_normalize_related_key("arxiv/1806.09180"), "10.48550/arxiv.1806.09180")
 
     def test_openalex_url_and_doi_passthrough(self):
-        # extra["openalex_id"] 形态(CLI 自带)原样交付;裸 DOI 亦不动
+        # extra["openalex_id"] form (CLI-provided) is delivered as-is; bare DOI is also left untouched
         self.assertEqual(_normalize_related_key("https://openalex.org/W2919115771"),
                          "https://openalex.org/W2919115771")
         self.assertEqual(_normalize_related_key("10.48550/arxiv.1806.09180"),
@@ -91,7 +91,7 @@ class PrintItemsTest(unittest.TestCase):
 
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            rc = _print_items([], "json", False, "[无相关]")
+            rc = _print_items([], "json", False, "[no related]")
         self.assertEqual(rc, 0)
         self.assertEqual(buf.getvalue().strip(), "[]")
 

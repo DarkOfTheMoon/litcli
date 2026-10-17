@@ -1,4 +1,4 @@
-"""收录准入门 should_import 桩测:查重(DOI/标题)+ 半残门。纯函数,不联网。"""
+"""Admission-gate should_import stub tests: dedup (DOI/title) + semi-import gate. Pure functions, no network."""
 import os
 import sys
 import unittest
@@ -26,7 +26,7 @@ class ShouldImportStubTest(unittest.TestCase):
         existing = [mk(doi="", title="Big title")]
         ok, reason = ft.should_import(mk(doi="", title="BIG TITLE!"), existing)
         self.assertFalse(ok)
-        self.assertIn("题", reason)
+        self.assertIn("same-title", reason)
 
     def test_doi_differs_allows(self):
         existing = [mk(doi="10.1/a")]
@@ -36,12 +36,12 @@ class ShouldImportStubTest(unittest.TestCase):
     def test_missing_title_rejected(self):
         ok, reason = ft.should_import(mk(title=""), [])
         self.assertFalse(ok)
-        self.assertIn("标题", reason)
+        self.assertIn("Missing title", reason)
 
     def test_no_creators_no_year_rejected(self):
         ok, reason = ft.should_import(mk(creators=[], year="", title="T"), [])
         self.assertFalse(ok)
-        self.assertIn("作者", reason)
+        self.assertIn("No author", reason)
 
     def test_complete_allowed(self):
         ok, reason = ft.should_import(mk(), [])

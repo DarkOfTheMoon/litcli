@@ -1,7 +1,8 @@
-"""Unpaywall 解析:经 DOI 反查合法开放获取(OA)全文链接。
+"""Unpaywall resolution: reverse-lookup a legitimate open-access (OA) fulltext link by DOI.
 
-只读、按 DOI(不做搜索)。Unpaywall 要求有效的 email 参数。这是 SCI-Hub 等
-版权规避源之外的**合规全文**通道——能拿到开放获取版本就给出可下载直链。
+Read-only, by DOI (no search). Unpaywall requires a valid email parameter. This is the
+**legitimate fulltext** channel outside copyright-evading sources like Sci-Hub — when an
+open-access version is available, it gives a downloadable direct link.
 """
 from __future__ import annotations
 
@@ -12,7 +13,7 @@ import urllib.request
 
 _API = "https://api.unpaywall.org/v2"
 
-# 匿名默认邮箱(Unpaywall 仅用作配额标识;正式使用建议从 config 或环境提供)
+# Anonymous default email (Unpaywall uses it only as a quota identifier; for real use, provide it via config or env)
 DEFAULT_EMAIL = "litcli@anonymous.com"
 
 
@@ -27,7 +28,7 @@ def _best_oa(data: dict) -> dict:
 
 
 def resolve_oa(doi: str, email: str = DEFAULT_EMAIL, timeout: int = 25) -> dict:
-    """按 DOI 查 OA 信息:返回 is_oa / oa_status / best_pdf / best_landing / title / year。"""
+    """Look up OA info by DOI: returns is_oa / oa_status / best_pdf / best_landing / title / year."""
     url = f"{_API}/{urllib.parse.quote(doi, safe='')}?email={urllib.parse.quote(email)}"
     req = urllib.request.Request(url, headers={
         "User-Agent": "litcli/0.1 (oa resolver)",
@@ -37,10 +38,10 @@ def resolve_oa(doi: str, email: str = DEFAULT_EMAIL, timeout: int = 25) -> dict:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             data = json.loads(r.read())
     except urllib.error.HTTPError as e:
-        hint = "email 参数可能是 422 原因(请提供有效 email)" if e.code == 422 else ""
+        hint = "the email param may be the 422 cause (provide a valid email)" if e.code == 422 else ""
         raise RuntimeError(f"[unpaywall] HTTP {e.code}: {e.reason} {hint}") from e
     except urllib.error.URLError as e:
-        raise RuntimeError(f"[unpaywall] 无法访问: {e.reason}") from e
+        raise RuntimeError(f"[unpaywall] cannot access: {e.reason}") from e
 
     info = _best_oa(data)
     info["title"] = data.get("title", "")

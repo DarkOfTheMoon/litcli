@@ -1,4 +1,4 @@
-"""后端解析层(zotero / arxiv)纯函数单测:用构造数据,不连真库、不联网。"""
+"""Backend parse-layer (zotero / arxiv) pure-function unit tests: constructed data, no real library, no network."""
 import unittest
 import xml.etree.ElementTree as ET
 

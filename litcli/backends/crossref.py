@@ -1,7 +1,8 @@
-"""Crossref 后端:权威开源元数据 API(api.crossref.org)。
+"""Crossref backend: the authoritative open metadata API (api.crossref.org).
 
-覆盖论文/图书/会议录/专利等各类 DOI 登记元数据;只读。无需 key(带 mailto 可获更好配额)。
-按标题检索,或凭 DOI 直接取单条。归一化到 AcademicItem。
+Covers DOI-registered metadata for papers/books/proceedings/patents and more; read-only. No key
+needed (a mailto obtains a better quota). Search by title, or fetch a single record by DOI.
+Normalized to AcademicItem.
 """
 from __future__ import annotations
 
@@ -17,7 +18,7 @@ from .base import Backend
 
 _API = "https://api.crossref.org/works"
 
-# Crossref type -> AcademicItem.item_type(CSL 类型)
+# Crossref type -> AcademicItem.item_type (CSL type)
 _TYPE_MAP = {
     "journal-article": "article",
     "proceedings-article": "paper-conference",
@@ -36,7 +37,7 @@ _TYPE_MAP = {
 _XML_RE = re.compile(r"<[^>]+>")
 
 def _strip_xml(s: str) -> str:
-    """去 JATS/HTML 标签(Crossref abstract 常含)。"""
+    """Strip JATS/HTML tags (often present in Crossref abstracts)."""
     return _XML_RE.sub(" ", s or "").strip()
 
 
@@ -103,7 +104,8 @@ class CrossrefBackend(Backend):
         }
 
     def _get(self, url: str) -> dict:
-        """GET 并解析 JSON;对 5xx/网络错误做有限指数退避重试(Crossref 偶发 5xx)。"""
+        """GET and parse JSON; do limited exponential-backoff retries on 5xx / network errors
+        (Crossref occasionally 5xxs)."""
         req = urllib.request.Request(url, headers=self._headers())
         last: RuntimeError | None = None
         for attempt in range(3):
@@ -118,13 +120,13 @@ class CrossrefBackend(Backend):
                     continue
                 raise err from e
             except urllib.error.URLError as e:
-                err = RuntimeError(f"[{self.name}] 无法访问: {e.reason}")
+                err = RuntimeError(f"[{self.name}] unreachable: {e.reason}")
                 if attempt < 2:
                     time.sleep(0.5 * (attempt + 1))
                     last = err
                     continue
                 raise err from e
-        raise last  # pragma: no cover - 循环内已 raise
+        raise last  # pragma: no cover - already raised inside the loop
 
     def search(self, query: str, limit: int = 10, filters: dict | None = None) -> list[AcademicItem]:
         filters = self._filters(filters)
@@ -147,5 +149,5 @@ class CrossrefBackend(Backend):
         data = self._get(f"{self._base}/{doi}")
         msg = data.get("message")
         if not msg:
-            raise KeyError(f"[{self.name}] 未找到 {key}")
+            raise KeyError(f"[{self.name}] not found: {key}")
         return _item_to_academic(msg, self.name)

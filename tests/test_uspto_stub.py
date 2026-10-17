@@ -1,4 +1,4 @@
-"""USPTO 专利后端离线桩测:mock urlopen,断言请求构造/X-Api-Key/解析/错误包装。"""
+"""USPTO patent backend offline stub tests: mock urlopen, assert request construction / X-Api-Key / parse / error wrapping."""
 import json
 import os
 import sys

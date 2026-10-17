@@ -1,4 +1,4 @@
-"""领域层 models(Csl 转/建/导出)离线单测。"""
+"""Domain-layer models (CSL convert/build/export) offline unit tests."""
 import unittest
 
 from litcli.models import AcademicItem
@@ -43,7 +43,7 @@ class TestAcademicItemToCslEmpty(unittest.TestCase):
     def test_empty_creators_does_not_crash(self):
         from litcli.models import AcademicItem
         item = AcademicItem(source="pdf", key="", title="T", creators=[], year="")
-        csl = item.to_csl()  # 原 _default_id 对空 creators 抛 IndexError
+        csl = item.to_csl()  # original _default_id threw IndexError on empty creators
         self.assertIn("id", csl)
         self.assertEqual(csl["id"], "anon_noyear")
 
@@ -69,7 +69,7 @@ class TestAcademicItemToRis(unittest.TestCase):
 
 
 class TestExportContainerFields(unittest.TestCase):
-    """补全导出字段:container-title/volume/issue/page/publisher 应进入 csl/bibtex/ris。"""
+    """Backfilled export fields: container-title/volume/issue/page/publisher should enter csl/bibtex/ris."""
 
     ARTL = dict(source="crossref", key="10.1/abc", title="T",
                 creators=[{"family": "Smith", "given": "J"}], year="2020",
@@ -90,7 +90,7 @@ class TestExportContainerFields(unittest.TestCase):
         self.assertIn("number  = {3}", b)
         self.assertIn("pages   = {123-130}", b)
         self.assertTrue(b.startswith("@article{"))
-        self.assertIn("\n  ", b)  # 多行输出
+        self.assertIn("\n  ", b)  # multi-line output
 
     def test_to_bibtex_book_uses_booktitle(self):
         it = AcademicItem(source="crossref", key="10.1/b", title="Chapter",

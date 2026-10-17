@@ -1,4 +1,4 @@
-"""OpenLibrary 图书后端离线桩测:mock urlopen,断言请求/解析/错误包装。"""
+"""OpenLibrary book backend offline stub tests: mock urlopen, assert request/parse/error wrapping."""
 import json
 import os
 import sys

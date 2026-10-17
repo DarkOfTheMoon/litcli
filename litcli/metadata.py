@@ -1,8 +1,10 @@
-"""从 PDF 首页文本启发式抽取元数据(标题/作者/年份/摘要)→ AcademicItem。
+"""Heuristically extract metadata (title/authors/year/abstract) from the first page
+of a PDF into an AcademicItem.
 
-领域库化:from_text_lines 是纯函数(喂任何文本行即可,无 I/O、无 pdftotext 依赖),
-可独立复用(纯文本 / OCR 结果 / 他源文本重建元数据);extract_metadata 是薄壳,
-读 PDF 首页文本后转调 from_text_lines。完全离线、不调用 LLM。
+Domain-level: from_text_lines is a pure function (feed it any text lines; no I/O,
+no pdftotext dependency), reusable independently (plain text / OCR output / metadata
+rebuilt from another source); extract_metadata is a thin wrapper that reads the PDF
+first-page text and forwards to from_text_lines. Fully offline, no LLM calls.
 """
 from __future__ import annotations
 
@@ -21,13 +23,13 @@ def _nonempty_lines(text: str) -> list[str]:
 
 
 def extract_metadata(pdf_path: str) -> AcademicItem:
-    """抽 PDF 首页文本 → AcademicItem。需要系统 pdftotext。"""
+    """Extract PDF first-page text -> AcademicItem. Requires the system pdftotext."""
     first = pdfutil.extract_text(pdf_path, first_page=True)
     return from_text_lines(_nonempty_lines(first), source=pdf_path)
 
 
 def from_text_lines(lines: list[str], source: str = "") -> AcademicItem:
-    """纯启发式:从文本行构建 AcademicItem(无 I/O、不依赖 pdftotext)。"""
+    """Pure heuristic: build an AcademicItem from text lines (no I/O, no pdftotext)."""
     return AcademicItem(
         source="pdf", key="", title=_guess_title(lines),
         creators=_guess_authors(lines), year=_guess_year(lines),

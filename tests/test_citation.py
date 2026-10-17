@@ -1,4 +1,4 @@
-"""citation 渲染单测:in-text 与 bibliography,覆盖空作者/年份边界。"""
+"""Citation rendering unit tests: in-text and bibliography, covering empty-author/year edges."""
 import os
 import sys
 import unittest
@@ -25,7 +25,7 @@ class TestCitation(unittest.TestCase):
         self.assertEqual(render_intext([it]), ["(A et al. 2002)"])
 
     def test_bib_empty_creators_no_crash(self):
-        # 原缺陷:creators/year 皆空时 it.author 属性不存在会 AttributeError
+        # Original bug: AttributeError when it.author didn't exist while creators/year were both empty
         it = AcademicItem(source="x", key="k", title="Title here", creators=[], year="")
         out = render_bibliography([it])
         self.assertEqual(len(out), 1)

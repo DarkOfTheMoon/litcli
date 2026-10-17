@@ -1,7 +1,7 @@
-"""OpenLibrary 图书后端:openlibrary.org 开放图书元数据(书籍/封面/预览)。
+"""OpenLibrary book backend: openlibrary.org open book metadata (books/covers/previews).
 
-只读。search.json 按题名/作者检索,或按 /works/OL / /books/OL key 取单条。
-覆盖「图书」这一类元数据来源。
+Read-only. search.json searches by title/author, or fetches a single record by a /works/OL /
+/books/OL key. Covers the "book" class of metadata sources.
 """
 from __future__ import annotations
 
@@ -76,13 +76,13 @@ class OpenLibraryBackend(Backend):
                     continue
                 raise err from e
             except urllib.error.URLError as e:
-                err = RuntimeError(f"[{self.name}] 无法访问: {e.reason}")
+                err = RuntimeError(f"[{self.name}] unreachable: {e.reason}")
                 if attempt < 2:
                     time.sleep(0.5 * (attempt + 1))
                     last = err
                     continue
                 raise err from e
-        raise last  # pragma: no cover - 循环内已 raise
+        raise last  # pragma: no cover - already raised inside the loop
 
     def search(self, query: str, limit: int = 10, filters: dict | None = None) -> list[AcademicItem]:
         # Book search is a single ``q``; field words fold into free-text (secondary backend).
@@ -95,11 +95,11 @@ class OpenLibraryBackend(Backend):
         return [_doc_to_item(d, self.name) for d in (data.get("docs") or [])]
 
     def get(self, key: str) -> AcademicItem:
-        # key 形如 /works/OL... /books/OL...;用各自 .json 端点取单条
+        # key looks like /works/OL... /books/OL...; use the respective .json endpoint to fetch a single record
         ident = key.rstrip("/").split("/")[-1]
         kind = "books" if key.startswith("/books/") else "works"
         url = f"{_SITE}/{kind}/{urllib.parse.quote(ident, safe='')}.json"
         data = self._get(url)
         if not data:
-            raise KeyError(f"[{self.name}] 未找到 {key}")
+            raise KeyError(f"[{self.name}] not found: {key}")
         return _doc_to_item(data | {"key": key}, self.name)

@@ -1,4 +1,4 @@
-"""data add 摄入流程桩测:mock metadata + backend,断言 --pdf 启发式候选 / 查重门 / --force / --csl。"""
+"""data add ingestion-flow stub tests: mock metadata + backend, assert --pdf heuristic candidate / dedup gate / --force / --csl."""
 import argparse
 import os
 import sys
@@ -79,7 +79,7 @@ class DataAddStubTest(unittest.TestCase):
         with mock.patch("litcli.cli.get_backend", return_value=fb), \
              mock.patch("builtins.open", mock.mock_open(read_data='{"title":"NoAuthor"}')) as mo:
             rc = cmd_data_add({}, _args(csl="/tmp/x.json"))
-        self.assertEqual(rc, 2)  # 半残门拦截(无作者无年份)
+        self.assertEqual(rc, 2)  # semi-import gate rejection (no authors, no year)
         self.assertEqual(len(fb.added), 0)
 
 

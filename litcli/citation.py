@@ -1,8 +1,9 @@
-"""引文/参考文献渲染(基于 CSL JSON,纯 Python,不依赖 Better BibTeX)。
+"""Citation / bibliography rendering (CSL JSON based, pure Python, no Better BibTeX).
 
-正统路径:用 ``litcli export --format csljson`` 导出 CSL JSON,喂给
-``pandoc --citeproc``/citeproc 生成规范的引文与参考文献表。
-这里另提供零依赖的简版 in-text(author-date)渲染,便于 CLI 预览。
+The canonical path: export CSL JSON with ``litcli export --format csljson`` and feed
+it to ``pandoc --citeproc`` / citeproc to produce canonical citations and bibliography.
+This module additionally provides a dependency-light in-text (author-date) renderer
+suitable for quick CLI previews.
 """
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ def item_to_csl(item: AcademicItem) -> dict:
 
 
 def render_intext(items: Iterable[AcademicItem]) -> list[str]:
-    """简版 author-date in-text 引用,如 ``Smith, Jones & Lee 2002``。"""
+    """Minimal author-date in-text citation, e.g. ``Smith, Jones & Lee 2002``."""
     out = []
     for it in items:
         names = [a.get("family", "") for a in it.creators if isinstance(a, dict)]
@@ -35,7 +36,7 @@ def render_intext(items: Iterable[AcademicItem]) -> list[str]:
 
 
 def render_bibliography(items: Iterable[AcademicItem]) -> list[str]:
-    """简版参考文献条目列表,如 ``Smith, J. (2002). Title.``"""
+    """Minimal bibliography entry list, e.g. ``Smith, J. (2002). Title.``"""
     out = []
     for it in items:
         creators = "; ".join(

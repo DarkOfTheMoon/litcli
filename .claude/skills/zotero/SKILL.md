@@ -17,7 +17,7 @@ description: 与用户学术资料互操作——检索、读取、导出引文�
 | 检索候选 | `litcli search "关键词" [--all] [--limit N] [--type article] [--title ..] [--author ..] [--year ..] [--container ..] [--sort cited]` | 只读 |
 | 参考文献(回溯) | `litcli refs <key> [--limit N] [--backend openalex]` 该文所引文献,按被引降序(奠基在前) | 只读 |
 | 引用该文(前向) | `litcli citing <key> [--limit N] [--backend openalex]` 引用该文的文献,按被引降序(跟进在前) | 只读 |
-| 语义相关 | `litcli related <key> [--limit N] [--backend openalex]` OpenAlex `related_works` 邻居;不支持的只读后端 `[跳过]` 退出码 2 | 只读 |
+| 语义相关 | `litcli related <key> [--limit N] [--backend openalex]` OpenAlex `related_works` 邻居;不支持的只读后端 `[skipped]` 退出码 2 | 只读 |
 | 单条全字段 | `litcli data get <key> [--format csl\|json]` | 只读 |
 | 导出引文 | `litcli export <key> [--format csljson\|bibtex\|ris\|text]`（arXiv key 如 `arxiv/1806.09180` 自动归一为 DOI；csljson/bibtex 含期刊名/卷/页/出版社） | 只读 |
 | 定位合法全文 | `litcli fetch fulltext <doi> [--download]` 本地→OA→指路(绕不过付费墙) | 只读 |
@@ -30,13 +30,14 @@ description: 与用户学术资料互操作——检索、读取、导出引文�
 | 罗列某集合条目 | `litcli data members <集合key> [--no-recursive]` 默认递归全部子集合 | 只读 |
 | 列后端 | `litcli backends list`（能力）· `litcli backends status`（授权/可达） | 只读 |
 | **首次写库授权** | `litcli backends authorize zotero` 弹框批准后写回 config | 写配置 |
+| shell 补全 | `litcli completions <bash\|zsh\|fish>` 打印自包含补全脚本（`eval "$(litcli completions bash)"` 后 `litcli <TAB>` 补子命令/参数/取值/文件路径；补全时不起 `litcli` 子进程） | 只读 |
 
 ## 环境事实
 
 - Zotero 10 本机运行于 `localhost:23119`，本地 API 免 key（`users/0` 别名→真实库）；写请求需 `Zotero-Server-ID` + `If-Unmodified-Since-Version`（工具已自动处理）。
 - **写库前先授权一次**：`litcli backends authorize zotero` → 本地弹框批准 → key 写入 `[backends.zotero].api_key`，此后写操作自动携带、不再弹框。未授权时 `data set/del/attach` 报 `HTTP 401`（退出码 2）。
 - Better BibTeX 未装：引文走 `export --format csljson` 喂 `pandoc --citeproc`，不依赖 BBT。
-- 读 PDF 全文需系统 `pdftotext`；只读后端（arxiv/crossref/openalex/uspto）的 `data` 写操作报 `[跳过]`。
+- 读 PDF 全文需系统 `pdftotext`；只读后端（arxiv/crossref/openalex/uspto）的 `data` 写操作报 `[skipped]`。
 
 ## 注意
 

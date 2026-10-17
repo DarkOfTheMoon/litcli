@@ -1,7 +1,8 @@
-"""配置与后端发现:读 ~/.config/litcli/config.toml,按 type 实例化后端。
+"""Config & backend discovery: read ~/.config/litcli/config.toml and instantiate backends by type.
 
-使用 :mod:`tomllib`(Python 3.11+ 内置),零依赖。
-后端注册表用 try-import,允许多后端文件未就绪时仅 Zotero 也能独立工作。
+Uses :mod:`tomllib` (built into Python 3.11+), zero dependencies.
+The backend registry is try-import, so Zotero alone can work even when other backend files
+are not ready.
 """
 from __future__ import annotations
 
@@ -11,7 +12,7 @@ from pathlib import Path
 
 from .backends.base import Backend
 
-# 关键:未配置时内置的默认后端(本地 Zotero 可读可写 + arXiv 只读,开箱即用)
+# Key: built-in default backends when nothing is configured (local Zotero read/write + arXiv read-only, works out of the box)
 _INBUILT_DEFAULT = {"backends": {
     "zotero": {"type": "zotero_local", "base": "http://localhost:23119/api"},
     "arxiv": {"type": "arxiv"},
@@ -24,7 +25,7 @@ DEFAULT_CONFIG = Path.home() / ".config" / "litcli" / "config.toml"
 
 
 def load_config(path: str | Path | None = None) -> dict:
-    """加载配置;优先级:显式 path > 环境变量 LITCLI_CONFIG > 默认 ~/.config/litcli/config.toml > 内置默认。"""
+    """Load config; precedence: explicit path > env var LITCLI_CONFIG > default ~/.config/litcli/config.toml > built-in default."""
     for candidate in (path, Path(os.environ[CONFIG_ENV]) if CONFIG_ENV in os.environ else None, DEFAULT_CONFIG):
         if candidate and Path(candidate).exists():
             with open(candidate, "rb") as f:
@@ -33,7 +34,7 @@ def load_config(path: str | Path | None = None) -> dict:
 
 
 def _registry() -> dict[str, type[Backend]]:
-    """后端类型注册表(type 字符串 -> 类)。"""
+    """Backend type registry (type string -> class)."""
     from .backends import zotero_local
 
     reg: dict[str, type[Backend]] = {"zotero_local": zotero_local.ZoteroLocalBackend}
@@ -42,7 +43,7 @@ def _registry() -> dict[str, type[Backend]]:
 
         reg["arxiv"] = arxiv.ArxivBackend
     except ImportError:
-        pass  # arXiv 尚未就绪时,不影响 Zotero 定义
+        pass  # When arXiv isn't ready, it doesn't affect the Zotero definition
     try:
         from .backends import crossref
 
@@ -74,13 +75,13 @@ def _make_backend(name: str, cfg: dict) -> Backend:
     reg = _registry()
     backend_type = cfg.get("type", "zotero_local")
     if backend_type not in reg:
-        raise KeyError(f"未知后端类型 '{backend_type}'(可选: {sorted(reg)})")
+        raise KeyError(f"unknown backend type '{backend_type}' (available: {sorted(reg)})")
     kwargs = {k: v for k, v in cfg.items() if k != "type"}
     return reg[backend_type](name=name, **kwargs)
 
 
 def discover_backends(config: dict | None = None) -> dict[str, Backend]:
-    """从配置实例化全部启用的后端。"""
+    """Instantiate all enabled backends from config."""
     cfg = config if config is not None else load_config()
     out: dict[str, Backend] = {}
     for name, bcfg in (cfg.get("backends") or {}).items():
@@ -91,7 +92,7 @@ def discover_backends(config: dict | None = None) -> dict[str, Backend]:
 def get_backend(name: str = "zotero", config: dict | None = None) -> Backend:
     backends = discover_backends(config)
     if name not in backends:
-        raise KeyError(f"未配置后端 '{name}';已配置: {sorted(backends)}")
+        raise KeyError(f"backend '{name}' is not configured; configured: {sorted(backends)}")
     return backends[name]
 
 
@@ -99,15 +100,15 @@ def get_all_backends(config: dict | None = None) -> dict[str, Backend]:
     return discover_backends(config)
 
 
-# --- 写回 config.toml(供 `backends authorize` 落 key) ---
+# --- Write back to config.toml (for `backends authorize` to persist the key) ---
 
 def _toml_string(text: str) -> str:
-    """把值写成 TOML 基本字符串(转义引号/反斜杠/控制符)。"""
+    """Write a value as a TOML basic string (escaping quotes / backslashes / control chars)."""
     return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def _upsert_key(text: str, section: str, key: str, value: str) -> str:
-    """在 [section] 内新增/替换 key = value 行;无该 section 则追加。保留其余内容。"""
+    """Insert/replace a key = value line within [section]; append the section if absent. Preserve the rest."""
     lines = text.splitlines()
     marker = f"[{section}]"
     try:
@@ -118,7 +119,7 @@ def _upsert_key(text: str, section: str, key: str, value: str) -> str:
         lines.append(marker)
         lines.append(f"{key} = {value}")
         return "\n".join(lines) + "\n"
-    # 找到该 section 结束(下一个 [节] 或文件末尾)
+    # Find where this section ends (next [header] or end of file)
     end = idx + 1
     while end < len(lines) and not lines[end].lstrip().startswith("["):
         end += 1
@@ -136,10 +137,11 @@ def _upsert_key(text: str, section: str, key: str, value: str) -> str:
 
 
 def write_backend_key(name: str, key: str, path: str | Path | None = None) -> Path:
-    """把某个后端的 api_key 写回 config.toml 的 [backends.<name>] 段。
+    """Write a backend's api_key back to the [backends.<name>] section of config.toml.
 
-    仅改写目标字段,保留文件中其它段与注释;若文件不存在则先落内置默认骨架,
-    避免丢失默认后端。返回实际写到的文件路径。
+    Only the target field is modified, preserving other sections and comments in the file;
+    if the file doesn't exist, write the built-in default skeleton first so no default backend
+    is lost. Returns the actual file path written.
     """
     path = Path(path) if path else (Path(os.environ[CONFIG_ENV]) if CONFIG_ENV in os.environ else DEFAULT_CONFIG)
     if path.exists():
@@ -153,7 +155,7 @@ def write_backend_key(name: str, key: str, path: str | Path | None = None) -> Pa
 
 
 def _default_toml_text() -> str:
-    """把内置默认后端渲染为 config.toml 文本(缺失文件时作为骨架)。"""
+    """Render the built-in default backends as config.toml text (skeleton when the file is missing)."""
     lines: list[str] = []
     for name, cfg in _INBUILT_DEFAULT["backends"].items():
         lines.append(f"[backends.{name}]")

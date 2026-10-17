@@ -1,8 +1,9 @@
-"""litcli — 可插拔多后端的通用学术 CLI。
+"""litcli — a general academic CLI with pluggable multi-backend support.
 
-领域层(models/citation/pdf)与任何参考管理器无关;
-后端层(backends/)以 Backend 抽象 + capabilities 区分「读」「读+写」「可附附件」;
-配置(config)从 ~/.config/litcli/config.toml 实例化后端。
+The domain layer (models/citation/pdf) is independent of any reference manager;
+the backend layer (backends/) distinguishes "read" / "read+write" / "attachable" via the
+Backend abstraction + capabilities;
+config instantiates backends from ~/.config/litcli/config.toml.
 """
 
 from ._version import __version__

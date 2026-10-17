@@ -1,4 +1,4 @@
-"""聚合领域层单测:归一化/身份键/去重/合并/排序。"""
+"""Aggregate domain-layer unit tests: normalization / identity keys / dedup / merge / sort."""
 import unittest
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -18,13 +18,13 @@ class NormTest(unittest.TestCase):
         self.assertEqual(norm_doi("  "), "")
 
     def test_norm_doi_url_prefix(self):
-        # OpenAlex 给完整 URL,Crossref 给裸 DOI;剥前缀后身份键应一致
+        # OpenAlex gives a full URL, Crossref a bare DOI; after stripping the prefix the identity keys match
         self.assertEqual(norm_doi("https://doi.org/10.1103/Physx.3.113301"),
                          "10.1103/physx.3.113301")
         self.assertEqual(norm_doi("http://dx.doi.org/10.1/x"), "10.1/x")
 
     def test_identity_merges_url_and_bare_doi(self):
-        # 同一文献:crossref 裸 DOI vs openalex 完整 URL —— 应判定为同一身份
+        # Same work: crossref bare DOI vs openalex full URL -- should be judged the same identity
         a = AcademicItem(source="crossref", key="10.1103/x", title="T", doi="10.1103/x")
         b = AcademicItem(source="openalex", key="https://doi.org/10.1103/x",
                          title="T", doi="https://doi.org/10.1103/x")
@@ -49,12 +49,12 @@ class MergeTest(unittest.TestCase):
         b = AcademicItem(source="arxiv", key="1701.00001", title="Lu-ved", doi="10.1/abc", year="2002")
         out = merge_items([a, b])
         self.assertEqual(len(out), 1)
-        # 保留主记录原始 DOI 快照,不重写
+        # Keep the primary record's original DOI snapshot, do not rewrite
         self.assertEqual(out[0].doi, "10.1/ABc.")
-        # 信息较全者(a)为主,缺失字段被补全
+        # The more complete record (a) is primary; missing fields are backfilled
         self.assertEqual(out[0].abstract, "abs")
         self.assertEqual(out[0].url, "http://x")
-        # 来源合并为字母序集合
+        # Sources merged into an alphabetically sorted set
         self.assertEqual(out[0].extra["sources"], ["arxiv", "zotero"])
 
     def test_title_dedup_without_doi(self):
@@ -68,7 +68,7 @@ class MergeTest(unittest.TestCase):
         e = AcademicItem(source="x", key="e", title="Newer", year="2024")
         out = merge_items([c, e])
         self.assertEqual(out[0].year, "2024")
-        # 同年按标题升序
+        # Same year ordered by title ascending
         f = AcademicItem(source="y", key="f", title="Zeta", year="2020")
         out2 = merge_items([c, f])
         self.assertEqual([x.title for x in out2], ["Alpha", "Zeta"])
@@ -78,12 +78,12 @@ class MergeTest(unittest.TestCase):
         b = AcademicItem(source="a", key="k2", title="T", doi="10.1/a")
         items = [a, b]
         out = merge_items(items)
-        self.assertEqual(len(items), 2)  # 入参未被合并
+        self.assertEqual(len(items), 2)  # input not merged
         self.assertEqual(a.doi, "10.1/a")
         self.assertIsNot(out[0], a)
 
     def test_merge_backfills_container_fields(self):
-        # crossref 有卷页但无 abstract,openalex 有 abstract 无卷页;合并后二者俱得
+        # crossref has volume/pages but no abstract; openalex has abstract but no volume/pages; after merging both are present
         a = AcademicItem(source="crossref", key="10.1/x", title="T", doi="10.1/x",
                          container_title="J. Fluid Mech.", volume="45", page="1-9")
         b = AcademicItem(source="openalex", key="10.1/x", title="T", doi="10.1/x",
@@ -96,7 +96,7 @@ class MergeTest(unittest.TestCase):
         self.assertEqual(out[0].extra["sources"], ["crossref", "openalex"])
 
     def test_dedup_url_vs_bare_doi(self):
-        # 真实场景:crossref 裸 DOI + openalex 完整 URL DOI,应合并为一条
+        # Real case: crossref bare DOI + openalex full-URL DOI, should merge to one record
         a = AcademicItem(source="crossref", key="10.1103/Phy.3.113301", title="Flow",
                          doi="10.1103/Phy.3.113301")
         b = AcademicItem(source="openalex", key="https://doi.org/10.1103/Phy.3.113301",
@@ -106,8 +106,9 @@ class MergeTest(unittest.TestCase):
         self.assertEqual(out[0].extra["sources"], ["crossref", "openalex"])
 
     def test_merge_carries_cited_and_openalex_id(self):
-        # 只读后端(zotero 无被引数)与 openalex 同年同题:合并须带上被引数与 openalex_id,
-        # 否则 --all --sort cited 退化为全 0,`[被引 N]` 徽标消失。
+        # Read-only backend (zotero has no citation count) vs openalex same year/title: the merge must
+        # carry the citation count and openalex_id, otherwise --all --sort cited degrades to all 0 and
+        # the `[cited N]` badge disappears.
         z = AcademicItem(source="zotero", key="AB12", title="Deep learning", year="2015",
                          abstract="abs", doi="10.1038/nature14539")
         o = AcademicItem(source="openalex", key="10.1038/nature14539", title="Deep learning",

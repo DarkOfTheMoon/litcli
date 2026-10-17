@@ -1,7 +1,8 @@
-"""统一学术条目模型 AcademicItem,与 CSL JSON 双向转换。
+"""The unified academic item model ``AcademicItem``, bidirectionally convertible to CSL JSON.
 
-领域层对象——后端无关。无论是 Zotero 的条目、arXiv 的 Atom 条目,
-还是将来的文件系统后端,都归一化为 AcademicItem,供聚合、导出、引文共用。
+A domain-layer object — backend-agnostic. Whether a Zotero item, an arXiv Atom entry, or a
+future filesystem backend, everything normalizes to an ``AcademicItem`` shared by aggregation,
+export, and citation rendering.
 """
 from __future__ import annotations
 
@@ -10,35 +11,35 @@ from dataclasses import dataclass, field, asdict
 
 @dataclass
 class AcademicItem:
-    """学术条目的后端无关归一化模型。
+    """Backend-agnostic normalized model for an academic item.
 
-    creators 归一化为 ``[{"family": "Smith", "given": "John"}, ...]``。
-    attachments 为可定位到 PDF 的 URI / 文件路径(后端相关,但类型统一为 str)。
-    extra 兜底其它后端特有字段(如 zotero 的 itemType、arxiv 的 primaryCategory)。
+    ``creators`` normalizes to ``[{"family": "Smith", "given": "John"}, ...]``.
+    ``attachments`` are URI / file paths that locate a PDF (backend-specific, but str-typed alike).
+    ``extra`` carries other backend-specific fields (e.g. Zotero's itemType, arXiv's primaryCategory).
     """
 
     source: str = ""                      # "zotero" / "arxiv" / ...
-    key: str = ""                         # 后端内唯一 id: zotero item key / arxiv id
+    key: str = ""                         # unique id within the backend: zotero item key / arxiv id
     title: str = ""
     creators: list[dict] = field(default_factory=list)
     year: str = ""
     abstract: str = ""
     doi: str = ""
     url: str = ""
-    container_title: str = ""             # CSL container-title:期刊名/书名(卷页所在)
+    container_title: str = ""             # CSL container-title: journal/book name (holds volume/pages)
     volume: str = ""
     issue: str = ""
-    page: str = ""                        # 页码区间,如 "123-130"
+    page: str = ""                        # page range, e.g. "123-130"
     publisher: str = ""
     cited_by_count: int = 0               # citation count (OpenAlex cited_by_count / Crossref is-referenced-by-count)
     item_type: str = "document"           # CSL type: article / book / document / ...
     attachments: list[str] = field(default_factory=list)
     extra: dict = field(default_factory=dict)
 
-    # --- CSL JSON 转换 ---
+    # --- CSL JSON conversion ---
 
     def to_csl(self) -> dict:
-        """转为 CSL JSON 字典(citation/参考文献/导出共用)。"""
+        """Convert to a CSL JSON dict (shared by citation/bibliography/export)."""
         csl: dict = {
             "type": self.item_type or "document",
             "title": self.title,
@@ -46,7 +47,7 @@ class AcademicItem:
         }
         year = self.year.strip()
         if year:
-            # CSL 用 date-parts: [[year, month, day]]
+            # CSL uses date-parts: [[year, month, day]]
             parts = [int(p) for p in year.split("-")[:3] if p.isdigit()]
             csl["issued"] = {"date-parts": [parts or [int(year)]]}
         if self.abstract:
@@ -65,12 +66,12 @@ class AcademicItem:
             csl["DOI"] = self.doi
         if self.url:
             csl["URL"] = self.url
-        # 稳定的 citationkey 兜底(无 BBT):基于 key 或首作者+年份
+        # stable citationkey fallback (no BBT): based on key or first author + year
         csl.setdefault("id", self.key or self._default_id())
         return csl
 
     def to_bibtex(self) -> str:
-        """导出为 BibTeX(无 BBT 时的兜底文案):多行、含期刊/卷/期/页/出版社。"""
+        """Export to BibTeX (fallback formatting without BBT): multi-line, with journal/volume/issue/pages/publisher."""
         entry = self._bibtex_type()
         fid = self.key or self._default_id().replace(":", "")
         out = [f"@{entry}{{{fid},", f"  title   = {{{self.title}}},"]
@@ -78,7 +79,7 @@ class AcademicItem:
             out.append(f"  author  = {{{' and '.join(self._author_str(a) for a in self.creators)}}},")
         if self.year:
             out.append(f"  year    = {{{self.year}}},")
-        # 期刊名放 journal(article/paper-conference);书/章节容器名放 booktitle
+        # journal name goes in journal (article/paper-conference); book/chapter container in booktitle
         if self.container_title:
             container_key = "booktitle" if self.item_type in ("chapter", "book") else "journal"
             out.append(f"  {container_key} = {{{self.container_title}}},")
@@ -98,7 +99,7 @@ class AcademicItem:
         return "\n".join(out) + "\n"
 
     def to_ris(self) -> str:
-        """导出为 RIS(EndNote/Zotero 通用交换格式)。"""
+        """Export to RIS (EndNote/Zotero common interchange format)."""
         ty = {"article": "JOUR", "book": "BOOK", "chapter": "CHAP",
               "patent": "PAT", "thesis": "THES", "report": "RPRT"}.get(self.item_type, "GEN")
         lines = [f"TY  - {ty}"]
@@ -133,7 +134,7 @@ class AcademicItem:
 
     @classmethod
     def from_csl(cls, csl: dict, source: str = "", key: str = "") -> "AcademicItem":
-        """从 CSL JSON 构建 AcademicItem(写入后端前常需此路)。"""
+        """Build an AcademicItem from CSL JSON (often needed before writing to a backend)."""
         authors = csl.get("author") or []
         year = ""
         issued = csl.get("issued") or {}
@@ -160,7 +161,7 @@ class AcademicItem:
             item_type=csl.get("type", "document"),
         )
 
-    # --- 内部 helpers ---
+    # --- internal helpers ---
 
     def _combine_authors(self) -> str:
         if not self.creators:
@@ -177,7 +178,7 @@ class AcademicItem:
         return f"{family}, {given}".strip(", ")
 
     def _page_range(self) -> list[tuple[str, str]]:
-        """把页码字符串切成 (起始页, 结束页) 序列,供 RIS SP/EP 用。"""
+        """Split a page string into (start, end) pairs for RIS SP/EP."""
         pages = (self.page or "").strip()
         if not pages:
             return []

@@ -1,6 +1,7 @@
-"""PDF 处理:下载 + 文本抽取(经系统 pdftotext CLI),零 Python 依赖。
+"""PDF handling: download + text extraction (via the system pdftotext CLI), no Python deps.
 
-后端无关——Zotero 附件与 arXiv 直链都归一化为「拿到 bytes/路径 → 抽文本」。
+Backend-agnostic: Zotero attachments and arXiv direct links are both normalized to
+"given bytes/path -> extract text".
 """
 from __future__ import annotations
 
@@ -11,16 +12,16 @@ import urllib.request
 
 
 def download(url: str, timeout: int = 30) -> bytes:
-    """下载 URL 为 bytes。"""
+    """Download a URL as bytes."""
     req = urllib.request.Request(url, headers={"User-Agent": "litcli/0.1"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read()
 
 
 def extract_text(pdf: str | bytes, max_chars: int | None = None, first_page: bool = False) -> str:
-    """用 pdftotext 抽取 PDF 文本。
+    """Extract text from a PDF using pdftotext.
 
-    pdf: 文件路径(str)或 PDF 字节(bytes)。返回纯文本;max_chars 截断首部。
+    pdf: file path (str) or PDF bytes (bytes). Returns plain text; max_chars truncates the head.
     """
     is_bytes = isinstance(pdf, (bytes, bytearray))
     cleanup = None
@@ -48,11 +49,11 @@ def extract_text(pdf: str | bytes, max_chars: int | None = None, first_page: boo
 
     text = text.strip()
     if max_chars and len(text) > max_chars:
-        text = text[: max_chars] + "\n[…截断]"
+        text = text[: max_chars] + "\n[truncated]"
     return text
 
 
 def first_lines(text: str, n: int = 6) -> str:
-    """取前 n 行用于预览摘要。"""
+    """Return the first n lines for a preview snippet."""
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     return "\n".join(lines[:n])

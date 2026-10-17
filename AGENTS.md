@@ -25,7 +25,7 @@ python3 -m unittest tests.test_backends
 python3 -m unittest tests.test_models.TestModels.test_to_csl
 ```
 
-CLI 帮助用 `./bin/litcli --help`；本机 Zotero 库用 `litcli search "..."`（`--all` 跨后端聚合，`litcli backends list/status` 看可用后端与授权状态；`search --type <article|book|...>` 按类型过滤降噪，`--title/--author/--year/--container` 字段级过滤、`--sort cited` 按被引降序；`litcli refs <key>`(该文的参考文献/回溯找奠基)、`litcli citing <key>`(引用该文的文献/前向找跟进)、`litcli related <key>`(语义相关文献)——三者均 OpenAlex 引文图谱、默认按被引降序；`related` 默认按语义相关度内联序、`--sort cited` 才按被引降序（`refs`/`citing` 天然按被引降序）。`export` 的 arXiv key 如 `arxiv/1806.09180` 会自动归一为 DOI `10.48550/arxiv.x`）。
+CLI 帮助用 `./bin/litcli --help`；本机 Zotero 库用 `litcli search "..."`（`--all` 跨后端聚合，`litcli backends list/status` 看可用后端与授权状态；`search --type <article|book|...>` 按类型过滤降噪，`--title/--author/--year/--container` 字段级过滤、`--sort cited` 按被引降序；`litcli refs <key>`(该文的参考文献/回溯找奠基)、`litcli citing <key>`(引用该文的文献/前向找跟进)、`litcli related <key>`(语义相关文献)——三者均 OpenAlex 引文图谱、默认按被引降序；`related` 默认按语义相关度内联序、`--sort cited` 才按被引降序（`refs`/`citing` 天然按被引降序）。`export` 的 arXiv key 如 `arxiv/1806.09180` 会自动归一为 DOI `10.48550/arxiv.x`）。shell 补全用 `litcli completions <bash|zsh|fish>` 生成自包含脚本（`eval "$(litcli completions bash)"` 后 `litcli <TAB>` 补子命令/参数选项/选项取值(如 `--format`)/本地文件路径；补全时**不再起 `litcli` 子进程**——spec 内嵌在脚本里，CLI 面更新后重新 eval 即可）。
 
 ## 架构分层（后端无关的领域层 + 可插拔后端层）
 
@@ -48,11 +48,13 @@ litcli 的核心是「一条文献在多个后端（Zotero / arXiv）间的读�
 
 - **配置层**（`litcli/config.py`）：读 `~/.config/litcli/config.toml`（不支持则在 `$LITCLI_CONFIG`），`tomllib` 解析。加载优先级：显式 path → `$LITCLI_CONFIG` → `~/.config/litcli/config.toml` → **内置默认**（Zotero + arXiv + crossref + openalex）。写 Zotero 经 `litcli backends authorize zotero` 触发 `/api/local/authorize` 运行时授权并把本地 key 写回 `[backends.zotero].api_key`（`config.write_backend_key`，手写文本 upsert 保其它段）；检索专利（uspto）需在 config 配真实 `api_key`。后端注册表用 try-import：某后端文件未就绪时不影响其它后端工作。配置示例见 `config.example.toml`。
 
-- **CLI 编排层**（`litcli/cli.py`）：argparse 意图分族子命令：`search`（检索，`--type` 按类型过滤、`--title/--author/--year/--container` 字段级过滤、`--sort cited` 按被引降序）、`refs`/`citing`/`related`（引文图谱三方向——参考文献回溯/引用前向/语义邻居，默认 openalex，不支持的只读后端 `[跳过]` 退出码 2）、`data get/add/set/del/attach/tree/members`（本地库增删改查 + 集合罗列）、`fetch fulltext`（合法全文定位）、`export`（引文产出，arXiv key 归一为 DOI）、`backends list/status/authorize`（诊断/授权）。`models.AcademicItem` 现含 `container_title/volume/issue/page/publisher`，跨后端解析 `crossref`（container-title/volume/issue/page/publisher）、`openalex`（biblio + primary_location.source + doi 裸化）、`zotero_local`（publicationTitle/volume/issue/pages/publisher）填充，`export --format csljson/bibtex/ris` 输出完整期刊/卷/页。`data add` 的 `--creator` 用 `"家族, 名字"`，可多次；`--pdf` 抽元数据候选待核对、`--csl` 走 `from_csl`、`--force` 跳过查重/半残门。`data tree` 罗列集合树（层级显示）；`data members <集合key> [--no-recursive]` 罗列某集合条目（默认递归全部子集合，靠每条 `collections` 字段本地归属——Zotero `/items?collection=X` 实际被忽略返回全库）。
+- **CLI 编排层**（`litcli/cli.py`）：argparse 意图分族子命令：`search`（检索，`--type` 按类型过滤、`--title/--author/--year/--container` 字段级过滤、`--sort cited` 按被引降序）、`refs`/`citing`/`related`（引文图谱三方向——参考文献回溯/引用前向/语义邻居，默认 openalex，不支持的只读后端 `[跳过]` 退出码 2）、`data get/add/set/del/attach/tree/members`（本地库增删改查 + 集合罗列）、`fetch fulltext`（合法全文定位）、`export`（引文产出，arXiv key 归一为 DOI）、`backends list/status/authorize`（诊断/授权）、`completions <shell>`（生成 bash/zsh/fish 补全脚本）。
+
+**补全实现（`litcli/completions.py`）**：签名/选项/取值/文件路径的补全 spec 一次性从 argparse parser 内省（`build_spec`），按 shell 渲染为静态表 + 小引擎；bash/zsh 用 `case` 表 + `_litcli_is_cmd` 走命令链 + COMPREPLY/`compadd`；fish 用声明式 `complete -c litcli`（`__fish_use_subcommand`/`__fish_seen_subcommand_from`）。文件路径补全的取值选项（`--pdf/--csl/--out`）与文件位置参数 (`data attach <key> <src>`) 用 `FILE_FLAGS`/`FILE_POSITIONALS` 硬编码；`--backend/--type` 取值用 `BACKENDS`/`TYPES` 常量。补全范围不含 key/query 位置参数（那需实时数据）。`models.AcademicItem` 现含 `container_title/volume/issue/page/publisher`，跨后端解析 `crossref`（container-title/volume/issue/page/publisher）、`openalex`（biblio + primary_location.source + doi 裸化）、`zotero_local`（publicationTitle/volume/issue/pages/publisher）填充，`export --format csljson/bibtex/ris` 输出完整期刊/卷/页。`data add` 的 `--creator` 用 `"家族, 名字"`，可多次；`--pdf` 抽元数据候选待核对、`--csl` 走 `from_csl`、`--force` 跳过查重/半残门。`data tree` 罗列集合树（层级显示）；`data members <集合key> [--no-recursive]` 罗列某集合条目（默认递归全部子集合，靠每条 `collections` 字段本地归属——Zotero `/items?collection=X` 实际被忽略返回全库）。
 
 ## 惯例与约定
 
-- **代码注释与 docstring 一律用英文**；用户可见文案与用户使用文档（AGENTS.md、`.claude/skills/`、argparse 帮助、CLI 输出）用**中文**。标识符统一英文；按载体区分语言，不混用。
+- **所有 `.py` 文本一律英文**：注释、docstring，以及任何用户可见字符串（`print`/argparse `help`/`raise` 异常消息）都要英文——CLI 输出也走英文。只有用户文档保持中文：AGENTS.md、README.md、`.claude/skills/`、`config.example.toml`。标识符统一英文；按载体区分语言，不混用。
 - 加后端：继承 `Backend`，实现 `search`/`get`，覆盖 `capabilities`（只读就 `{"read"}`），在 `config._registry()` 的 try-import 里注册，并在 `config.example.toml` 加字段。
 - 新功能若要在领域层「输入某数据 → 输出统一模型」，优先做成纯函数（不 I/O、不联网），便于离线单测（现有测试都走构造数据、不连真库）。
 - 写 `AcademicItem` 新增字段时，同步检查 `to_csl`/`from_csl`/`merge_items` 是否该感知该字段。

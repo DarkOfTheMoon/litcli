@@ -1,8 +1,9 @@
-'''Zotero 集合罗列桩测:stub http.server,断言 collection_tree / collection_items 的归属逻辑。
+'''Zotero collection-listing stub tests: stub http.server, assert collection_tree / collection_items membership logic.
 
-关键背景:Zotero /items?collection=X 实际被忽略(返回全库),所以 collection_items
-必须"拉全库 items + 按每条 collections 字段本地归属"。这里用 stub server 坐实该行为,
-并验证递归(含子集合)与不递归(仅本集合)两种语义。
+Key background: Zotero's /items?collection=X is actually ignored (returns the whole library), so
+collection_items must "pull all items + assign membership locally by each item's collections field".
+Here a stub server pins that behavior, and verifies recursive (with sub-collections) vs non-recursive
+(only this collection) semantics.
 '''
 import json
 import threading
@@ -14,12 +15,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from litcli.backends.zotero_local import ZoteroLocalBackend
 
-# 集合树:
-#   R1(根)
+# Collection tree:
+#   R1 (root)
 #     ├─ C1
 #     │   └─ C1a
 #     └─ C2
-# 条目: A 挂 R1, B 挂 C1a, C 挂 C2, D 无集合(孤儿)
+# Items: A in R1, B in C1a, C in C2, D in no collection (orphan)
 COLLECTIONS = [
     {"key": "R1",  "data": {"key": "R1",  "name": "Root",  "parentCollection": ""}},
     {"key": "C1",  "data": {"key": "C1",  "name": "Sub1",  "parentCollection": "R1"}},
@@ -55,11 +56,11 @@ class _Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def do_GET(self):
-        # 实际请求 path 形如 /api/users/0/...(base 含 /api),用子串匹配
+        # Actual request path looks like /api/users/0/... (base contains /api); match by substring
         if "/collections" in self.path:
             return self._send(COLLECTIONS)
         if "/items" in self.path:
-            # 分页:按 start 切片,单页 size 由客户端 limit 决定
+            # Pagination: slice by start, per-page size decided by the client's limit
             import urllib.parse
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             start = int(q.get("start", ["0"])[0])
@@ -97,19 +98,19 @@ class ZoteroCollectionsStubTest(unittest.TestCase):
         self.assertTrue(nodes["C1"]["name"] and nodes["C1a"]["name"])
 
     def test_collection_items_recursive_includes_descendants(self):
-        # R1 递归:应包含 R1 本身(A) + 子集合 C1a(B) + C2(C);不含孤儿 D
+        # R1 recursive: should include R1 itself (A) + sub-collection C1a (B) + C2 (C); not the orphan D
         items = self.be.collection_items("R1", recursive=True)
         keys = {it.key for it in items}
         self.assertEqual(keys, {"A", "B", "C"})
 
     def test_collection_items_non_recursive_only_self(self):
-        # R1 仅本集合:只含直接挂 R1 的 A
+        # R1 non-recursive: only A directly in R1
         items = self.be.collection_items("R1", recursive=False)
         keys = {it.key for it in items}
         self.assertEqual(keys, {"A"})
 
     def test_collection_items_deep_sub_collection(self):
-        # C1a 单独(递归,无子集合):只含 B
+        # C1a alone (recursive, no sub-collections): only B
         items = self.be.collection_items("C1a", recursive=True)
         self.assertEqual({it.key for it in items}, {"B"})
 
@@ -124,7 +125,7 @@ class ZoteroSearchParseTest(unittest.TestCase):
         self.be = ZoteroLocalBackend(name="zotero", base="http://localhost:23119/api", library="0")
 
     def test_search_passes_qmode_everything(self):
-        # 中文/摘要字段检索需要 qmode=everything(默认 titleCreatorYear 会漏摘要)
+        # Chinese/abstract-field search needs qmode=everything (default titleCreatorYear misses abstracts)
         from unittest import mock
         with mock.patch.object(self.be, "_json_path") as m:
             m.return_value = ({}, [])
@@ -135,7 +136,7 @@ class ZoteroSearchParseTest(unittest.TestCase):
             self.assertEqual(params["limit"], 5)
 
     def test_search_folds_field_filters_into_q(self):
-        # zotero 仅单 q:字段过滤词折进 q(qmode=everything 全字段命中)
+        # zotero only has a single q: field filter words fold into q (qmode=everything hits all fields)
         from unittest import mock
         with mock.patch.object(self.be, "_json_path") as m:
             m.return_value = ({}, [])

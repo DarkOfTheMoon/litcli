@@ -1,4 +1,4 @@
-"""Unpaywall 解析器离线桩测:mock urlopen,断言 URL/解析/错误包装。"""
+"""Unpaywall resolver offline stub tests: mock urlopen, assert URL/parse/error wrapping."""
 import json
 import os
 import sys

@@ -1,4 +1,4 @@
-"""config 后端发现单测:直接传 dict,不落盘、不联网。"""
+"""Config backend-discovery unit tests: pass a dict directly, no disk write, no network."""
 import tempfile
 import unittest
 from pathlib import Path
@@ -23,7 +23,7 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(backends["a"].name, "a")
 
     def test_write_backend_key_creates_skeleton(self):
-        # 缺失文件时先落内置默认骨架,再插 api_key 到 zotero 段
+        # When the file is missing, write the built-in default skeleton first, then inject api_key into the zotero section
         d = Path(tempfile.mkdtemp())
         cfg = d / "config.toml"
         cfg.unlink(missing_ok=True)
@@ -31,13 +31,13 @@ class TestConfig(unittest.TestCase):
         text = cfg.read_text()
         self.assertIn("[backends.zotero]", text)
         self.assertIn("api_key = \"KEY1\"", text)
-        # 骨架应保留默认后端,避免 write_backend_key 后丢其它后端
+        # The skeleton should keep the default backends, so write_backend_key doesn't drop the other backends
         self.assertIn("[backends.arxiv]", text)
         self.assertIn("[backends.crossref]", text)
         self.assertIn("[backends.openalex]", text)
 
     def test_write_backend_key_upserts_existing(self):
-        # 已有 zotero 段且带 api_key:替换而非重复
+        # Existing zotero section already has api_key: replace rather than duplicate
         d = Path(tempfile.mkdtemp())
         cfg = d / "config.toml"
         cfg.write_text("[backends.zotero]\ntype = \"zotero_local\"\nbase = \"http://x\"\napi_key = \"OLD\"\n\n[backends.arxiv]\ntype = \"arxiv\"\n", encoding="utf-8")
@@ -45,12 +45,12 @@ class TestConfig(unittest.TestCase):
         text = cfg.read_text()
         self.assertIn("api_key = \"NEW\"", text)
         self.assertNotIn("api_key = \"OLD\"", text)
-        # 未动其它段与类型字段
+        # Other sections and type fields untouched
         self.assertIn("type = \"zotero_local\"", text)
         self.assertIn("[backends.arxiv]", text)
 
     def test_write_backend_key_appends_new_section(self):
-        # 文件中无该后端段:追加一个 [backends.<name>] 段
+        # No section for this backend in the file: append a [backends.<name>] section
         d = Path(tempfile.mkdtemp())
         cfg = d / "config.toml"
         cfg.write_text("[backends.zotero]\ntype = \"zotero_local\"\n", encoding="utf-8")
@@ -58,7 +58,7 @@ class TestConfig(unittest.TestCase):
         text = cfg.read_text()
         self.assertIn("[backends.uspto]", text)
         self.assertIn("api_key = \"KEY2\"", text)
-        # 原 zotero 段保留
+        # Original zotero section preserved
         self.assertIn("[backends.zotero]", text)
 
     def test_write_backend_key_quotes_safely(self):

@@ -1,4 +1,4 @@
-"""fulltext 合法 OA 通道桩测:注入解析器,断言优先级/被墙标注/单步失败不拖垮。"""
+"""fulltext legitimate-OA-channel stub tests: inject resolvers, assert priority / blocked marking / single-step failure doesn't sink the run."""
 import os
 import sys
 import unittest
@@ -51,7 +51,7 @@ class FulltextStubTest(unittest.TestCase):
         self.assertFalse(out["has_fulltext"])
 
     def test_local_beats_oa(self):
-        """本地库命中的附件优先于 OA 直链(用户要求:本地优先)。"""
+        """A local library's attachment takes priority over an OA direct link (user requirement: local-first)."""
         class FakeBackend:
             name = "zotero"
             def can(self, cap):
@@ -74,7 +74,7 @@ class FulltextStubTest(unittest.TestCase):
         class NoAttach:
             name = "arxiv"
             def can(self, cap):
-                return False  # 无 attachment 能力,跳过
+                return False  # no attachment capability, skip
         self.assertIsNone(ft._from_local("10.1/x", {"arxiv": NoAttach()}))
 
 

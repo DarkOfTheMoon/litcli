@@ -1,7 +1,9 @@
-"""OpenAlex 后端:开放学术图谱(api.openalex.org),全球论文/图书/专利元数据。
+"""OpenAlex backend: the open scholarly graph (api.openalex.org), global metadata for
+papers/books/patents.
 
-只读。搜索(works?search=)或按 DOI(works/doi:...)。abstract 以倒排索引给出,需重建;
-best_oa_location 提供**合法开放获取(OA)PDF 直链**,作为 attend 不入 Sci-Hub 的合规全文来源。
+Read-only. Search (works?search=) or by DOI (works/doi:...). abstract is given as an inverted
+index and must be rebuilt; best_oa_location provides **legal open-access (OA) PDF links** as a
+compliant full-text source that does not go through Sci-Hub.
 """
 from __future__ import annotations
 
@@ -31,7 +33,7 @@ _TYPE_MAP = {
 
 
 def _inverted_to_text(ai: dict) -> str:
-    """把 OpenAlex 的倒排索引 {word:[pos]} 重建为可读句子(近似)。"""
+    """Rebuild OpenAlex's inverted index {word:[pos]} into readable sentences (approximate)."""
     positions = []
     for w, idxs in (ai or {}).items():
         for i in idxs:
@@ -68,7 +70,7 @@ def _oa_pdf(rec: dict) -> list[str]:
 
 
 def _bare_doi(value: str) -> str:
-    """OpenAlex 的 doi 是完整 URL(https://doi.org/10.x);剥成裸 DOI 供身份键/导出用。"""
+    """OpenAlex's doi is a full URL (https://doi.org/10.x); strip it to a bare DOI for identity keys/export."""
     d = (value or "").strip()
     for prefix in ("https://doi.org/", "http://doi.org/", "https://dx.doi.org/"):
         if d.lower().startswith(prefix):
@@ -87,7 +89,7 @@ def _journal_name(rec: dict) -> str:
 
 
 def _biblio(rec: dict) -> tuple[str, str, str]:
-    """OpenAlex biblio 对象 -> (volume, issue, page);page 用 first_page-last_page 拼接。"""
+    """OpenAlex biblio object -> (volume, issue, page); page is assembled as first_page-last_page."""
     b = rec.get("biblio") or {}
     volume = b.get("volume") or ""
     issue = b.get("issue") or ""
@@ -142,7 +144,7 @@ class OpenAlexBackend(Backend):
         }
 
     def _get(self, url: str) -> dict:
-        """GET 并解析 JSON;对 5xx/网络错误做有限指数退避重试。"""
+        """GET and parse JSON; do limited exponential-backoff retries on 5xx / network errors."""
         req = urllib.request.Request(url, headers=self._headers())
         last: RuntimeError | None = None
         for attempt in range(3):
@@ -157,13 +159,13 @@ class OpenAlexBackend(Backend):
                     continue
                 raise err from e
             except urllib.error.URLError as e:
-                err = RuntimeError(f"[{self.name}] 无法访问: {e.reason}")
+                err = RuntimeError(f"[{self.name}] unreachable: {e.reason}")
                 if attempt < 2:
                     time.sleep(0.5 * (attempt + 1))
                     last = err
                     continue
                 raise err from e
-        raise last  # pragma: no cover - 循环内已 raise
+        raise last  # pragma: no cover - already raised inside the loop
 
     def _with_mailto(self, url: str) -> str:
         """Append the polite ``&mailto=`` param (OpenAlex asks for it) to a URL."""
@@ -199,7 +201,7 @@ class OpenAlexBackend(Backend):
         """Fetch one raw work dict (single GET): DOI/W-id integration + key-miss guard."""
         data = self._get(self._with_mailto(self._work_url(key)))
         if not data:
-            raise KeyError(f"[{self.name}] 未找到 {key}")
+            raise KeyError(f"[{self.name}] not found: {key}")
         return data
 
     def search(self, query: str, limit: int = 10, filters: dict | None = None) -> list[AcademicItem]:
@@ -299,7 +301,7 @@ class OpenAlexBackend(Backend):
             rec = self._work(key)
             wid = _wid(rec.get("id") or "")
         if not wid:
-            raise RuntimeError(f"[{self.name}] {key} 解析不到 OpenAlex 内部 id")
+            raise RuntimeError(f"[{self.name}] unable to resolve an internal OpenAlex id for {key}")
         data = self._get(self._with_mailto(
             f"{self._base}?filter=cites:{wid}&per_page={per_page}&sort=cited_by_count:desc"))
         return [_work_to_item(w, self.name) for w in (data.get("results") or [])][:limit]
@@ -308,9 +310,9 @@ class OpenAlexBackend(Backend):
         return _work_to_item(self._work(key), self.name)
 
     def get_attachment(self, key: str) -> bytes:
-        """下载合法 OA PDF 直链(best_oa_location 的 pdf_url)。"""
+        """Download a legal OA PDF link (best_oa_location's pdf_url)."""
         item = self.get(key)
         if not item.attachments:
-            raise RuntimeError(f"[{self.name}] {key} 无 OA PDF 直链")
+            raise RuntimeError(f"[{self.name}] no OA PDF link for {key}")
         from .. import pdf as pdfutil
         return pdfutil.download(item.attachments[0])

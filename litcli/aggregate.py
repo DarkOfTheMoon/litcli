@@ -1,8 +1,9 @@
-"""跨后端聚合领域层:去重/合并/排序,后端无关。
+"""Cross-backend aggregation domain layer: dedupe/merge/sort, backend-agnostic.
 
-不同后端(如 Zotero 与 arXiv)可能返回同一文献的不同元数据快照。
-本模块提供纯函数:归一化、身份键、信息完整度打分与合并,
-供 ``--all`` 聚合检索共用;不触碰后端、不依赖网络。
+Different backends (e.g. Zotero vs arXiv) may return different metadata snapshots
+of the same work. This module provides pure functions: normalization, identity key,
+information-completeness scoring, and merging, shared by the ``--all`` aggregate
+search. It touches no backend and depends on no network.
 """
 from __future__ import annotations
 
@@ -16,17 +17,18 @@ _WS_RE = re.compile(r"\s+")
 
 
 def norm_title(title: str) -> str:
-    """标题归一:小写、去标点、压缩空白。"""
+    """Normalize a title: lowercase, strip punctuation, collapse whitespace."""
     t = _PUNCT_RE.sub(" ", (title or "").lower())
     return _WS_RE.sub(" ", t).strip()
 
 
 def norm_doi(doi: str) -> str:
-    """DOI 归一:strip、小写、去尾部句点,并剥掉 https://doi.org/ 前缀。
+    """Normalize a DOI: strip, lowercase, drop trailing periods, and strip the https://doi.org/ prefix.
 
-    不同后端返回的 DOI 形态不同:Crossref 为裸 DOI(10.1103/x),OpenAlex 为
-    完整 URL(https://doi.org/10.1103/x)。不剥前缀会使身份键各异,导致 --all
-    聚合无法把同一文献的 crossref/openalex 记录合并(见 test_norm_doi_url_prefix)。
+    Different backends return DOIs in different shapes: Crossref gives a bare DOI
+    (10.1103/x), OpenAlex a full URL (https://doi.org/10.1103/x). Keeping the prefix
+    makes identity keys differ, so the ``--all`` aggregate cannot merge crossref/openalex
+    records of the same work (see test_norm_doi_url_prefix).
     """
     d = (doi or "").strip().lower().rstrip(".")
     for prefix in ("https://doi.org/", "http://doi.org/", "https://dx.doi.org/",
@@ -38,7 +40,7 @@ def norm_doi(doi: str) -> str:
 
 
 def identity(item: AcademicItem) -> str:
-    """身份键:优先生效 DOI,否则退化为归一标题。用于跨库判同。"""
+    """Identity key: prefer an effective DOI, otherwise fall back to the normalized title. Used to judge sameness across libraries."""
     d = norm_doi(item.doi)
     if d:
         return "doi:" + d
@@ -46,7 +48,7 @@ def identity(item: AcademicItem) -> str:
 
 
 def _info_score(item: AcademicItem) -> tuple:
-    """信息完整度打分(粗):abstract/doi/url 有则加分,标题长度作尾键。"""
+    """Information-completeness score (coarse): add per present abstract/doi/url, with title length as the tie-breaker."""
     return (
         1 if item.abstract else 0,
         1 if item.doi else 0,
@@ -56,7 +58,7 @@ def _info_score(item: AcademicItem) -> tuple:
 
 
 def _merge_two(primary: AcademicItem, other: AcademicItem) -> None:
-    """就地把 other 的缺失字段补给 primary(primary 已是副本,可安全改)。"""
+    """Fill primary's missing fields from other in place (primary is already a copy, so it is safe to modify)."""
     if not primary.creators and other.creators:
         primary.creators = list(other.creators)
     if not primary.year and other.year:
@@ -86,7 +88,7 @@ def _merge_two(primary: AcademicItem, other: AcademicItem) -> None:
 
 
 def _year_key(year: str) -> int:
-    """年份降序排序键(非数字按 0 处理)。"""
+    """Descending year sort key (non-numeric treated as 0)."""
     return -int(year) if year.isdigit() else 0
 
 
@@ -96,12 +98,13 @@ def _cited_key(item: AcademicItem) -> int:
 
 
 def merge_items(items: list[AcademicItem]) -> list[AcademicItem]:
-    """去重 + 合并 + 排序。
+    """Dedupe + merge + sort.
 
-    - 按 :func:`identity` 分组,保留首次出现顺序;
-    - 每组取信息最完整者为主记录,其余补给缺失字段(副本操作,不污染入参);
-    - ``extra["sources"]`` 记录全部来源,``source`` 保留主记录来源;
-    - 最终按年份降序,同年按标题升序稳定排序。
+    - Group by :func:`identity`, preserving first-occurrence order;
+    - within each group, take the most complete record as the primary and fill the rest's
+      missing fields from it (copy operations, do not mutate the inputs);
+    - ``extra["sources"]`` records all sources, while ``source`` keeps the primary's source;
+    - finally sort by year descending, then by title ascending (stable).
     """
     groups: dict[str, list[AcademicItem]] = {}
     order: list[str] = []

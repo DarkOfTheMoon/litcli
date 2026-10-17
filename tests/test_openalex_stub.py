@@ -1,4 +1,4 @@
-"""OpenAlex 后端离线桩测:mock urlopen,断言请求/解析(摘要重建/OA PDF)/错误包装。"""
+"""OpenAlex backend offline stub tests: mock urlopen, assert request/parse (abstract rebuild/OA PDF)/error wrapping."""
 import json
 import os
 import sys
@@ -69,7 +69,7 @@ class OpenAlexStubTest(unittest.TestCase):
         self.assertIn("/doi:10.1038%2Fnature14539", req.full_url)
 
     def test_doi_normalized_to_bare(self):
-        # OpenAlex 的 doi 是完整 URL,应存为裸 DOI(供身份键/导出标准使用)
+        # OpenAlex's doi is a full URL; it should be stored as a bare DOI (for identity keys / export standard)
         with mock.patch("urllib.request.urlopen", return_value=_Resp(RESULTS)):
             it = self.be.search("deep learning", limit=1)[0]
         self.assertEqual(it.doi, "10.1038/nature14539")
@@ -91,8 +91,9 @@ class OpenAlexStubTest(unittest.TestCase):
         self.assertEqual(it.extra["openalex_id"], "https://openalex.org/W2919115771")
 
     def test_search_field_filters_url(self):
-        # 字段映射 filter=title.search,raw_author_name.search,publication_year;值包引号(逗号分隔安全);
-        # container 并进 search。filter 值加引号是为了让含逗号的作者名不被 OpenAlex 当分隔而 400。
+        # Field map: filter=title.search,raw_author_name.search,publication_year; values quoted (comma-safe);
+        # container folds into search. Filter values are quoted so an author name containing a comma is not
+        # split by OpenAlex into a 400.
         with mock.patch("urllib.request.urlopen", return_value=_Resp(RESULTS)) as m:
             self.be.search("finite volume", limit=3,
                            filters={"title": "anisotropic", "author": "Bonaventura",
@@ -105,22 +106,23 @@ class OpenAlexStubTest(unittest.TestCase):
         self.assertIn("mailto=t%40e.com", req.full_url)
 
     def test_search_filter_comma_quoted(self):
-        # 含逗号的 author(如 "Bonaventura, J.")必须被引号包裹,否则 OpenAlex 按逗号切 filter 报 400。
+        # An author with a comma (e.g. "Bonaventura, J.") must be quoted, otherwise OpenAlex splits the filter on the comma -> 400.
         with mock.patch("urllib.request.urlopen", return_value=_Resp(RESULTS)) as m:
             self.be.search("turbulence", limit=3, filters={"author": "Bonaventura, J."})
         req = m.call_args[0][0]
         self.assertIn('raw_author_name.search%3A%22Bonaventura%2C+J.%22', req.full_url)
 
     def test_search_filters_year_not_int_crash(self):
-        # int year 传参不再触发 .isdigit() AttributeError(_filters 统一 str 化)。
+        # Passing an int year no longer triggers an .isdigit() AttributeError (_filters uniformly str-ifies).
         with mock.patch("urllib.request.urlopen", return_value=_Resp(RESULTS)) as m:
             self.be.search("mesh", limit=3, filters={"year": 2018})
         req = m.call_args[0][0]
         self.assertIn("publication_year%3A2018", req.full_url)
 
     def test_related_returns_related_works(self):
-        # related:父 work 单次拉取(取内联 related_works,W id)后并行取每条的 own api.openalex.org URL,
-        # 按内联顺序返回;失败条目被跳过(这里用 URL 决定每个响应,规避线程调度歧义)。
+        # related: fetch the parent work once (inline related_works, W ids), then fetch each one's own
+        # api.openalex.org URL in parallel, returned in inline order; failed entries are skipped (here the
+        # URL decides each response to avoid thread-scheduling ambiguity).
         r1 = {"id": "https://openalex.org/W2088845016", "display_name": "R1",
               "publication_year": 2019, "type": "article", "cited_by_count": 3}
         r2 = {"id": "https://openalex.org/W589102260", "display_name": "R2",
@@ -133,7 +135,7 @@ class OpenAlexStubTest(unittest.TestCase):
                 return _Resp(r1)
             if "W589102260" in u:
                 return _Resp(r2)
-            return _Resp(WORK)  # 父 work(/doi:...)
+            return _Resp(WORK)  # parent work (/doi:...)
 
         with mock.patch("urllib.request.urlopen", side_effect=_resp_for) as m:
             items = self.be.related("10.1038/nature14539", limit=2)

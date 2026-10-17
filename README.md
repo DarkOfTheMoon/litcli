@@ -31,9 +31,9 @@ PDF 全文抽取需系统有 `pdftotext`(poppler-utils)；无则 `pdf --text` �
 | `litcli search "X" [--all] [--limit N] [--type article] [--title ..] [--author ..] [--year ..] [--container ..] [--sort cited] [--format table\|json\|csl]` | 检索；`--all` 对各后端聚合，**去重/合并/排序**，`extra["sources"]` 标全部来源；`--type` 按条目类型过滤降噪；`--title/--author/--year/--container` 字段级过滤(与 query AND 叠加,各后端映射见下)；`--sort cited` 按被引数降序，table 显示 `[被引 N]` | 只读 |
 | `litcli refs <key> [--limit N] [--sort cited] [--backend openalex]` | **参考文献(回溯找奠基)**：该文所引用的文献(OpenAlex `referenced_works`，并行拉取，默认按被引降序——把奠基文献按重要性排出来) | 只读 |
 | `litcli citing <key> [--limit N] [--sort cited] [--backend openalex]` | **引用该文的文献(前向找跟进)**：`/works?filter=cites:<W-id>` 单请求，默认按被引降序(重要跟进在前) | 只读 |
-| `litcli related <key> [--limit N] [--sort cited] [--backend openalex]` | **语义相关文献**：OpenAlex `related_works` 邻居；不支持的只读后端输出 `[跳过]` 退出码 2 | 只读 |
+| `litcli related <key> [--limit N] [--sort cited] [--backend openalex]` | **语义相关文献**：OpenAlex `related_works` 邻居；不支持的只读后端输出 `[skipped]` 退出码 2 | 只读 |
 | `litcli data get <id> [--format csl\|json]` | 单条全字段 | 只读 |
-| `litcli data add --title "..." [--creator "家族, 名字"]... [--year ..]` | 摄入元信息；写前过 `should_import` 查重/半残门，只读后端报 `[跳过]` | **写库** |
+| `litcli data add --title "..." [--creator "家族, 名字"]... [--year ..]` | 摄入元信息；写前过 `should_import` 查重/半残门，只读后端报 `[skipped]` | **写库** |
 | `litcli data add --pdf <file>` | 从 PDF 首页**启发式**抽候选，展示待核对后才写；不自动入库 | **写库** |
 | `litcli data set <id> --title .. [--abstract ..] [--year ..]` | 修改字段 | **写库** |
 | `litcli data del <id>` | 删除条目 | **写库** |
@@ -44,6 +44,7 @@ PDF 全文抽取需系统有 `pdftotext`(poppler-utils)；无则 `pdf --text` �
 | `litcli fetch fulltext <doi> [--download] [--lines N]` | **合法全文定位**：本地库 → Unpaywall → OpenAlex OA 直链；都拿不到则**指路图书馆/代理**（不绕过付费墙） | 只读 |
 | `litcli backends list` / `status` | 列出已配置后端及能力 / 显示各后端**授权与可达状态** | 只读 |
 | `litcli backends authorize [zotero]` | 主动向 Zotero **本地授权**拿写库 key 并写回 `config.toml`（`[backends.zotero].api_key`）；此后 `data add/set/del/attach` 免再授权 | 写配置 |
+| `litcli completions <bash\|zsh\|fish>` | 打印自包含的 shell 补全脚本；`eval "$(litcli completions bash)"` 使 `litcli <TAB>` 补全子命令/参数/选项取值(如 `--format`)/文件路径。补全在 tab 时**不再起 `litcli` 子进程**(spec 内嵌在脚本里)；CLI 面更新后重新 eval 即可 | 只读 |
 
 `search` 的 `--title/--author/--year/--container` 在各后端映射如下（后端无对应字段→尽力折叠进自由查询词或忽略）：
 

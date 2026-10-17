@@ -1,4 +1,4 @@
-'''arXiv 后端离线桩测:patch urlopen,断言请求构造与 Atom 解析,及错误包装。'''
+'''arXiv backend offline stub tests: patch urlopen, assert request construction and Atom parsing, and error wrapping.'''
 import unittest
 import urllib.error
 import sys, os
@@ -24,7 +24,7 @@ ATOM = b'''<?xml version="1.0" encoding="UTF-8"?>
 
 
 class _Resp:
-    '''context-manager 化的 urlopen 返回值。'''
+    '''Context-manager-ized urlopen return value.'''
     def __init__(self, data):
         self._data = data
     def __enter__(self):
@@ -63,8 +63,9 @@ class ArxivStubTest(unittest.TestCase):
         self.assertEqual(item.key, "2006.12345")
 
     def test_search_field_filters_and(self):
-        # 字段过滤叠加为 AND 语法:all + ti + au + submittedDate;ti/au 值包引号(多词/逗号作者名不被
-        # arXiv 按空白切分而泄成全库 OR)。假定子串(引号按加号、逗号按 %2C 编码)。
+        # Field filters compose into AND syntax: all + ti + au + submittedDate; ti/au values are quoted
+        # (multi-word / comma author names are not split on whitespace by arXiv into a full-library OR).
+        # Assumed substrings (quotes as plus, commas as %2C).
         with mock.patch("urllib.request.urlopen", return_value=_Resp(ATOM)) as m:
             self.be.search("finite volume", limit=3,
                            filters={"title": "anisotropic", "author": "Bonaventura",
@@ -75,7 +76,7 @@ class ArxivStubTest(unittest.TestCase):
                       "+TO+201812312359%5D", req.full_url)
 
     def test_search_filters_only_fields(self):
-        # 无自由 query 时,仅字段词也组成合法查询
+        # With no free query, field-only words still form a valid query
         with mock.patch("urllib.request.urlopen", return_value=_Resp(ATOM)) as m:
             self.be.search("", filters={"title": "mesh"})
         req = m.call_args[0][0]

@@ -1,4 +1,4 @@
-"""Crossref 后端离线桩测:mock urlopen,断言请求构造/解析/类型映射/5xx 重试/错误包装。"""
+"""Crossref backend offline stub tests: mock urlopen, assert request construction / parsing / type mapping / 5xx retry / error wrapping."""
 import json
 import os
 import sys
@@ -48,7 +48,7 @@ class CrossrefStubTest(unittest.TestCase):
         self.assertEqual(it.year, "2015")
         self.assertEqual(it.item_type, "article")
         self.assertEqual(it.creators[0], {"family": "LeCun", "given": "Yann"})
-        self.assertNotIn("jats", it.abstract.lower())  # 已去标签
+        self.assertNotIn("jats", it.abstract.lower())  # tags stripped
 
     def test_type_map_book(self):
         rec = dict(REC); rec["type"] = "book"; rec["title"] = ["A Book"]
@@ -84,7 +84,7 @@ class CrossrefStubTest(unittest.TestCase):
         self.assertIn("is-referenced-by-count", REC)
 
     def test_search_field_filters_url(self):
-        # 字段过滤映射为 query.title/author/container-title + filter 年份区间
+        # Field filters map to query.title/author/container-title + filter year range
         with mock.patch("urllib.request.urlopen", return_value=_Resp(MSG)) as m:
             self.be.search("anisotropic", limit=3,
                            filters={"title": "anisotropic", "author": "Bonaventura",

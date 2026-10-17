@@ -1,7 +1,7 @@
-"""arXiv 后端:走其开放 API(http://export.arxiv.org/api/query),Atom/XML。
+"""arXiv backend: through its open API (http://export.arxiv.org/api/query), Atom/XML.
 
-纯网络后端,**只读**(capabilities 无 write,但可拉 PDF 直链 -> attachment).
-条目按 arXiv id(如 2006.12345)归一化到 AcademicItem。
+A pure network backend, **read-only** (capabilities has no write, but can pull PDF direct links ->
+attachment). Items are normalized to AcademicItem by arXiv id (e.g. 2006.12345).
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ _PDF = "https://arxiv.org/pdf"
 
 
 def _short_id(eid: str) -> str:
-    """'http://arxiv.org/abs/2006.12345v1' -> '2006.12345'(去版本)"""
+    """'http://arxiv.org/abs/2006.12345v1' -> '2006.12345' (strips the version suffix)"""
     tail = eid.rstrip("/").split("/")[-1]
     return re.sub(r"v\d+$", "", tail)
 
@@ -67,7 +67,7 @@ class ArxivBackend(Backend):
 
     @property
     def capabilities(self) -> set[str]:
-        return {"read", "attachment"}  # 只读,但可拉 PDF 直链
+        return {"read", "attachment"}  # read-only, but can pull PDF direct links
 
     def _query(self, search_query: str, limit: int) -> list[AcademicItem]:
         params = urllib.parse.urlencode({"search_query": search_query, "max_results": limit})
@@ -80,9 +80,9 @@ class ArxivBackend(Backend):
             with urllib.request.urlopen(req, timeout=25) as resp:
                 xml = resp.read()
         except urllib.error.HTTPError as e:
-            raise RuntimeError(f"[{self.name}] arXiv 请求失败 HTTP {e.code}: {e.reason}") from e
+            raise RuntimeError(f"[{self.name}] arXiv request failed HTTP {e.code}: {e.reason}") from e
         except urllib.error.URLError as e:
-            raise RuntimeError(f"[{self.name}] arXiv 无法访问: {e.reason}") from e
+            raise RuntimeError(f"[{self.name}] arXiv unreachable: {e.reason}") from e
         root = ET.fromstring(xml)
         return [_entry_to_item(e) for e in root.findall("a:entry", _NS)]
 
@@ -109,7 +109,7 @@ class ArxivBackend(Backend):
     def get(self, key: str) -> AcademicItem:
         items = self._query(f'id:{key}', 1)
         if not items:
-            raise KeyError(f"[{self.name}] arXiv 未找到 {key}")
+            raise KeyError(f"[{self.name}] arXiv not found: {key}")
         return items[0]
 
     def get_attachment(self, key: str) -> bytes:

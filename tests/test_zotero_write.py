@@ -1,7 +1,7 @@
-'''Zotero 本地后端写入桩测:stub http.server,断言 add/patch 请求形状。
+'''Zotero local backend write stub tests: stub http.server, assert add/patch request shape.
 
-目的是证明请求形状正确(METHOD/PATH/HEADERS/BODY),以坐实
-写入不落库的根因在 Zotero 侧授权,而非本代码。
+The purpose is to prove the request shape is correct (METHOD/PATH/HEADERS/BODY), pinning the root
+cause of writes not landing to Zotero-side authorization rather than this code.
 '''
 import json
 import threading
@@ -40,12 +40,12 @@ class _Handler(BaseHTTPRequestHandler):
             return self._send({"serverID": "TEST-SID", "version": "3.0.0"})
         import urllib.parse
         q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-        if "q" in q:   # search 请求(q 参数)
+        if "q" in q:   # search request (q param)
             data = [{"data": {"itemType": "journalArticle", "title": "Wrinkled Drop",
                               "creators": [], "date": "2002", "key": "K1",
                               "abstractNote": "", "DOI": "", "url": ""}}]
             return self._send(data)
-        if q.get("limit") == ["1"]:   # library_version 探测
+        if q.get("limit") == ["1"]:   # library_version probe
             return self._send([], extra={"Last-Modified-Version": "42", "Zotero-Server-ID": "TEST-SID"})
         if "/items/" in self.path:    # get single
             return self._send({"data": {"itemType": "journalArticle", "title": "Old",
@@ -109,7 +109,7 @@ class ZoteroWriteStubTest(unittest.TestCase):
         self.assertEqual(h.get("zotero-api-version"), "3")
         self.assertEqual(h.get("zotero-server-id"), "TEST-SID")
         self.assertEqual(h.get("if-unmodified-since-version"), "42")
-        # 写头携带本地授权 key(经 /api/local/authorize 走)
+        # write header carries the local authorization key (obtained via /api/local/authorize)
         self.assertEqual(h.get("zotero-api-key"), "AUTHKEY123")
         body = json.loads(rec[3])
         it = body[0]
@@ -134,7 +134,7 @@ class ZoteroWriteStubTest(unittest.TestCase):
         self.assertEqual(items[0].year, "2002")
 
     def test_attach_sends_parented_attachment(self):
-        # 本地路径 → linked_file;URL → linked_url
+        # local path -> linked_file; URL -> linked_url
         att_key = self.be.attach("PARENTKEY", "/home/u/x.pdf")
         self.assertEqual(att_key, "NEWKEY")
         rec = self._find("POST", "/users/0/items")
@@ -166,7 +166,7 @@ class ZoteroWriteStubTest(unittest.TestCase):
     def test_authorize_obtains_local_key(self):
         key = self.be.authorize()
         self.assertEqual(key, "AUTHKEY123")
-        # 之后写操作直接用该 key,不再重复弹授权框(第二次 authorize 仍走一次)
+        # subsequent write operations use that key directly, no repeated auth dialog (the second authorize still runs once)
         self.assertEqual(self.be._app_key_val, "AUTHKEY123")
         rec = self._find("POST", "local/authorize")
         self.assertIsNotNone(rec)
@@ -175,10 +175,10 @@ class ZoteroWriteStubTest(unittest.TestCase):
         self.assertEqual(h.get("zotero-server-id"), "TEST-SID")
 
     def test_write_key_falls_back_to_authorize(self):
-        # 无 config key 时,写操作触发 _write_key -> authorize 拿 AUTHKEY123
+        # Without a config key, write operations trigger _write_key -> authorize to get AUTHKEY123
         key = self.be._write_key()
         self.assertEqual(key, "AUTHKEY123")
-        # 二调命中缓存,不重复发
+        # second call hits the cache, no repeat request
         self.be._write_key()
         auths = [r for r in _Handler.reqlog if r[0] == "POST" and "local/authorize" in r[1]]
         self.assertEqual(len(auths), 1)

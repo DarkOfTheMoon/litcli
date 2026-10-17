@@ -1,8 +1,9 @@
-"""Backend 抽象基类 + 能力标注(capabilities)。
+"""Backend abstract base class with capability annotations.
 
-多后端必须处理「各后端能力不同」:Zotero 可读可写、arXiv 只读。
-执象用一个 capabilities 集合(读=read / 写=write / 附附件=attachment),
-CLI 在执行 add/patch 前先查 can("write"),arXiv 这类只读后端将抛 NotSupportedError。
+Multiple backends must handle differing capabilities: Zotero is read/write, arXiv is
+read-only. A ``capabilities`` set (read / write / attachment) captures this, and the CLI
+checks ``can("write")`` before running add/patch; read-only backends such as arXiv raise
+NotSupportedError.
 """
 from __future__ import annotations
 
@@ -12,20 +13,20 @@ from ..models import AcademicItem
 
 
 class NotSupportedError(NotImplementedError):
-    """对指定后端发起其不支持的操作用。"""
+    """Raised when an unsupported operation is attempted on a given backend."""
 
     def __init__(self, op: str, backend: "Backend"):
-        super().__init__(f"[{backend.name}] 不支持操作 {op} (capabilities={sorted(backend.capabilities)})")
+        super().__init__(f"[{backend.name}] does not support operation {op} (capabilities={sorted(backend.capabilities)})")
 
 
 class Backend(ABC):
-    """所有学术后端的抽象基类。"""
+    """Abstract base class for all academic backends."""
 
     name: str = ""
 
     @property
     def capabilities(self) -> set[str]:
-        """能力集,子类覆盖。常用: read / write / attachment。"""
+        """Capability set; subclasses override. Common values: read / write / attachment."""
         return {"read"}
 
     def can(self, cap: str) -> bool:
@@ -62,22 +63,22 @@ class Backend(ABC):
 
     @abstractmethod
     def get(self, key: str) -> AcademicItem:
-        """取单个条目。"""
+        """Fetch a single item."""
 
     def list_collections(self) -> list[dict]:
-        """列出集合/分类(仅支持的后端)。"""
+        """List collections/folders (only backends that support it)."""
         raise NotSupportedError("list_collections", self)
 
     def collection_tree(self) -> list[dict]:
-        """列出含层级(父/子)的完整集合节点(仅支持的后端)。"""
+        """List full collection nodes with hierarchy (parent/child) (only backends that support it)."""
         raise NotSupportedError("collection_tree", self)
 
     def collection_items(self, coll_key: str, recursive: bool = True) -> list[AcademicItem]:
-        """列出某集合(可选含全部子集合)的条目(仅支持的后端)。"""
+        """List items in a collection (optionally including all sub-collections) (only backends that support it)."""
         raise NotSupportedError("collection_items", self)
 
     def get_attachment(self, key: str) -> bytes:
-        """取主 PDF 附件字节(仅支持的后端)。"""
+        """Fetch the main PDF attachment bytes (only backends that support it)."""
         raise NotSupportedError("get_attachment", self)
 
     def related(self, key: str, limit: int = 5, sort_cited: bool = False) -> list[AcademicItem]:
@@ -93,24 +94,26 @@ class Backend(ABC):
         raise NotSupportedError("citing", self)
 
     def add(self, item: AcademicItem) -> str:
-        """新增条目,返回新条目的 key/标识(仅 carries 'write' 的后端)。"""
+        """Add an item, returning the new item's key/identifier (only backends that carry 'write')."""
         self._require("write")
-        raise NotImplementedError(f"[{self.name}] add 未实现")
+        raise NotImplementedError(f"[{self.name}] add not implemented")
 
     def patch(self, key: str, fields: dict) -> AcademicItem:
-        """修改条目字段(仅 carries 'write' 的后端)。"""
+        """Update item fields (only backends that carry 'write')."""
         self._require("write")
-        raise NotImplementedError(f"[{self.name}] patch 未实现")
+        raise NotImplementedError(f"[{self.name}] patch not implemented")
 
     def delete(self, key: str) -> None:
-        """删除条目(仅 carries 'write' 的后端)。"""
+        """Delete an item (only backends that carry 'write')."""
         self._require("write")
-        raise NotImplementedError(f"[{self.name}] delete 未实现")
+        raise NotImplementedError(f"[{self.name}] delete not implemented")
 
     def attach(self, key: str, src: str) -> str:
-        """给已有条目 key 挂全文附件,返回附件 key(仅 carries 'write' 的后端)。
+        """Attach a full-text attachment to an existing item ``key``, returning the attachment key
+        (only backends that carry 'write').
 
-        src: 本地文件路径(file:// 或绝对路径)或 URL。link 模式引用,不复制内容。
+        src: a local file path (file:// or absolute path) or a URL. Link mode references it, does
+        not copy the content.
         """
         self._require("write")
-        raise NotImplementedError(f"[{self.name}] attach 未实现")
+        raise NotImplementedError(f"[{self.name}] attach not implemented")
