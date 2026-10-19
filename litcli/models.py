@@ -10,6 +10,38 @@ import re
 from dataclasses import dataclass, field, asdict
 
 
+def extract_year(text: str) -> str:
+    r"""Pull a clean 4-digit publication year out of a date string.
+
+    Accepts full dates (``2026-10-10``), date-times (``2026-09-23 14:49``), and CJK-style
+    years (``2016年6月``). A year directly followed/preceded by CJK has no alphabetic word
+    boundary (CJK is ``\w``), so ``\b...\b`` would miss it — use negative lookarounds.
+    """
+    m = re.search(r"(?<!\d)(19|20)\d{2}(?!\d)", text or "")
+    return m.group(0) if m else ""
+
+
+def normalize_author_name(raw: str) -> dict:
+    """Turn an author name string into a CSL author dict (``family`` / ``given``).
+
+    Backend-agnostic: Chinese names (CJK chars, possibly separated by a fullwidth comma or
+    an ideographic comma, e.g. ``熊英, 关晖``) have no space-separated given name, so the
+    whole CJK name goes in ``family`` and ``given`` stays empty — CSL renders a bare CJK
+    ``family`` correctly. Latin names fall back to last-token-as-family (the convention
+    shared by openlibrary / crossref).
+    """
+    s = (raw or "").strip()
+    if not s:
+        return {"family": "", "given": ""}
+    if re.search(r"[一-鿿]", s):
+        # CJK name: drop punctuation, keep the whole name in family; no given part.
+        fam = re.sub(r"[，,、\s]+", "", s)
+        return {"family": fam, "given": ""}
+    # Latin name: "John Smith" -> family Smith, given John (last token is family).
+    tokens = s.split()
+    return {"family": tokens[-1], "given": " ".join(tokens[:-1])}
+
+
 @dataclass
 class AcademicItem:
     """Backend-agnostic normalized model for an academic item.

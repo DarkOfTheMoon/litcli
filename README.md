@@ -68,6 +68,7 @@ PDF 全文抽取依赖系统 `pdftotext`（poppler-utils）；缺失时返回空
 | `openalex` | read | 学术图谱；摘要为倒排索引需重建；唯一实现引文图谱（refs/citing/related） |
 | `openlibrary` | read | 开放图书 `search.json`；默认不内置，显式启用 |
 | `uspto` | read | USPTO 专利全文检索；**需免费 API key**（免 key 的 Crossref/OpenAlex 公开版专利记录趋近 0） |
+| `cnki` | read | 知网中文题录检索（需 Playwright + 可见浏览器）；只取公开题录元数据，不抓付费墙全文 |
 
 ## 配置
 
@@ -125,3 +126,4 @@ python3 -m unittest discover -s tests
 - arXiv 联网在部分环境（如受限沙箱）返回 406；代码已把 HTTP 错误包装为 `RuntimeError`，`--all` 会跳过失败后端继续。
 - **专利检索（USPTO）需真实 API key**：免 key 可达的 Crossref/OpenAlex 公开版专利记录趋近 0，专利以 USPTO 为主通道。免费注册 key（<https://developer.uspto.gov> 顶部 “Get a developer key”）后写入 config 的 `api_key`；缺 key 时 `search --backend uspto` 明确提示而非堆栈。
 - **Sci-Hub / ZLibrary 类盗版全文源不内置**：这类平台涉及版权规避，刻意排除。合法全文走 `litcli fetch fulltext`：本地库 → Unpaywall → OpenAlex 的开放获取版；绕不过付费墙则指路机构/馆际互借。
+- **CNKI（知网）后端只取公开题录，不抓全文**：知网无开放 API，`search --backend cnki` 驱动**可见浏览器**（复用你自己的登录会话）检索，从结果列表页提取标题/作者/刊名/年份/摘要片段。**不实现任何下载/抓取付费墙全文的路径**；遇滑块验证码交给你在可见浏览器手动完成，程序不绕过。需先 `./install.sh --with-cnki` 装 Playwright + Chromium，首次搜索会弹浏览器请你手动过滑块 + 登录一次，之后会话复用。

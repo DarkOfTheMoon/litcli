@@ -38,6 +38,13 @@ type = "openlibrary"
 type = "uspto"
 # api_key = "你的-uspto-api-key"
 
+# 可选:CNKI(知网)中文题录检索(需 Playwright + 可见浏览器,人工过滑块,只取公开题录不抓全文)。
+# 默认不内置;取消注释 + 在 install.sh 用 --with-cnki 装 playwright 后才可用。
+[backends.cnki]
+type = "cnki"
+# user_data_dir = "~/.config/litcli/cnki-chrome"   # 独立浏览器 profile,会话在此持久化(首次人工登录一次)
+# headless = false                                  # 必须可见(知网对无头访问弹滑块验证码,需人工滑动)
+
 # 可选:统一代理(校园/VPN 访问海外学术源)。留空则默认读环境变量 HTTP_PROXY / HTTPS_PROXY。
 [network]
 # proxy = "http://127.0.0.1:7890"

@@ -68,6 +68,12 @@ def _registry() -> dict[str, type[Backend]]:
         reg["uspto"] = uspto.UsptoBackend
     except ImportError:
         pass
+    try:
+        from .backends import cnki
+
+        reg["cnki"] = cnki.CnkiBackend
+    except ImportError:
+        pass
     return reg
 
 
