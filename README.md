@@ -1,10 +1,10 @@
 # litcli — 通用学术 CLI（零依赖，多后端可插拔）
 
-同一条学术文献，在多个后端之间统一读写：本机 Zotero、arXiv、Crossref、OpenAlex，可选 OpenLibrary、USPTO，全部归一化为一个领域模型。它面向 Claude Code 代理与个人学术资料库互操作——检索、读全文、新增/修改、导出引文。
+同一条学术文献（期刊论文或图书），在多个后端之间统一读写：本机 Zotero、arXiv、Crossref、OpenAlex，可选 OpenLibrary、USPTO、CNKI（知网题录）、Douban（豆瓣图书），全部归一化为一个领域模型。它面向 Claude Code 代理与个人学术资料库互操作——检索、读全文、新增/修改、导出引文。
 
 - **零第三方依赖**：只用 Python 3.11+ 标准库（`urllib` / `tomllib` / `xml.etree` / `subprocess`）。
 - **后端无关领域层**：`models` / `citation` / `pdf` / `metadata` / `aggregate`，可独立复用。
-- **可插拔后端**：`backends/` 定义抽象 `Backend` 与 `capabilities`。默认启用 Zotero、arXiv、Crossref、OpenAlex；OpenLibrary、USPTO 按需在配置中启用。
+- **可插拔后端**：`backends/` 定义抽象 `Backend` 与 `capabilities`。默认启用 Zotero、arXiv、Crossref、OpenAlex；OpenLibrary、USPTO、CNKI、Douban 按需在配置中启用（CNKI/Douban 需额外装 Playwright）。
 
 ## 安装 / 运行
 
@@ -44,6 +44,7 @@ PDF 全文抽取依赖系统 `pdftotext`（poppler-utils）；缺失时返回空
 | `litcli backends list` / `status` | 列出已配置后端及能力 / 显示各后端授权与可达状态 | 只读 |
 | `litcli backends authorize [zotero]` | 主动向 Zotero 本地授权拿写库 key 并写回 `config.toml` | 写配置 |
 | `litcli completions <bash\|zsh\|fish>` | 打印自包含补全脚本；`eval "$(litcli completions bash)"` 后 `litcli <TAB>` 补子命令/参数/选项取值/文件路径。补全时不起 `litcli` 子进程（spec 内嵌于脚本），CLI 面更新后重新 eval | 只读 |
+| `litcli search --backend douban "书词" [--limit N]` | 豆瓣图书**候选**（书名/作者/出版社/年份/评分，需 `install.sh --with-douban`）；`get` 补全完整书目（ISBN/出版社/版次/出版年/页数） | 只读 |
 
 ### 检索字段级过滤（各后端映射）
 
@@ -69,6 +70,7 @@ PDF 全文抽取依赖系统 `pdftotext`（poppler-utils）；缺失时返回空
 | `openlibrary` | read | 开放图书 `search.json`；默认不内置，显式启用 |
 | `uspto` | read | USPTO 专利全文检索；**需免费 API key**（免 key 的 Crossref/OpenAlex 公开版专利记录趋近 0） |
 | `cnki` | read | 知网中文题录检索（需 Playwright + 可见浏览器）；只取公开题录元数据，不抓付费墙全文 |
+| `douban` | read | 豆瓣图书检索（需 Playwright，默认无头）；`search` 出候选（书名/作者/出版社/年份/评分），`get` 补全 ISBN/版次/页数；只取公开书目元数据 |
 
 ## 配置
 

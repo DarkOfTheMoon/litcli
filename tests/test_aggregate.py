@@ -4,7 +4,7 @@ import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from litcli.models import AcademicItem
-from litcli.aggregate import norm_title, norm_doi, identity, merge_items
+from litcli.aggregate import norm_title, norm_doi, norm_isbn, identity, merge_items
 
 
 class NormTest(unittest.TestCase):
@@ -40,6 +40,21 @@ class NormTest(unittest.TestCase):
         a = AcademicItem(source="z", key="k", title="Hello  World!", doi="")
         b = AcademicItem(source="a", key="k2", title="hello world", doi="")
         self.assertEqual(identity(a), identity(b))
+
+    def test_norm_isbn_strips_separators(self):
+        # Same ISBN in hyphenated vs bare form must normalize to one identity key.
+        self.assertEqual(norm_isbn("978-7-118-04834-8"), "9787118048348")
+        self.assertEqual(norm_isbn("9787118048348"), "9787118048348")
+        self.assertEqual(norm_isbn("  "), "")
+
+    def test_identity_prefers_isbn_after_doi(self):
+        # Books carry an ISBN and no DOI; identity should key on ISBN (not fall to title).
+        a = AcademicItem(source="douban", key="subject/3061999", title="有限体积法基础",
+                         isbn="9787-118-04834-8")
+        b = AcademicItem(source="openlibrary", key="OL1", title="有限体积法基础",
+                         isbn="9787118048348")
+        self.assertEqual(identity(a), identity(b))
+        self.assertEqual(identity(a), "isbn:9787118048348")
 
 
 class MergeTest(unittest.TestCase):
@@ -104,6 +119,19 @@ class MergeTest(unittest.TestCase):
         out = merge_items([a, b])
         self.assertEqual(len(out), 1)
         self.assertEqual(out[0].extra["sources"], ["crossref", "openalex"])
+
+    def test_merge_with_isbn_dedupes_books(self):
+        # Two book records with the same ISBN (different separators) must merge to one.
+        a = AcademicItem(source="douban", key="subject/3061999", title="有限体积法基础",
+                         year="1998-09", isbn="978-7-118-04834-8", publisher="国防工业出版社")
+        b = AcademicItem(source="openlibrary", key="OL1", title="有限体积法基础",
+                         isbn="9787118048348", edition="第1版")
+        out = merge_items([a, b])
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].isbn, "978-7-118-04834-8")
+        self.assertEqual(out[0].edition, "第1版")
+        self.assertEqual(out[0].publisher, "国防工业出版社")
+        self.assertEqual(out[0].extra["sources"], ["douban", "openlibrary"])
 
     def test_merge_carries_cited_and_openalex_id(self):
         # Read-only backend (zotero has no citation count) vs openalex same year/title: the merge must

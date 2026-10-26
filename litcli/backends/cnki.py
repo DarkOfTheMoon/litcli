@@ -24,13 +24,11 @@ session; it does not programmatically bypass the captcha or scrape paywalled ful
 """
 from __future__ import annotations
 
-import re
-from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urljoin, urlencode
 
 from ..models import AcademicItem, extract_year, normalize_author_name
-from .base import Backend
+from .playwright import PlaywrightBackend, _PLAYWRIGHT_HINT
 
 # Product version, used only by the pure parser for the AcademicItem.extra provenance.
 _SOURCE = "cnki"
@@ -96,57 +94,19 @@ def rows_to_items(rows: list[dict], source: str = _SOURCE) -> list[AcademicItem]
     return out
 
 
-class CnkiBackend(Backend):
+class CnkiBackend(PlaywrightBackend):
     """CNKI metadata search via Playwright (read-only, visible browser + own session)."""
+
+    DEFAULT_PROFILE = _DEFAULT_PROFILE
+    INSTALL_HINT = _PLAYWRIGHT_HINT + " (or re-run install.sh --with-cnki)"
 
     def __init__(self, name: str = "cnki", user_data_dir=None, headless: bool = False,
                  timeout: int = 30, max_results: int = 10):
-        self.name = name
-        self._profile = Path(user_data_dir).expanduser() if user_data_dir else _DEFAULT_PROFILE
-        self._profile.mkdir(parents=True, exist_ok=True)
-        self._headless = headless
-        self._timeout = timeout
-        self._max = max_results
-
-    @property
-    def capabilities(self) -> set[str]:
-        return {"read"}
-
-    # --- playwright import is deferred so the core pip install stays zero-dep ---
-
-    def _playwright(self):
-        """Import Playwright lazily; raise a clear, actionable error when missing."""
-        try:
-            from playwright.sync_api import sync_playwright
-            return sync_playwright
-        except ImportError as e:
-            raise RuntimeError(
-                f"[{self.name}] Playwright is not installed. Install it with "
-                f"`{_INSTALL_HINT}` (or re-run install.sh --with-cnki), then retry."
-            ) from e
+        super().__init__(name=name, user_data_dir=user_data_dir, headless=headless,
+                         timeout=timeout, max_results=max_results)
 
     def _page_url(self, query: str) -> str:
         return f"{_SEARCH_URL}?{urlencode({'kw': query})}"
-
-    @contextmanager
-    def _browser(self):
-        """Open a persistent Chromium context (so the user's CNKI login survives), yield the
-        first page, and always tear down the context + engine. Raises a clear message when
-        Playwright is missing. Resource ownership lives here, not in each caller."""
-        sync_playwright = self._playwright()
-        pw = sync_playwright().start()
-        context = None
-        try:
-            context = pw.chromium.launch_persistent_context(
-                str(self._profile), headless=self._headless,
-                viewport={"width": 1360, "height": 900},
-            )
-            page = context.pages[0] if context.pages else context.new_page()
-            yield page
-        finally:
-            if context:
-                context.close()
-            pw.stop()
 
     def _detect_captcha(self, page) -> bool:
         """Return True if the page is a CNKI slider captcha (``/verify/`` URL or slider text)."""
@@ -165,29 +125,7 @@ class CnkiBackend(Backend):
         Ping the page URL; once it no longer reports 安全验证 and lands on the results
         page, the slider (and login) is done. The user does it visibly by hand.
         """
-        import time
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if not self._detect_captcha(page):
-                return
-            time.sleep(1.0)
-
-    def _wait_for_results(self, page, timeout: int | None = None) -> None:
-        """Block until at least one result row renders (or the timeout elapses).
-
-        Results render asynchronously after the search request, so a fixed sleep is
-        wasteful when fast and too short when slow. Waiting on a positive signal (a row
-        node) is both cheap and robust; an empty result page just times out quietly.
-        """
-        import time
-        deadline = time.monotonic() + (timeout or self._timeout)
-        while time.monotonic() < deadline:
-            try:
-                if page.query_selector_all(_ROW_SELECTOR):
-                    return
-            except Exception:
-                pass
-            time.sleep(0.5)
+        self._wait_until(page, lambda p: not self._detect_captcha(p), timeout)
 
     def _virtualize_rows(self, page, limit: int) -> list[dict]:
         """Scrape the result list page into virtual row dicts (pure parser input).
@@ -266,6 +204,18 @@ class CnkiBackend(Backend):
                 return txt
         return ""
 
+    def _open_results(self, page, url: str) -> None:
+        """Load a CNKI page and block until the result rows render.
+
+        If a slider captcha appears and we are in a visible browser (the user's own logged-in
+        session), pause so the human solves it; otherwise just wait for the result nodes.
+        """
+        page.goto(url, timeout=self._timeout * 1000, wait_until="domcontentloaded")
+        if self._detect_captcha(page) and not self._headless:
+            # Visible browser: let the human solve the slider, then wait for the results.
+            self._wait_captcha_finished(page)
+        self._wait_for_signal(page, _ROW_SELECTOR)
+
     def search(self, query: str, limit: int = 10, filters: dict | None = None) -> list[AcademicItem]:
         """Search CNKI and return normalized title metadata (read-only)."""
         filters = self._filters(filters)
@@ -274,21 +224,14 @@ class CnkiBackend(Backend):
         terms = [t for t in (query, filters.get("title"), filters.get("author"),
                              filters.get("container")) if t]
         q = " ".join(terms)
-        n = min(limit or self._max, self._max)
+        n = self._clamp_limit(limit)
         with self._browser() as page:
-            page.goto(self._page_url(q), timeout=self._timeout * 1000, wait_until="domcontentloaded")
-            if self._detect_captcha(page) and not self._headless:
-                # Visible browser: let the human solve the slider, then wait for the results.
-                self._wait_captcha_finished(page)
-            self._wait_for_results(page)
+            self._open_results(page, self._page_url(q))
             rows = self._virtualize_rows(page, limit=n)
             items = rows_to_items(rows)
             # (Optional) honor a --year filter as a post-filter since CNKI's query syntax
             # is unstable; the rest is left to the caller.
-            if filters.get("year"):
-                yr = filters["year"]
-                items = [it for it in items if it.year == yr]
-            return items
+            return self._filter_year(items, filters)
 
     def get(self, key: str) -> AcademicItem:
         """Fetch a single record by URL. Best-effort: open the detail page and parse.
@@ -301,10 +244,7 @@ class CnkiBackend(Backend):
             raise KeyError(f"[{self.name}] empty key")
         with self._browser() as page:
             url = key if key.startswith("http") else f"{_SEARCH_URL}?kw={key}"
-            page.goto(url, timeout=self._timeout * 1000, wait_until="domcontentloaded")
-            if self._detect_captcha(page) and not self._headless:
-                self._wait_captcha_finished(page)
-            self._wait_for_results(page)
+            self._open_results(page, url)
             title = page.title()
             if not title or "安全验证" in title:
                 raise KeyError(f"[{self.name}] could not read detail page for key (captcha or login): {key}")
@@ -317,6 +257,3 @@ def _abs_url(href: str) -> str:
     if not href:
         return ""
     return urljoin(_SITE_ORIGIN, href)
-
-
-_INSTALL_HINT = "pip install --break-system-packages --user playwright && playwright install chromium"

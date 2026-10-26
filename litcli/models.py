@@ -64,6 +64,8 @@ class AcademicItem:
     issue: str = ""
     page: str = ""                        # page range, e.g. "123-130"
     publisher: str = ""
+    isbn: str = ""                        # ISBN (books; identity key alongside DOI for journal articles)
+    edition: str = ""                     # edition / edition-nature, e.g. "第2版"
     cited_by_count: int = 0               # citation count (OpenAlex cited_by_count / Crossref is-referenced-by-count)
     item_type: str = "document"           # CSL type: article / book / document / ...
     attachments: list[str] = field(default_factory=list)
@@ -100,6 +102,10 @@ class AcademicItem:
             csl["page"] = self.page
         if self.publisher:
             csl["publisher"] = self.publisher
+        if self.isbn:
+            csl["ISBN"] = self.isbn
+        if self.edition:
+            csl["edition"] = self.edition
         if self.doi:
             csl["DOI"] = self.doi
         if self.url:
@@ -129,6 +135,10 @@ class AcademicItem:
             out.append(f"  pages   = {{{self.page}}},")
         if self.publisher:
             out.append(f"  publisher = {{{self._one_line(self.publisher)}}},")
+        if self.isbn:
+            out.append(f"  isbn    = {{{self.isbn}}},")
+        if self.edition:
+            out.append(f"  edition = {{{self._one_line(self.edition)}}},")
         if self.doi:
             out.append(f"  doi     = {{{self.doi}}},")
         if self.url:
@@ -167,6 +177,10 @@ class AcademicItem:
                 lines.append(f"EP  - {ep}")
         if self.publisher:
             lines.append(f"PB  - {self._one_line(self.publisher)}")
+        if self.isbn:
+            lines.append(f"SN  - {self.isbn}")
+        if self.edition:
+            lines.append(f"ET  - {self._one_line(self.edition)}")
         if self.abstract:
             # A multi-line abstract must not leak a bare line into a line-oriented record.
             lines.append(f"AB  - {self._one_line(self.abstract)}")
@@ -203,6 +217,8 @@ class AcademicItem:
             issue=csl.get("issue", ""),
             page=csl.get("page", ""),
             publisher=csl.get("publisher", ""),
+            isbn=csl.get("ISBN", ""),
+            edition=csl.get("edition", ""),
             item_type=csl.get("type", "document"),
         )
 

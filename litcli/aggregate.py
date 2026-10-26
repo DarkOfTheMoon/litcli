@@ -39,19 +39,37 @@ def norm_doi(doi: str) -> str:
     return d.rstrip(".")
 
 
+def norm_isbn(isbn: str) -> str:
+    """Normalize ISBN: strip whitespace/hyphens, lowercase, drop trailing periods.
+
+    ISBNs arrive with varying separators (``978-7-118-04834-8`` vs `9787118048348`);
+    keeping them distinct splits the same book across backends. Stripping the separators
+    makes the identity key stable (mirror of :func:`norm_doi`).
+    """
+    return re.sub(r"[^0-9xX]", "", (isbn or "")).lower()
+
+
 def identity(item: AcademicItem) -> str:
-    """Identity key: prefer an effective DOI, otherwise fall back to the normalized title. Used to judge sameness across libraries."""
+    """Identity key: prefer an effective DOI, then ISBN (books), else the normalized title.
+
+    Used to judge sameness across libraries. Journal articles / papers carry a DOI; books
+    typically carry an ISBN and no DOI, so ISBN is the book counterpart of DOI.
+    """
     d = norm_doi(item.doi)
     if d:
         return "doi:" + d
+    b = norm_isbn(item.isbn)
+    if b:
+        return "isbn:" + b
     return "title:" + norm_title(item.title)
 
 
 def _info_score(item: AcademicItem) -> tuple:
-    """Information-completeness score (coarse): add per present abstract/doi/url, with title length as the tie-breaker."""
+    """Information-completeness score (coarse): add per present abstract/doi/isbn/url, with title length as the tie-breaker."""
     return (
         1 if item.abstract else 0,
         1 if item.doi else 0,
+        1 if item.isbn else 0,
         1 if item.url else 0,
         len(item.title or ""),
     )
@@ -77,6 +95,10 @@ def _merge_two(primary: AcademicItem, other: AcademicItem) -> None:
         primary.page = other.page
     if not primary.publisher and other.publisher:
         primary.publisher = other.publisher
+    if not primary.isbn and other.isbn:
+        primary.isbn = other.isbn
+    if not primary.edition and other.edition:
+        primary.edition = other.edition
     if other.cited_by_count > primary.cited_by_count:
         primary.cited_by_count = other.cited_by_count
     oaid = (other.extra or {}).get("openalex_id")

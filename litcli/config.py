@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import tomllib
+from functools import lru_cache
 from pathlib import Path
 
 from .backends.base import Backend
@@ -33,8 +34,12 @@ def load_config(path: str | Path | None = None) -> dict:
     return dict(_INBUILT_DEFAULT)
 
 
+@lru_cache(maxsize=None)
 def _registry() -> dict[str, type[Backend]]:
-    """Backend type registry (type string -> class)."""
+    """Backend type registry (type string -> class). Cached per-process: the try-import
+    blocks are static, and the registry is rebuilt on every backend instantiation and again
+    on the ``get_backend`` fallback path, so caching avoids redoing the imports.
+    """
     from .backends import zotero_local
 
     reg: dict[str, type[Backend]] = {"zotero_local": zotero_local.ZoteroLocalBackend}
@@ -74,6 +79,12 @@ def _registry() -> dict[str, type[Backend]]:
         reg["cnki"] = cnki.CnkiBackend
     except ImportError:
         pass
+    try:
+        from .backends import douban
+
+        reg["douban"] = douban.DoubanBackend
+    except ImportError:
+        pass
     return reg
 
 
@@ -97,9 +108,16 @@ def discover_backends(config: dict | None = None) -> dict[str, Backend]:
 
 def get_backend(name: str = "zotero", config: dict | None = None) -> Backend:
     backends = discover_backends(config)
-    if name not in backends:
-        raise KeyError(f"backend '{name}' is not configured; configured: {sorted(backends)}")
-    return backends[name]
+    if name in backends:
+        return backends[name]
+    # Allow a registered-but-unconfigured optional backend to be requested directly (e.g.
+    # `search --backend douban` / `--backend cnki`) with default kwargs, rather than requiring
+    # it to be enabled in config. Optional backends have type == canonical name; the built-in
+    # defaults are resolved above, so this only triggers for optional ones.
+    reg = _registry()
+    if name in reg:
+        return _make_backend(name, {"type": name})
+    raise KeyError(f"backend '{name}' is not configured; configured: {sorted(backends)}")
 
 
 def get_all_backends(config: dict | None = None) -> dict[str, Backend]:

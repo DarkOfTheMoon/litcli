@@ -137,6 +137,36 @@ class TestExportContainerFields(unittest.TestCase):
         self.assertIn("123-130", entry)
 
 
+class TestExportBookFields(unittest.TestCase):
+    """Book isbn/edition should enter csl/bibtex/ris and round-trip via from_csl."""
+
+    BOOK = dict(source="douban", key="subject/3061999", title="有限体积法基础",
+                creators=[{"family": "李仁宪"}], year="1998-09",
+                publisher="国防工业出版社", isbn="9787118048348", edition="第1版",
+                item_type="book", url="https://book.douban.com/subject/3061999/")
+
+    def test_to_csl_includes_isbn_edition(self):
+        c = AcademicItem(**self.BOOK).to_csl()
+        self.assertEqual(c["ISBN"], "9787118048348")
+        self.assertEqual(c["edition"], "第1版")
+
+    def test_to_bibtex_includes_isbn_edition(self):
+        b = AcademicItem(**self.BOOK).to_bibtex()
+        self.assertIn("isbn    = {9787118048348}", b)
+        self.assertIn("edition = {第1版}", b)
+
+    def test_to_ris_includes_isbn_edition(self):
+        r = AcademicItem(**self.BOOK).to_ris()
+        self.assertIn("SN  - 9787118048348", r)
+        self.assertIn("ET  - 第1版", r)
+
+    def test_from_csl_reads_isbn_edition(self):
+        it = AcademicItem.from_csl({"type": "book", "title": "T",
+                                    "ISBN": "9787118048348", "edition": "第2版"})
+        self.assertEqual(it.isbn, "9787118048348")
+        self.assertEqual(it.edition, "第2版")
+
+
 class TestExportHardening(unittest.TestCase):
     """Export boundary: a non-numeric year or a multiline/literal-author field must not crash or corrupt output."""
 

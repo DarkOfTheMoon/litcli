@@ -1,6 +1,6 @@
 ---
 name: zotero
-description: 与用户学术资料互操作——检索、读取、导出引文、读 PDF 全文、新增/修改。覆盖本机 Zotero 库与 arXiv。当用户提到"我的文献/论文库/引用/参考文献/PDF"时使用。
+description: 与用户学术资料互操作——检索、读取、导出引文、读 PDF 全文、新增/修改。覆盖本机 Zotero 库、arXiv、Crossref/OpenAlex，以及知网中文题录与豆瓣图书。当用户提到"我的文献/论文库/引用/参考文献/PDF/图书/书目"时使用。
 ---
 
 # Zotero / arXiv 学术互操作
@@ -30,6 +30,7 @@ description: 与用户学术资料互操作——检索、读取、导出引文�
 | 罗列某集合条目 | `litcli data members <集合key> [--no-recursive]` 默认递归全部子集合 | 只读 |
 | 列后端 | `litcli backends list`（能力）· `litcli backends status`（授权/可达） | 只读 |
 | 中文题录检索 | `litcli search --backend cnki "关键词"` 知网公开题录（需 Playwright + 可见浏览器；只取题录不抓全文） | 只读 |
+| 豆瓣图书检索 | `litcli search --backend douban "书词"` 候选书单，`litcli data get <subject-id>` 补全 ISBN/出版社/版次/页数（需 `install.sh --with-douban`；默认无头，只取公开书目元数据） | 只读 |
 | **首次写库授权** | `litcli backends authorize zotero` 弹框批准后写回 config | 写配置 |
 | shell 补全 | `litcli completions <bash\|zsh\|fish>` 打印自包含补全脚本（`eval "$(litcli completions bash)"` 后 `litcli <TAB>` 补子命令/参数/取值/文件路径；补全时不起 `litcli` 子进程） | 只读 |
 
@@ -48,3 +49,4 @@ description: 与用户学术资料互操作——检索、读取、导出引文�
 - `data add --pdf` 是**启发式**候选，写前会交互确认（y/N）请核对；非交互/脚本用 `--yes` 跳过确认。勿盲目入库。
 - 跨后端聚合字段对齐用 `--all`；无 `--all` 默认仅 zotero。
 - **CNKI 只取公开题录、不抓全文**：知网无开放 API；`search --backend cnki` 需先 `./install.sh --with-cnki` 装 Playwright + Chromium。它会弹**可见浏览器**，请你手动过滑块验证码 + 登录知网（校外账号）一次（独立 profile，之后复用）。检索结果仅标题/作者/刊名/年份/摘要片段，**不下载付费墙全文**；遇验证码交给人工，脚本不绕过、不实现反爬规避。
+- **豆瓣只取公开书目元数据、不绕过反爬**：豆瓣无公开 API；`search --backend douban` 也需 `install.sh --with-douban` 装 Playwright + Chromium，但**默认无头**——搜索页 SSR 直接给书卡 JSON，无需登录/滑块。仅当被风控时手动在可见浏览器处理，脚本不程序化绕过。图书以 ISBN 为身份键（无 DOI），`search --all` 聚合时与期刊/论文的 DOI 身份键并行。

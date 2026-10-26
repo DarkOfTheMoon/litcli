@@ -18,6 +18,16 @@ class TestConfig(unittest.TestCase):
         with self.assertRaises(KeyError):
             config.discover_backends({"backends": {"x": {"type": "nope"}}})
 
+    def test_registry_contains_douban(self):
+        self.assertIn("douban", config._registry())
+
+    def test_get_backend_falls_back_to_registry(self):
+        # A registered-but-unconfigured optional backend (douban) can be requested directly,
+        # without being enabled in config: `search --backend douban` works out of the box.
+        be = config.get_backend("douban", config={"backends": {"zotero": {"type": "zotero_local"}}})
+        self.assertEqual(be.name, "douban")
+        self.assertEqual(sorted(be.capabilities), ["read"])
+
     def test_arxiv_field_passthrough(self):
         backends = config.discover_backends({"backends": {"a": {"type": "arxiv", "max_results": 5}}})
         self.assertEqual(backends["a"].name, "a")

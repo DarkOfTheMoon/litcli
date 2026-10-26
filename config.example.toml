@@ -45,6 +45,15 @@ type = "cnki"
 # user_data_dir = "~/.config/litcli/cnki-chrome"   # 独立浏览器 profile,会话在此持久化(首次人工登录一次)
 # headless = false                                  # 必须可见(知网对无头访问弹滑块验证码,需人工滑动)
 
+# 可选:豆瓣图书(公开书目检索,需 Playwright)。默认不内置;取消注释 + install.sh --with-douban 装 playwright 可用。
+# 无公开 API(api.douban.com v2 需 key),靠浏览器渲染 search 页的 window.__DATA__ 拿书卡;只取公开书目元数据
+# (书名/作者/出版社/ISBN/出版年/页数/评分),不抓受限内容、不绕过反爬。headless 默认 true(豆瓣 SSR 直接给 JSON,
+# 无滑块);仅当被风控(检测到异常流量)才在可见浏览器人工处理。
+[backends.douban]
+type = "douban"
+# user_data_dir = "~/.config/litcli/douban-chrome"  # 独立浏览器 profile(默认仅用于偶发登录/cookie 持久化)
+# headless = true                                   # 默认无头;豆瓣无需人工滑验证码,仅风控时降级
+
 # 可选:统一代理(校园/VPN 访问海外学术源)。留空则默认读环境变量 HTTP_PROXY / HTTPS_PROXY。
 [network]
 # proxy = "http://127.0.0.1:7890"
