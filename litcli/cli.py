@@ -3,7 +3,7 @@
 Command surface (backends via --backend, default zotero):
   search        cross-backend candidate search (read-only)
   data get/add/set/del/attach   local store CRUD (write · requires decision)
-  fetch fulltext    locate legitimate fulltext by DOI (read-only, no store)
+  fetch fulltext    locate fulltext by DOI; --scihub adds the copyright-evading fallback
   export        export citations (read-only, no PDF)
   completions   print shell completion scripts (bash/zsh/fish; enable via eval)
   backends      diagnostics
@@ -144,12 +144,14 @@ def _build_parser() -> argparse.ArgumentParser:
     f = sub.add_parser("fetch", help="get fulltext / metadata (read-only, no store)")
     fsub = f.add_subparsers(dest="fetch_cmd", required=True)
 
-    fp = fsub.add_parser("fulltext", help="locate legitimate fulltext by DOI (local store → Unpaywall → OpenAlex)")
+    fp = fsub.add_parser("fulltext", help="locate fulltext by DOI (local store → Unpaywall → OpenAlex; --scihub adds a fallback)")
     fp.add_argument("doi")
     fp.add_argument("--email", default=None)
     fp.add_argument("--download", action="store_true", help="download the candidate fulltext PDF")
     fp.add_argument("--out", default=None, help="save path")
     fp.add_argument("--lines", type=int, default=6, help="preview line count after download")
+    fp.add_argument("--scihub", action="store_true",
+                    help="also try Sci-Hub after the legitimate OA sources (copyright-evading mirror)")
 
     return parser
 
@@ -236,7 +238,7 @@ def _normalize_related_key(key: str) -> str:
     and turn an arXiv id into its DOI, so the openalex backend's W-id/DOI lookup can resolve
     the key forms the CLI itself emits (``extra["openalex_id"]``, table keys, exported arXiv keys)."""
     k = key.strip()
-    for prefix in ("openalex/", "arxiv/", "crossref/", "zotero/"):
+    for prefix in ("openalex/", "arxiv/", "crossref/", "zotero/", "scihub/"):
         if k.startswith(prefix):
             k = k[len(prefix):]
             break
@@ -511,14 +513,25 @@ def _resolve_oa_email(cfg, args) -> str:
 
 
 def cmd_fetch_fulltext(cfg, args) -> int:
-    """Locate legitimate fulltext by DOI: local store (first) → Unpaywall → OpenAlex; if none, point the user elsewhere."""
+    """Locate fulltext by DOI: local store (first) → Unpaywall → OpenAlex; Sci-Hub only when asked.
+
+    Sci-Hub is opt-in (`--scihub`, or by configuring the ``scihub`` backend) because it serves
+    copyright-evading copies; its hits are labelled as such.
+    """
     email = _resolve_oa_email(cfg, args)
     backends = get_all_backends(cfg)
+    scihub_backend = backends.get("scihub")
+    if getattr(args, "scihub", False) and scihub_backend is None:
+        scihub_backend = get_backend("scihub", cfg)
     info = fulltext_mod.resolve_fulltext(args.doi, email, backends=backends,
-                                         openalex_backend=backends.get("openalex"))
+                                         openalex_backend=backends.get("openalex"),
+                                         scihub_backend=scihub_backend)
     if not info.get("has_fulltext"):
         print(f"DOI {args.doi}  no such work in the local store or open OA sources")
-        print("  Use institutional access / interlibrary loan / a proxy; this CLI does not bypass paywalls.")
+        if not scihub_backend:
+            print("  Add --scihub to also try Sci-Hub, or use institutional access / interlibrary loan / a proxy.")
+        else:
+            print("  Use institutional access / interlibrary loan / a proxy.")
         if info.get("errors"):
             print(f"  [resolution skipped: {len(info['errors'])} steps]")
         return 0
@@ -526,6 +539,8 @@ def cmd_fetch_fulltext(cfg, args) -> int:
     title = info.get("title") or ""
     kind = info["kind"]
     print(f"DOI {args.doi}  fulltext available (source={kind})")
+    if kind == "scihub":
+        print("  note: Sci-Hub copy (copyright-evading), not an open-access licence")
     if title:
         print(f"  title: {title[:70]}")
 

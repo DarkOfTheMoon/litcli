@@ -1,16 +1,18 @@
-"""Legitimate fulltext resolution chain: local store → public OA sources → point to library/proxy.
+"""Fulltext resolution chain: local store → public OA sources → (optional) Sci-Hub → point to library.
 
-Three priorities (per user requirements):
+Priorities (per user requirements):
   1. **Local store**: iterate configured backends with attachment capability (e.g. Zotero),
      locate an item by DOI and take its attachment — local store wins, no network.
   2. **Public OA sources**: Unpaywall (best_oa_location.pdf) → OpenAlex (best_oa_location.pdf_url),
      legally open-access versions provided by publishers.
-  3. **Point to**: if none of the above works, return has_fulltext=False and suggest
-     institutional access / interlibrary loan / a proxy — never bypass a paywall.
+  3. **Sci-Hub (opt-in, last)**: a copyright-evading library, so it is only consulted after the
+     legitimate channels and its hits are labelled with ``kind="scihub"``. Off unless the
+     ``scihub`` backend is configured or ``--scihub`` is passed.
+  4. **Point to**: if none of the above works, return has_fulltext=False and suggest
+     institutional access / interlibrary loan / a proxy.
 
-This is the compliant alternative to Sci-Hub-style copyright-evading sources. Decoupled from
-backends: ``resolve_fulltext`` accepts an injectable resolver list for offline stubbing; the
-default resolvers are local/unpaywall/openalex.
+Decoupled from backends: ``resolve_fulltext`` accepts an injectable resolver list for offline
+stubbing; the default resolvers are local/unpaywall/openalex (+ scihub when injected).
 """
 from __future__ import annotations
 
@@ -22,7 +24,7 @@ from .models import AcademicItem
 
 # A resolver: takes a doi, returns a candidate dict or None.
 # Candidate fields usable by the CLI:
-#   has_fulltext, kind ('local'|'unpaywall'|'openalex'), url (for OA),
+#   has_fulltext, kind ('local'|'unpaywall'|'openalex'|'scihub'), url (for OA/scihub),
 #   data (for local attachment bytes), title, status, key
 Resolver = callable
 
@@ -83,27 +85,42 @@ def _from_openalex(doi: str, backend) -> dict | None:
     return None
 
 
+def _from_scihub(doi: str, backend) -> dict | None:
+    """Sci-Hub fallback via an injected backend (last in the chain; opt-in)."""
+    if backend is None:
+        return None
+    try:
+        item: AcademicItem = backend.get(doi)
+    except (RuntimeError, urllib.error.URLError, OSError, KeyError):
+        return None
+    if not item.attachments:
+        return None
+    return {"kind": "scihub", "url": item.attachments[0], "title": item.title, "status": ""}
+
+
 def _default_resolvers(email: str, backends: dict | None = None,
-                       openalex_backend=None) -> list[Resolver]:
+                       openalex_backend=None, scihub_backend=None) -> list[Resolver]:
     return [
         lambda d: _from_local(d, backends),
         lambda d: _from_unpaywall(d, email),
         lambda d: _from_openalex(d, openalex_backend),
+        lambda d: _from_scihub(d, scihub_backend),
     ]
 
 
 def resolve_fulltext(doi: str, email: str = unpaywall.DEFAULT_EMAIL,
                      backends: dict | None = None,
                      openalex_backend=None,
+                     scihub_backend=None,
                      resolvers: list[Resolver] | None = None) -> dict:
-    """Find legitimate fulltext by DOI, priority: local store → OA sources.
+    """Find fulltext by DOI, priority: local store → OA sources → Sci-Hub (when injected).
 
-    Returns a dict: on a hit ``{"has_fulltext": True, "kind", ...}`` (data for local, url for OA);
-    when no legitimate fulltext exists, ``{"has_fulltext": False}`` (with per-step failure
+    Returns a dict: on a hit ``{"has_fulltext": True, "kind", ...}`` (data for local, url for OA
+    and Sci-Hub); when nothing works, ``{"has_fulltext": False}`` (with per-step failure
     reasons, for the CLI to point the user elsewhere).
     """
     if resolvers is None:
-        resolvers = _default_resolvers(email, backends, openalex_backend)
+        resolvers = _default_resolvers(email, backends, openalex_backend, scihub_backend)
     errors: list[str] = []
     for r in resolvers:
         try:

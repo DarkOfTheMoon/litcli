@@ -20,7 +20,7 @@ description: 与用户学术资料互操作——检索、读取、导出引文�
 | 语义相关 | `litcli related <key> [--limit N] [--backend openalex]` OpenAlex `related_works` 邻居;不支持的只读后端 `[skipped]` 退出码 2 | 只读 |
 | 单条全字段 | `litcli data get <key> [--format csl\|json]` | 只读 |
 | 导出引文 | `litcli export <key> [--format csljson\|bibtex\|ris\|text]`（arXiv key 如 `arxiv/1806.09180` 自动归一为 DOI；csljson/bibtex 含期刊名/卷/页/出版社） | 只读 |
-| 定位合法全文 | `litcli fetch fulltext <doi> [--download]` 本地→OA→指路(绕不过付费墙) | 只读 |
+| 定位全文 | `litcli fetch fulltext <doi> [--download]` 本地→OA；加 `--scihub` 才兜底盗版镜像(会标注) | 只读 |
 | **新增(元信息)** | `litcli data add --title "..." --creator "家族, 名字" --year 2002 [--doi ...]` | **写库** |
 | **新增(从 PDF)** | `litcli data add --pdf <file>` 抽启发式候选→展示→**交互确认(y/N)**→写；`--yes` 跳过确认 | **写库** |
 | 修改 | `litcli data set <key> --title "..." [--year ...]` | **写库** |
@@ -39,7 +39,7 @@ description: 与用户学术资料互操作——检索、读取、导出引文�
 - Zotero 10 本机运行于 `localhost:23119`，本地 API 免 key（`users/0` 别名→真实库）；写请求需 `Zotero-Server-ID` + `If-Unmodified-Since-Version`（工具已自动处理）。
 - **写库前先授权一次**：`litcli backends authorize zotero` → 本地弹框批准 → key 写入 `[backends.zotero].api_key`，此后写操作自动携带、不再弹框。未授权时 `data set/del/attach` 报 `HTTP 401`（退出码 2）。
 - Better BibTeX 未装：引文走 `export --format csljson` 喂 `pandoc --citeproc`，不依赖 BBT。
-- 读 PDF 全文需系统 `pdftotext`；只读后端（arxiv/crossref/openalex/uspto）的 `data` 写操作报 `[skipped]`。
+- 读 PDF 全文需系统 `pdftotext`；只读后端（arxiv/crossref/openalex/uspto/scihub）的 `data` 写操作报 `[skipped]`。
 - arXiv 按 IP 限速：连发可能 `HTTP 429 Rate exceeded.`（已退避重试）；检索若失败，隔几秒再试，或给 `[backends.arxiv]` 配 `mailto`。
 
 ## 注意
@@ -49,4 +49,5 @@ description: 与用户学术资料互操作——检索、读取、导出引文�
 - `data add --pdf` 是**启发式**候选，写前会交互确认（y/N）请核对；非交互/脚本用 `--yes` 跳过确认。勿盲目入库。
 - 跨后端聚合字段对齐用 `--all`；无 `--all` 默认仅 zotero。
 - **CNKI 只取公开题录、不抓全文**：知网无开放 API；`search --backend cnki` 需先 `./install.sh --with-cnki` 装 Playwright + Chromium。它会弹**可见浏览器**，请你手动过滑块验证码 + 登录知网（校外账号）一次（独立 profile，之后复用）。检索结果仅标题/作者/刊名/年份/摘要片段，**不下载付费墙全文**；遇验证码交给人工，脚本不绕过、不实现反爬规避。
+- **Sci-Hub 是可选兜底、默认不介入**：`fetch fulltext` 仍先走本地库/Unpaywall/OpenAlex，只有加 `--scihub`（或配置启用）才试盗版镜像；输出标 `source=scihub` 且注明非 OA 授权。镜像用 ALTCHA 验人，litcli 用本地 `hashlib` 解同一道题（不绕过），每次单 DOI、低频。ZLibrary 未接。
 - **豆瓣只取公开书目元数据、不绕过反爬**：豆瓣无公开 API；`search --backend douban` 也需 `install.sh --with-douban` 装 Playwright + Chromium，但**默认无头**——搜索页 SSR 直接给书卡 JSON，无需登录/滑块。仅当被风控时手动在可见浏览器处理，脚本不程序化绕过。图书以 ISBN 为身份键（无 DOI），`search --all` 聚合时与期刊/论文的 DOI 身份键并行。

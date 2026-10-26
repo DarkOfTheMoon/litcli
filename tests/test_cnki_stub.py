@@ -28,6 +28,8 @@ class CnkiParseTest(unittest.TestCase):
 
     def test_normalize_author_latin(self):
         self.assertEqual(normalize_author_name("John Smith"), {"family": "Smith", "given": "John"})
+        # "Family, Given" (citation_* meta) keeps the family on the left of the comma.
+        self.assertEqual(normalize_author_name("Abbott, B. P."), {"family": "Abbott", "given": "B. P."})
         self.assertEqual(normalize_author_name(""), {"family": "", "given": ""})
 
     def test_rows_to_items_skips_empty_title(self):

@@ -37,6 +37,10 @@ def normalize_author_name(raw: str) -> dict:
         # CJK name: drop punctuation, keep the whole name in family; no given part.
         fam = re.sub(r"[，,、\s]+", "", s)
         return {"family": fam, "given": ""}
+    # Latin "Family, Given" (citation_* / CSL style) is unambiguous; split on the first comma.
+    if "," in s:
+        fam, _, given = s.replace("，", ",").partition(",")
+        return {"family": fam.strip(), "given": given.strip()}
     # Latin name: "John Smith" -> family Smith, given John (last token is family).
     tokens = s.split()
     return {"family": tokens[-1], "given": " ".join(tokens[:-1])}

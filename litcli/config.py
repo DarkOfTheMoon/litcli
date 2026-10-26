@@ -85,6 +85,12 @@ def _registry() -> dict[str, type[Backend]]:
         reg["douban"] = douban.DoubanBackend
     except ImportError:
         pass
+    try:
+        from .backends import scihub
+
+        reg["scihub"] = scihub.ScihubBackend
+    except ImportError:
+        pass
     return reg
 
 

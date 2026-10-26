@@ -39,6 +39,8 @@ class RelatedKeyNormalizeTest(unittest.TestCase):
         self.assertEqual(_normalize_related_key("openalex/10.1016/j.cma.2004.11.019"),
                          "10.1016/j.cma.2004.11.019")
         self.assertEqual(_normalize_related_key("zotero/AB12"), "AB12")
+        self.assertEqual(_normalize_related_key("scihub/10.1016/j.cma.2004.11.019"),
+                         "10.1016/j.cma.2004.11.019")
 
     def test_arxiv_prefix_to_doi(self):
         self.assertEqual(_normalize_related_key("arxiv/1806.09180"), "10.48550/arxiv.1806.09180")

@@ -54,6 +54,16 @@ type = "douban"
 # user_data_dir = "~/.config/litcli/douban-chrome"  # 独立浏览器 profile(默认仅用于偶发登录/cookie 持久化)
 # headless = true                                   # 默认无头;豆瓣无需人工滑验证码,仅风控时降级
 
+# 可选:Sci-Hub 全文兜底(盗版镜像,只按 DOI 解析 PDF,无关键词检索)。
+# 默认不内置。启用后 `fetch fulltext` 会在本地库/Unpaywall/OpenAlex 都无果时再试 Sci-Hub,
+# 并标注来源。也可只在单次调用加 `--scihub`,不改配置。
+# 站点用 ALTCHA 工作量证明验人,litcli 用本地 hashlib 解同一道题(不绕过),每次调用一个 DOI。
+[backends.scihub]
+type = "scihub"
+# 镜像按序尝试;探测失效的镜像可自行替换。
+mirrors = ["sci-hub.ru", "sci-hub.st", "sci-hub.se"]
+# timeout = 30
+
 # 可选:统一代理(校园/VPN 访问海外学术源)。留空则默认读环境变量 HTTP_PROXY / HTTPS_PROXY。
 [network]
 # proxy = "http://127.0.0.1:7890"
