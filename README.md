@@ -41,6 +41,7 @@ PDF 全文抽取依赖系统 `pdftotext`（poppler-utils）；缺失时返回空
 | `litcli data members <collKey> [--no-recursive]` | 罗列某集合条目，默认递归全部子集合 | 只读 |
 | `litcli export <key>... [--format csljson\|bibtex\|ris\|text]` | 导出引文；`csljson` 可喂 `pandoc --citeproc`，不依赖 Better BibTeX；arXiv key 如 `arxiv/1806.09180` 自动归一为 DOI | 只读 |
 | `litcli fetch fulltext <doi> [--scihub] [--download] [--out ..] [--lines N]` | 全文定位：本地库 → Unpaywall → OpenAlex OA 直链；`--scihub` 再兜底盗版镜像（标注来源）；都没有则指路机构订阅/馆际互借 | 只读 |
+| `litcli fetch book "书名\|ISBN" [--limit N] [--pick N] [--download] [--out ..]` | 图书定位：Z-Library 关键词检索出候选书单 → 选定一本补全书目 → 可选下载 PDF（影子图书馆，非 OA 授权）；匿名每日下载有配额 | 只读 |
 | `litcli backends list` / `status` | 列出已配置后端及能力 / 显示各后端授权与可达状态 | 只读 |
 | `litcli backends authorize [zotero]` | 主动向 Zotero 本地授权拿写库 key 并写回 `config.toml` | 写配置 |
 | `litcli completions <bash\|zsh\|fish>` | 打印自包含补全脚本；`eval "$(litcli completions bash)"` 后 `litcli <TAB>` 补子命令/参数/选项取值/文件路径。补全时不起 `litcli` 子进程（spec 内嵌于脚本），CLI 面更新后重新 eval | 只读 |
@@ -59,7 +60,7 @@ PDF 全文抽取依赖系统 `pdftotext`（poppler-utils）；缺失时返回空
 
 ## 后端与能力
 
-默认可用的四个后端；其余（OpenLibrary、USPTO、CNKI、豆瓣、Sci-Hub）需在配置中显式启用（CNKI/豆瓣/Sci-Hub 也可用 `--backend` / `--scihub` 单次指定）。
+默认可用的四个后端；其余（OpenLibrary、USPTO、CNKI、豆瓣、Sci-Hub、Z-Library）需在配置中显式启用（CNKI/豆瓣/Z-Library 也可用 `--backend` 单次指定，Sci-Hub 用 `--scihub`）。
 
 | 后端 | 能力 | 说明 |
 |---|---|---|
@@ -72,6 +73,7 @@ PDF 全文抽取依赖系统 `pdftotext`（poppler-utils）；缺失时返回空
 | `cnki` | read | 知网中文题录检索（需 Playwright + 可见浏览器）；只取公开题录元数据，不抓付费墙全文 |
 | `douban` | read | 豆瓣图书检索（需 Playwright，默认无头）；`search` 出候选（书名/作者/出版社/年份/评分），`get` 补全 ISBN/版次/页数；只取公开书目元数据 |
 | `scihub` | read | Sci-Hub 全文兜底，只按 DOI 解析 PDF（无关键词检索）；`fetch fulltext --scihub` 才启用，ALTCHA 工作量证明由本地 `hashlib` 解出；盗版镜像，非 OA 授权 |
+| `zlibrary` | read | Z-Library 图书检索 + 下载（影子图书馆）；`fetch book` 出候选→补全书目→可选下载；浏览器工作量证明由本地 `hashlib` 解出，入口域名自动解析 |
 
 ## 配置
 
@@ -109,7 +111,7 @@ litcli/
 ├── fulltext.py    全文定位（本地→OA→可选 Sci-Hub）+ should_import 收录查重门（纯函数）
 ├── config.py      配置读取、后端发现、get_backend/get_all_backends
 ├── cli.py         argparse 意图分族编排（search/refs/citing/related/export/backends/data/fetch/completions）
-├── backends/      base.py（Backend ABC）+ zotero_local / arxiv / crossref / openalex / openlibrary / uspto / cnki / douban / scihub
+├── backends/      base.py（Backend ABC）+ zotero_local / arxiv / crossref / openalex / openlibrary / uspto / cnki / douban / scihub / zlibrary
 └── tests/          unittest 单测（stub 后端，离线）
 ```
 
@@ -128,5 +130,6 @@ python3 -m unittest discover -s tests
 - Zotero **写库**（`data add/set/del/attach`）需一个写权限 key。先跑 `litcli backends authorize zotero`，经本地 API `/api/local/authorize` 弹框批准后，key 自动写回 `config.toml` 的 `[backends.zotero].api_key`，此后写操作自动携带、不再弹框。key 是 Zotero 10 本地 API 在运行时授权派发的本地 key，不是 zotero.org 的 Web API key，不需要在 Zotero 设置里手动生成。未授权时写操作报 `HTTP 401`（退出码 2），不污染库。
 - arXiv 联网在部分环境（如受限沙箱）返回 406；代码已把 HTTP 错误包装为 `RuntimeError`，`--all` 会跳过失败后端继续。
 - **专利检索（USPTO）需真实 API key**：免 key 可达的 Crossref/OpenAlex 公开版专利记录趋近 0，专利以 USPTO 为主通道。免费注册 key（<https://developer.uspto.gov> 顶部 “Get a developer key”）后写入 config 的 `api_key`；缺 key 时 `search --backend uspto` 明确提示而非堆栈。
-- **Sci-Hub 为可选兜底，不默认介入**：合法全文仍先走 `litcli fetch fulltext` 的本地库 → Unpaywall → OpenAlex；加 `--scihub`（或在配置里启用 `[backends.scihub]`）才在合法渠道全无结果后再试盗版镜像，输出会标注 `source=scihub` 与“非 OA 授权”。镜像用 ALTCHA 工作量证明验人，litcli 用本地 `hashlib` 解同一道题（不绕过），每次调用单个 DOI、低频。ZLibrary 仍未接。
+- **Sci-Hub 为可选兜底，不默认介入**：合法全文仍先走 `litcli fetch fulltext` 的本地库 → Unpaywall → OpenAlex；加 `--scihub`（或在配置里启用 `[backends.scihub]`）才在合法渠道全无结果后再试盗版镜像，输出会标注 `source=scihub` 与“非 OA 授权”。镜像用 ALTCHA 工作量证明验人（不绕过），每次调用单个 DOI、低频。
+- **Z-Library 为影子图书馆**：`litcli fetch book` 走 Z-Library 图书检索 + 下载，非 OA 授权，只取公开书目元数据与公开 PDF 直链，不绕过任何登录墙/验证码。站点以“Checking your browser”工作量证明验人，litcli 用本地 `hashlib` 解同一道题（不绕过）；入口域名会轮换，实现从 302 自动解析真实前端主机。**匿名每日下载有配额**，超限会明确提示（可在 `[backends.zlibrary]` 填 `email`/`password` 登录后放宽）。
 - **CNKI（知网）后端只取公开题录，不抓全文**：知网无开放 API，`search --backend cnki` 驱动**可见浏览器**（复用你自己的登录会话）检索，从结果列表页提取标题/作者/刊名/年份/摘要片段。**不实现任何下载/抓取付费墙全文的路径**；遇滑块验证码交给你在可见浏览器手动完成，程序不绕过。需先 `./install.sh --with-cnki` 装 Playwright + Chromium，首次搜索会弹浏览器请你手动过滑块 + 登录一次，之后会话复用。

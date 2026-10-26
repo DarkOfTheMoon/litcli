@@ -91,6 +91,12 @@ def _registry() -> dict[str, type[Backend]]:
         reg["scihub"] = scihub.ScihubBackend
     except ImportError:
         pass
+    try:
+        from .backends import zlibrary
+
+        reg["zlibrary"] = zlibrary.ZlibraryBackend
+    except ImportError:
+        pass
     return reg
 
 

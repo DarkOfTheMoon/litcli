@@ -4,6 +4,7 @@ Command surface (backends via --backend, default zotero):
   search        cross-backend candidate search (read-only)
   data get/add/set/del/attach   local store CRUD (write · requires decision)
   fetch fulltext    locate fulltext by DOI; --scihub adds the copyright-evading fallback
+  fetch book        find a book by title/ISBN on Z-Library (shadow library) and resolve one
   export        export citations (read-only, no PDF)
   completions   print shell completion scripts (bash/zsh/fish; enable via eval)
   backends      diagnostics
@@ -152,6 +153,15 @@ def _build_parser() -> argparse.ArgumentParser:
     fp.add_argument("--lines", type=int, default=6, help="preview line count after download")
     fp.add_argument("--scihub", action="store_true",
                     help="also try Sci-Hub after the legitimate OA sources (copyright-evading mirror)")
+
+    bp = fsub.add_parser("book", help="search a book by title/ISBN on Z-Library and resolve one hit")
+    bp.add_argument("query", help="title, author or ISBN")
+    bp.add_argument("--backend", default="zlibrary", help="book backend (default zlibrary)")
+    bp.add_argument("--limit", type=int, default=5, help="candidate count to list")
+    bp.add_argument("--pick", type=int, default=1, help="1-based candidate to resolve (default 1)")
+    bp.add_argument("--download", action="store_true", help="download the chosen file")
+    bp.add_argument("--out", default=None, help="save path")
+    bp.add_argument("--lines", type=int, default=0, help="preview line count after download (0=off)")
 
     return parser
 
@@ -574,6 +584,62 @@ def cmd_fetch_fulltext(cfg, args) -> int:
     return 0
 
 
+def cmd_fetch_book(cfg, args) -> int:
+    """Find a book by title/ISBN on a book backend, resolve one candidate, optionally download.
+
+    Z-Library copies are shadow-library copies (not open-access licensed), so the hit is
+    labelled as such. ``--pick`` selects among the listed candidates; the chosen record is
+    printed in full before any bytes are fetched.
+    """
+    backend = get_backend(args.backend, cfg)
+    candidates = backend.search(args.query, limit=max(1, args.limit))
+    if not candidates:
+        print(f"[no books] {args.query!r}")
+        return 0
+
+    print(f"{len(candidates)} candidate(s) from {backend.name}:")
+    for i, item in enumerate(candidates, 1):
+        authors = ", ".join(c.get("family", "") for c in item.creators) or "Anon"
+        print(f"  {i}. {item.year or '----'}  {authors[:28]:<28} {item.title[:64]}")
+        if item.publisher:
+            print(f"     {item.publisher}")
+
+    if not 1 <= args.pick <= len(candidates):
+        print(f"[error] --pick {args.pick} is outside 1..{len(candidates)}")
+        return 2
+    chosen = candidates[args.pick - 1]
+
+    try:
+        book = backend.get(chosen.key)
+    except RuntimeError as e:
+        print(f"[error] {e}")
+        if len(candidates) > 1:
+            print(f"        try another candidate: --pick 1..{len(candidates)}")
+        return 2
+    print(f"\nZ-Library copy (shadow library, not an open-access licence): {book.url}")
+    for label, value in (("title", book.title), ("publisher", book.publisher),
+                         ("year", book.year), ("edition", book.edition), ("isbn", book.isbn),
+                         ("pages", book.page), ("language", book.extra.get("language", "")),
+                         ("file", book.extra.get("download", ""))):
+        if value:
+            print(f"  {label}: {value}")
+    if book.creators:
+        print(f"  authors: {', '.join(c.get('family', '') for c in book.creators)}")
+    if not args.download:
+        print("  Add --download to fetch the file.")
+        return 0
+
+    raw = backend.get_attachment(book.key)
+    out = args.out or f"{book.isbn or book.key.split('/')[-1]}.pdf"
+    with open(out, "wb") as f:
+        f.write(raw)
+    print(f"  Downloaded {len(raw)} bytes to {out}")
+    if raw and args.lines:
+        text = pdfutil.extract_text(raw, max_chars=None)
+        print(f"  --- {args.lines}-line preview ---\n{pdfutil.first_lines(text, args.lines)}")
+    return 0
+
+
 def cmd_completions(cfg, args) -> int:
     """Generate a self-contained shell completion script for ``args.shell``.
 
@@ -691,6 +757,7 @@ def main(argv=None) -> int:
         if args.cmd == "fetch":
             return {
                 "fulltext": cmd_fetch_fulltext,
+                "book": cmd_fetch_book,
             }[args.fetch_cmd](cfg, args)
         print(f"[error] unknown command {args.cmd}")
         return 2
