@@ -77,6 +77,20 @@ type = "zlibrary"
 # delay = 1.0                                      # 请求间隔(秒),人机节律
 # timeout = 40
 
+# 可选:开放获取(OA)语料源。均免 key、只读、只含开放授权记录。内置默认不含它们,
+# 但本示例文件里这些段是启用的——复制本文件即生效;不想用可整段删掉。启用后 `search --all`
+# 会覆盖它们。europepmc / zenodo 另会被 `fetch fulltext` 自动咨询
+# (合法 OA 全文链:Unpaywall → OpenAlex → Europe PMC XML → Zenodo 文件),无需在此启用。
+[backends.doaj]                    # DOAJ 开放获取期刊论文索引(全是 OA)
+type = "doaj"
+[backends.europepmc]               # Europe PMC 生物医学题录 + 开放获取 JATS 全文
+type = "europepmc"
+# delay = 0.4                      # EBI 建议 ≤3 req/s
+[backends.doab]                    # DOAB 开放获取图书(检索走 Atom feed;详情页有“你不是机器人”工作量证明,litcli 本地解)
+type = "doab"
+[backends.zenodo]                  # Zenodo 开放数据集/软件/预印本(文件可直接下载)
+type = "zenodo"
+
 # 可选:统一代理(校园/VPN 访问海外学术源)。留空则默认读环境变量 HTTP_PROXY / HTTPS_PROXY。
 [network]
 # proxy = "http://127.0.0.1:7890"

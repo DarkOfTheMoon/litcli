@@ -8,7 +8,9 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from litcli.backends.base import Backend, NotSupportedError
 from litcli.cli import _arxiv_id_from_key, _normalize_export_key, _normalize_related_key, _build_parser
+from litcli.models import AcademicItem
 
 
 class ArxivKeyNormalizeTest(unittest.TestCase):
@@ -96,6 +98,72 @@ class PrintItemsTest(unittest.TestCase):
             rc = _print_items([], "json", False, "[no related]")
         self.assertEqual(rc, 0)
         self.assertEqual(buf.getvalue().strip(), "[]")
+
+
+class FetchBookTest(unittest.TestCase):
+    """fetch book: source labelling and the no-file backend path."""
+
+    class OpenLibrary:
+        name = "openlibrary"
+        capabilities = {"read"}
+
+        def search(self, q, limit=10, filters=None):
+            return [AcademicItem(source="openlibrary", key="/books/OL1M", title="T", item_type="book")]
+
+        def get(self, key):
+            return AcademicItem(source="openlibrary", key=key, title="T", item_type="book",
+                                url="https://openlibrary.org/books/OL1M")
+
+        def get_attachment(self, key):
+            raise NotSupportedError("get_attachment", self)
+
+    class Shadow:
+        name = "books"  # a zlibrary backend configured under a non-default name
+        is_shadow = True
+
+        def search(self, q, limit=10, filters=None):
+            return [AcademicItem(source="books", key="book/abc", title="T", item_type="book")]
+
+        def get(self, key):
+            return AcademicItem(source="books", key=key, title="T", item_type="book", url="https://z.test/x")
+
+    def _run(self, argv, backend):
+        import contextlib
+        import io
+        from unittest import mock
+        import litcli.cli as cli
+
+        buf = io.StringIO()
+        with mock.patch.object(cli, "get_backend", return_value=backend), \
+             contextlib.redirect_stdout(buf):
+            rc = cli.main(argv)
+        return rc, buf.getvalue()
+
+    def test_download_on_a_metadata_only_backend_reports_the_page(self):
+        rc, out = self._run(["fetch", "book", "x", "--backend", "openlibrary", "--download"],
+                            self.OpenLibrary())
+        self.assertEqual(rc, 0)
+        self.assertIn("has no downloadable file", out)
+
+    class MetadataOnly(Backend):
+        name = "openlibrary"
+
+        def search(self, q, limit=10, filters=None):
+            return [AcademicItem(source="openlibrary", key="/books/OL1M", title="T", item_type="book")]
+
+        def get(self, key):
+            return AcademicItem(source="openlibrary", key=key, title="T", item_type="book",
+                                url="https://openlibrary.org/books/OL1M")
+
+    def test_metadata_only_backend_has_no_download_hint(self):
+        rc, out = self._run(["fetch", "book", "x", "--backend", "openlibrary"], self.MetadataOnly())
+        self.assertIn("metadata only, no file", out)
+        self.assertNotIn("Add --download", out)
+
+    def test_shadow_label_survives_a_renamed_backend(self):
+        rc, out = self._run(["fetch", "book", "x", "--backend", "books"], self.Shadow())
+        self.assertIn("shadow library", out)
+        self.assertNotIn("record (open access)", out)
 
 
 class MainCatchTest(unittest.TestCase):

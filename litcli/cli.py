@@ -33,7 +33,7 @@ from .models import AcademicItem
 from .aggregate import cited_key, merge_items
 from .citation import render_intext, render_bibliography
 from .completions import SHELL_CHOICES, build_spec, render as render_completion
-from .backends.base import NotSupportedError
+from .backends.base import Backend, NotSupportedError, set_proxy as set_backend_proxy
 
 
 def _add_common_backend(p: argparse.ArgumentParser) -> None:
@@ -145,16 +145,17 @@ def _build_parser() -> argparse.ArgumentParser:
     f = sub.add_parser("fetch", help="get fulltext / metadata (read-only, no store)")
     fsub = f.add_subparsers(dest="fetch_cmd", required=True)
 
-    fp = fsub.add_parser("fulltext", help="locate fulltext by DOI (local store → Unpaywall → OpenAlex; --scihub adds a fallback)")
+    fp = fsub.add_parser("fulltext", help="locate fulltext by DOI (local store → Unpaywall → OpenAlex → Europe PMC/Zenodo; --scihub adds a fallback)")
     fp.add_argument("doi")
     fp.add_argument("--email", default=None)
-    fp.add_argument("--download", action="store_true", help="download the candidate fulltext PDF")
+    fp.add_argument("--download", action="store_true",
+                    help="download the candidate fulltext file (PDF, or XML/HTML from the OA corpus)")
     fp.add_argument("--out", default=None, help="save path")
     fp.add_argument("--lines", type=int, default=6, help="preview line count after download")
     fp.add_argument("--scihub", action="store_true",
                     help="also try Sci-Hub after the legitimate OA sources (copyright-evading mirror)")
 
-    bp = fsub.add_parser("book", help="search a book by title/ISBN on Z-Library and resolve one hit")
+    bp = fsub.add_parser("book", help="search a book by title/ISBN on a book backend (default Z-Library) and resolve one hit")
     bp.add_argument("query", help="title, author or ISBN")
     bp.add_argument("--backend", default="zlibrary", help="book backend (default zlibrary)")
     bp.add_argument("--limit", type=int, default=5, help="candidate count to list")
@@ -522,8 +523,16 @@ def _resolve_oa_email(cfg, args) -> str:
             or unpaywall.DEFAULT_EMAIL)
 
 
+def _optional_backend(name: str, cfg):
+    """Instantiate a registered optional backend, or None when it is not available at all."""
+    try:
+        return get_backend(name, cfg)
+    except KeyError:
+        return None
+
+
 def cmd_fetch_fulltext(cfg, args) -> int:
-    """Locate fulltext by DOI: local store (first) → Unpaywall → OpenAlex; Sci-Hub only when asked.
+    """Locate fulltext by DOI: local store → Unpaywall → OpenAlex → Europe PMC/Zenodo; Sci-Hub only when asked.
 
     Sci-Hub is opt-in (`--scihub`, or by configuring the ``scihub`` backend) because it serves
     copyright-evading copies; its hits are labelled as such.
@@ -533,8 +542,13 @@ def cmd_fetch_fulltext(cfg, args) -> int:
     scihub_backend = backends.get("scihub")
     if getattr(args, "scihub", False) and scihub_backend is None:
         scihub_backend = get_backend("scihub", cfg)
+    # The legal corpus sources are keyless: consult them even when not enabled in config.
+    corpus = {name: backends.get(name) or _optional_backend(name, cfg)
+              for name in ("europepmc", "zenodo")}
     info = fulltext_mod.resolve_fulltext(args.doi, email, backends=backends,
                                          openalex_backend=backends.get("openalex"),
+                                         europepmc_backend=corpus["europepmc"],
+                                         zenodo_backend=corpus["zenodo"],
                                          scihub_backend=scihub_backend)
     if not info.get("has_fulltext"):
         print(f"DOI {args.doi}  no such work in the local store or open OA sources")
@@ -551,6 +565,8 @@ def cmd_fetch_fulltext(cfg, args) -> int:
     print(f"DOI {args.doi}  fulltext available (source={kind})")
     if kind == "scihub":
         print("  note: Sci-Hub copy (copyright-evading), not an open-access licence")
+    if info.get("format") == "xml":
+        print("  note: open-access JATS XML (text without a PDF; not a rendered article)")
     if title:
         print(f"  title: {title[:70]}")
 
@@ -571,15 +587,23 @@ def cmd_fetch_fulltext(cfg, args) -> int:
     # OA sources: give the direct link by default, download only with --download
     if info.get("status"):
         print(f"  oa_status: {info['status']}")
-    print(f"  PDF: {info['url']}")
+    fmt = info.get("format") or "pdf"
+    print(f"  {'PDF' if fmt == 'pdf' else fmt.upper()}: {info['url']}")
+    if fmt == "html":
+        print("  note: landing page, not a file — open it in a browser")
     if args.download:
         raw = pdfutil.download(info["url"])
-        out = args.out or f"{args.doi.replace('/', '_')}.pdf"
+        out = args.out or f"{args.doi.replace('/', '_')}.{fmt}"
         with open(out, "wb") as f:
             f.write(raw)
         print(f"  Downloaded {len(raw)} bytes to {out}")
         if raw and args.lines:
-            text = pdfutil.extract_text(raw, max_chars=None)
+            if fmt == "html":
+                text = fulltext_mod.html_to_text(raw)
+            elif fmt == "xml":
+                text = fulltext_mod.xml_to_text(raw)
+            else:
+                text = pdfutil.extract_text(raw, max_chars=None)
             print(f"  --- {args.lines}-line preview ---\n{pdfutil.first_lines(text, args.lines)}")
     return 0
 
@@ -616,7 +640,13 @@ def cmd_fetch_book(cfg, args) -> int:
         if len(candidates) > 1:
             print(f"        try another candidate: --pick 1..{len(candidates)}")
         return 2
-    print(f"\nZ-Library copy (shadow library, not an open-access licence): {book.url}")
+    if getattr(backend, "is_shadow", False):
+        note = "Z-Library copy (shadow library, not an open-access licence)"
+    elif getattr(type(backend), "get_attachment", None) is not Backend.get_attachment:
+        note = f"{backend.name} record (open access)"
+    else:
+        note = f"{backend.name} record (metadata only, no file)"
+    print(f"\n{note}: {book.url}")
     for label, value in (("title", book.title), ("publisher", book.publisher),
                          ("year", book.year), ("edition", book.edition), ("isbn", book.isbn),
                          ("pages", book.page), ("language", book.extra.get("language", "")),
@@ -626,10 +656,15 @@ def cmd_fetch_book(cfg, args) -> int:
     if book.creators:
         print(f"  authors: {', '.join(c.get('family', '') for c in book.creators)}")
     if not args.download:
-        print("  Add --download to fetch the file.")
+        if getattr(type(backend), "get_attachment", None) is not Backend.get_attachment:
+            print("  Add --download to fetch the file.")
         return 0
 
-    raw = backend.get_attachment(book.key)
+    try:
+        raw = backend.get_attachment(book.key)
+    except NotSupportedError:
+        print(f"  [{backend.name}] has no downloadable file; open {book.url} instead.")
+        return 0
     out = args.out or f"{book.isbn or book.key.split('/')[-1]}.pdf"
     with open(out, "wb") as f:
         f.write(raw)
@@ -730,6 +765,8 @@ def _apply_proxy(cfg: dict) -> None:
         return  # env var already set; it takes precedence
     urllib.request.install_opener(urllib.request.build_opener(
         urllib.request.ProxyHandler({"http": prog, "https": prog})))
+    # Backends that keep their own cookie opener (bot checks) do not see install_opener.
+    set_backend_proxy(prog)
 
 
 def main(argv=None) -> int:

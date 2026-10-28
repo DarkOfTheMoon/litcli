@@ -7,6 +7,7 @@ NotSupportedError.
 """
 from __future__ import annotations
 
+import http.cookiejar
 import json
 import time
 import urllib.error
@@ -15,6 +16,25 @@ import urllib.request
 from abc import ABC, abstractmethod
 
 from ..models import AcademicItem
+
+# Config proxy for backends that build their own opener. ``install_opener`` only affects
+# ``urllib.request.urlopen``; an opener built directly (cookie jars for bot checks) would
+# otherwise go out unproxied and, in a proxy-only network, fail while search still works.
+_PROXY = ""
+
+
+def set_proxy(url: str) -> None:
+    """Remember the configured proxy for :func:`build_cookie_opener` ("" clears it)."""
+    global _PROXY
+    _PROXY = url or ""
+
+
+def build_cookie_opener() -> urllib.request.OpenerDirector:
+    """Opener with a private cookie jar that still honours the configured proxy."""
+    handlers: list = [urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())]
+    if _PROXY:
+        handlers.append(urllib.request.ProxyHandler({"http": _PROXY, "https": _PROXY}))
+    return urllib.request.build_opener(*handlers)
 
 
 def retry_json(url: str, headers: dict, name: str, timeout: int = 25,

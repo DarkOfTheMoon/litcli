@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import http.cookiejar
 import json
 import re
 import urllib.error
@@ -35,7 +34,7 @@ from urllib.parse import urljoin
 
 from .. import pdf as pdfutil
 from ..models import AcademicItem, extract_year, normalize_author_name
-from .base import Backend
+from .base import Backend, build_cookie_opener
 
 # Mirrors tried in order; overridable via ``[backends.scihub].mirrors``. Probed 2026-10: ``.ru``
 # serves the captcha/article page, ``.st`` answers 403 (edge wall), ``.se`` fails DNS here.
@@ -169,8 +168,7 @@ class _Http:
 
     def __init__(self, timeout: int = 30):
         self.timeout = timeout
-        self._opener = urllib.request.build_opener(
-            urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        self._opener = build_cookie_opener()
 
     def _request(self, url: str, data: bytes | None = None,
                  headers: dict | None = None) -> tuple[str, str]:

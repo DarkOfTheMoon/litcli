@@ -348,6 +348,8 @@ class ZlibraryBackend(Backend):
     """
 
     name = "zlibrary"
+    #: Copies are shadow-library scans, not open-access licensed (the CLI labels hits by this).
+    is_shadow = True
 
     @property
     def capabilities(self) -> set[str]:

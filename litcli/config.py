@@ -97,6 +97,30 @@ def _registry() -> dict[str, type[Backend]]:
         reg["zlibrary"] = zlibrary.ZlibraryBackend
     except ImportError:
         pass
+    try:
+        from .backends import doaj
+
+        reg["doaj"] = doaj.DoajBackend
+    except ImportError:
+        pass
+    try:
+        from .backends import europepmc
+
+        reg["europepmc"] = europepmc.EuropePmcBackend
+    except ImportError:
+        pass
+    try:
+        from .backends import doab
+
+        reg["doab"] = doab.DoabBackend
+    except ImportError:
+        pass
+    try:
+        from .backends import zenodo
+
+        reg["zenodo"] = zenodo.ZenodoBackend
+    except ImportError:
+        pass
     return reg
 
 
