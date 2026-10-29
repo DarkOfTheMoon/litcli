@@ -12,7 +12,7 @@
 
 ```bash
 # 生产方式：./install.sh = pip install --break-system-packages --user .(复制快照，无 venv)
-./install.sh          # 同时把 skill 复制到 ~/.claude/skills/zotero
+./install.sh          # 顺带分发 agent 技能(见下)
 litcli backends       # 自测：列出已配置后端及能力
 
 # 开发方式：仓库内直接跑，任意 cwd 可用，与生产快照隔离
@@ -20,6 +20,19 @@ litcli backends       # 自测：列出已配置后端及能力
 ```
 
 PDF 全文抽取依赖系统 `pdftotext`（poppler-utils）；缺失时返回空文本，其余功能不受影响。
+
+### 技能分发（不绑定某个 agent）
+
+技能源是 `skills/litcli/SKILL.md`（纯 markdown）。`install.sh` 默认**自动探测**已存在的 agent 配置目录，只往探测到的那些装，格式各随其主流：
+
+| 目标 | 落点 |
+|---|---|
+| Claude Code | `~/.claude/skills/litcli/SKILL.md`（含 frontmatter） |
+| Codex CLI | `~/.codex/prompts/litcli.md`（剥离 frontmatter 的 prompt） |
+| Cursor | `~/.cursor/rules/litcli.mdc`（换 Cursor 规则头） |
+| Gemini CLI | `~/.gemini/GEMINI.md` 的标记块（重跑替换该块，不动你的其它内容） |
+
+任何情况下都会在 `~/.local/share/litcli/skill/SKILL.md` 留一份中立副本，表中没有的 agent 可直接引用它。用 `./install.sh --skills claude,codex` 显式指定、`--no-skills` 跳过、`--skills-only` 只动技能（不重装包）。
 
 ## 命令
 
@@ -117,6 +130,8 @@ litcli/
 ├── cli.py         argparse 意图分族编排（search/refs/citing/related/export/backends/data/fetch/completions）
 ├── backends/      base.py（Backend ABC）+ zotero_local / arxiv / crossref / openalex / openlibrary / uspto / cnki / douban / doaj / europepmc / doab / zenodo / scihub / zlibrary
 └── tests/          unittest 单测（stub 后端，离线）
+
+skills/litcli/      agent 技能源（install.sh 按目标 agent 分发）
 ```
 
 分层原则：**领域层**（后端无关，纯函数优先）→ **后端层**（可插拔，读/写/附件由 capabilities 标注）→ **配置层** → **CLI 编排层**。

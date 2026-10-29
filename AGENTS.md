@@ -63,8 +63,8 @@ litcli 的核心是「一条文献在多个后端（Zotero / arXiv）间的读�
 ## 惯例与约定
 
 - **一次改动只留一条提交**：审查、修复、文档补齐都先做完，再一次性提交；发现要改就 `commit --amend` 后 `push --force-with-lease`，不补 `fix:`/`style:` 类修补提交。顺序是审查 → 修复 → 全量测试 → 一次提交 → push；怕成果丢失用本地提交做检查点、审完 amend 合并再推。
-- **所有 `.py` 文本一律英文**：注释、docstring，以及任何用户可见字符串（`print`/argparse `help`/`raise` 异常消息）都要英文——CLI 输出也走英文。只有用户文档保持中文：AGENTS.md、README.md、`.claude/skills/`、`config.example.toml`。标识符统一英文；按载体区分语言，不混用。
+- **所有 `.py` 文本一律英文**：注释、docstring，以及任何用户可见字符串（`print`/argparse `help`/`raise` 异常消息）都要英文——CLI 输出也走英文。只有用户文档保持中文：AGENTS.md、README.md、`skills/`、`config.example.toml`。标识符统一英文；按载体区分语言，不混用。
 - 加后端：继承 `Backend`，实现 `search`/`get`，覆盖 `capabilities`（只读就 `{"read"}`），在 `config._registry()` 的 try-import 里注册，并在 `config.example.toml` 加字段。
 - 新功能若要在领域层「输入某数据 → 输出统一模型」，优先做成纯函数（不 I/O、不联网），便于离线单测（现有测试都走构造数据、不连真库）。
 - 写 `AcademicItem` 新增字段时，同步检查 `to_csl`/`from_csl`/`merge_items` 是否该感知该字段。
-- `.claude/skills/zotero/SKILL.md` 是面向 Zotero/arXiv 库互操作的技能，其命令表与 CLI 保持一致（其中「去重/排序暂不做」一句已过时——聚合层现已支持）。
+- `skills/litcli/SKILL.md` 是面向学术库互操作的技能**唯一源**（纯 markdown、不绑定 agent）；`install.sh` 按探测到的 agent 各自格式分发（Claude 技能目录 / Codex prompt / Cursor `.mdc` / Gemini 上下文标记块），并始终留一份中立副本 `~/.local/share/litcli/skill/SKILL.md`。加分发目标时改 `install.sh` 的 `install_skill` 分支，别再往源路径里嵌 agent 名。其命令表与 CLI 保持一致（其中「去重/排序暂不做」一句已过时——聚合层现已支持）。

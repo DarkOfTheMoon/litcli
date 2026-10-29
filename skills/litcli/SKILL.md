@@ -1,11 +1,13 @@
 ---
-name: zotero
-description: 与用户学术资料互操作——检索、读取、导出引文、读 PDF 全文、新增/修改。覆盖本机 Zotero 库、arXiv、Crossref/OpenAlex，以及知网中文题录与豆瓣图书。当用户提到"我的文献/论文库/引用/参考文献/PDF/图书/书目"时使用。
+name: litcli
+description: 用 litcli 与用户的学术资料互操作——检索、读取、导出引文、读全文、新增/修改。覆盖本机 Zotero、arXiv、Crossref/OpenAlex、知网中文题录、豆瓣图书与开放获取语料（DOAJ / Europe PMC / DOAB / Zenodo / Sci-Hub / Z-Library）。当用户提到"我的文献/论文库/引用/参考文献/PDF/图书/书目"时使用。
 ---
 
-# Zotero / arXiv 学术互操作
+# litcli 学术互操作（Zotero / arXiv / OA 语料）
 
-零依赖工具 `litcli`，后端无关：领域模型统一为 `AcademicItem`，Zotero 本地库可读可写，arXiv 联网只读。
+零依赖工具 `litcli`，后端无关：领域模型统一为 `AcademicItem`，Zotero 本地库可读可写，其余后端只读。
+
+本技能是纯 markdown，不绑定某个 agent：出现 SKILL.md 目录树的地方按原样放；只吃全局上下文的，把它整篇并入上下文文件即可。
 
 ## 命令面（`litcli` 已在 PATH，或在 `~/Projects/Scholar/litcli` 下用 `./bin/litcli`）
 
