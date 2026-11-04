@@ -28,7 +28,7 @@ python3 -m unittest tests.test_models.TestModels.test_to_csl
 ruff check litcli tests
 ```
 
-**发布**：走 `scripts/release.sh`，不手工改版本号/打 tag。流程是门禁（在 master 且与 origin 齐平、工作区干净、测试绿、ruff 干净、能出包、`CHANGELOG.md` 的 `[Unreleased]` 非空、目标 tag 未占用）→ 改 `litcli/_version.py` + 把 `[Unreleased]` 收成带日期的版本段 → 提交 `chore(release): vX.Y.Z` → 打 tag → 构建 `dist/`（sdist + wheel）与 `SHA256SUMS`。`--check`/`--dry-run` 只跑门禁与预演，`--push` 才外发（推 master + tag；设了 `GITEE_TOKEN` 才建 Gitee Release 并挂产物）。日常改动本身**不**往 CHANGELOG 里随手加，收版时统一补 `[Unreleased]`。
+**发布**：走 `scripts/release.sh`，不手工改版本号/打 tag。流程是门禁（在 master 且与 origin 齐平、工作区干净、测试绿、ruff 干净、能出包、`CHANGELOG.md` 的 `[Unreleased]` 非空、目标 tag 未占用）→ 改 `litcli/_version.py` + 把 `[Unreleased]` 收成带日期的版本段 → 提交 `chore(release): vX.Y.Z` → 打 tag → 构建 `dist/`（sdist + wheel）与 `SHA256SUMS`。`--check`/`--dry-run` 只跑门禁与预演，`--push` 才外发（推 master + tag；设了 `GITEE_TOKEN` 或 `~/.config/litcli/gitee.token` 才建 Gitee Release 并挂产物；切版时没 token，事后用 `--release-only` 给已推的 tag 补建，不改提交）。日常改动本身**不**往 CHANGELOG 里随手加，收版时统一补 `[Unreleased]`。
 
 CLI 帮助用 `./bin/litcli --help`；本机 Zotero 库用 `litcli search "..."`（`--all` 跨后端聚合，`litcli backends list/status` 看可用后端与授权状态；`search --type <article|book|...>` 按类型过滤降噪，`--title/--author/--year/--container` 字段级过滤、`--sort cited` 按被引降序；`litcli refs <key>`(该文的参考文献/回溯找奠基)、`litcli citing <key>`(引用该文的文献/前向找跟进)、`litcli related <key>`(语义相关文献)——三者均 OpenAlex 引文图谱、默认按被引降序；`related` 默认按语义相关度内联序、`--sort cited` 才按被引降序（`refs`/`citing` 天然按被引降序）。`export` 的 arXiv key 如 `arxiv/1806.09180` 会自动归一为 DOI `10.48550/arxiv.x`）。shell 补全用 `litcli completions <bash|zsh|fish>` 生成自包含脚本（`eval "$(litcli completions bash)"` 后 `litcli <TAB>` 补子命令/参数选项/选项取值(如 `--format`)/本地文件路径；补全时**不再起 `litcli` 子进程**——spec 内嵌在脚本里，CLI 面更新后重新 eval 即可）。
 

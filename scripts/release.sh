@@ -22,10 +22,13 @@
 #   scripts/release.sh --check                                  gates only, change nothing
 #   scripts/release.sh --dry-run                                gates + show what would happen
 #   scripts/release.sh [--bump patch|minor|major|none] [--notes <file.md>] [--push] [--no-release]
+#   scripts/release.sh --release-only                           (re)create the Release of the tag on
+#                                                               HEAD; nothing is bumped or pushed
 #
 # Environment:
-#   GITEE_TOKEN   Gitee personal access token (releases scope). Without it --push still pushes
-#                 the tag; the Release step is then skipped with the manual steps printed.
+#   GITEE_TOKEN   Gitee personal access token (releases scope), falls back to
+#                 ~/.config/litcli/gitee.token (chmod 600, never committed). Without it --push still
+#                 pushes the tag; the Release step is then skipped with the manual steps printed.
 # =============================================================================
 set -euo pipefail
 
@@ -40,6 +43,7 @@ GITEE_PROJECT="$(git remote get-url origin | sed -E 's#\.git$##; s#^.*[:/]([^/]+
 
 CHECK_ONLY=0
 DRY_RUN=0
+RELEASE_ONLY=0
 BUMP="patch"
 NOTES_FILE=""
 DO_PUSH=0
@@ -49,16 +53,43 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --check) CHECK_ONLY=1 ;;
     --dry-run) DRY_RUN=1 ;;
+    --release-only) RELEASE_ONLY=1 ;;
     --bump) BUMP="${2:?--bump needs an argument}"; shift ;;
     --notes) NOTES_FILE="${2:?--notes needs a path}"; shift ;;
     --push) DO_PUSH=1 ;;
     --no-release) DO_RELEASE=0 ;;
-    -h|--help) sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,33p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
 done
 case "$BUMP" in major|minor|patch|none) ;; *) echo "--bump must be major|minor|patch|none" >&2; exit 2 ;; esac
+
+# Secret lookup: environment first, then the untracked per-user file (600).
+if [ -z "${GITEE_TOKEN:-}" ] && [ -f "${HOME}/.config/litcli/gitee.token" ]; then
+  GITEE_TOKEN="$(tr -d '\n' < "${HOME}/.config/litcli/gitee.token")"
+fi
+
+# Re-attach a Release to a tag that already exists (the run that cut it had no token, the token
+# was missing the scope, or the upload half-failed). Nothing is bumped, committed or pushed.
+if [ "$RELEASE_ONLY" = 1 ]; then
+  REL_VER="$(git describe --tags --exact-match HEAD 2>/dev/null || true)"
+  [ -n "$REL_VER" ] || { echo "--release-only: HEAD is not tagged" >&2; exit 1; }
+  REL_VER="${REL_VER#v}"
+  echo "==> release-only: v$REL_VER"
+  git ls-remote --tags --exit-code origin "refs/tags/v$REL_VER" >/dev/null 2>&1 || {
+    echo "  ✗ v$REL_VER is not pushed yet: git push origin v$REL_VER" >&2; exit 1; }
+  echo "  ✓ tag is pushed"
+  if [ ! -d dist ] || [ -z "$(ls -A dist 2>/dev/null)" ]; then
+    echo "  - dist/ missing, rebuilding ..."
+    python3 -m build --no-isolation --outdir dist >/dev/null
+    ( cd dist && sha256sum ./* > SHA256SUMS )
+    echo "  ✓ dist/ rebuilt"
+  fi
+  publish_release "$REL_VER" || exit 1
+  echo "==> done: v$REL_VER"
+  exit 0
+fi
 
 # The target version is resolved up front so gate ⑦ tests what will actually be tagged.
 VER="$(python3 -c "import re,pathlib; print(re.search(r'__version__ = \"(.*)\"', pathlib.Path('$VERSION_FILE').read_text()).group(1))")"
@@ -75,6 +106,41 @@ print(".".join(map(str, v)))
 PY
 }
 NEW_VER="$(bump_ver "$BUMP")"
+
+publish_release() {
+  local ver="$1" notes
+  echo "==> Gitee Release v$ver"
+  if [ -n "$NOTES_FILE" ]; then notes="$(cat "$NOTES_FILE")"; else
+    notes="$(awk "/^## \\[$ver\\]/{f=1;next}/^## \\[/{f=0}f" CHANGELOG.md)"; fi
+  if [ -z "${GITEE_TOKEN:-}" ]; then
+    echo "  (no GITEE_TOKEN / ~/.config/litcli/gitee.token: create the Release by hand at"
+    echo "   https://gitee.com/$GITEE_PROJECT/releases, paste the CHANGELOG [$ver] section,"
+    echo "   attach dist/* and dist/SHA256SUMS)"
+    return 0
+  fi
+
+  local payload resp id f
+  payload="$(mktemp)"; resp="$(mktemp)"
+  trap 'rm -f "$payload" "$resp"' RETURN
+  NOTES="$notes" python3 - "$payload" "$ver" <<'PAYLOAD'
+import json, os, sys
+json.dump({"tag_name": f"v{sys.argv[2]}", "name": f"litcli v{sys.argv[2]}",
+           "body": os.environ["NOTES"], "target_commitish": "master", "prerelease": False},
+          open(sys.argv[1], "w", encoding="utf-8"), ensure_ascii=False)
+PAYLOAD
+  curl -sS -f -X POST "$GITEE_API/repos/$GITEE_PROJECT/releases" \
+    -H "Content-Type: application/json" -H "Authorization: token $GITEE_TOKEN" \
+    --data-binary "@$payload" > "$resp" || {
+      echo "  ✗ Release creation failed (is the tag pushed? does the token have the release scope?)" >&2
+      return 1; }
+  id="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['id'])" "$resp")"
+  echo "  ✓ Release v$ver created (id $id)"
+  for f in dist/*; do
+    curl -sS -f -X POST "$GITEE_API/repos/$GITEE_PROJECT/releases/$id/attach_files" \
+      -H "Authorization: token $GITEE_TOKEN" -F "file=@$f" >/dev/null \
+      && echo "  ✓ attached $(basename "$f")" || echo "  ✗ attach failed: $(basename "$f")" >&2
+  done
+}
 
 fail=""
 echo "==> [1/6] gates"
@@ -223,35 +289,5 @@ if [ "$DO_RELEASE" = 0 ]; then
   echo "==> [6/6] release skipped (--no-release)"; exit 0
 fi
 
-echo "==> [6/6] Gitee Release"
-if [ -n "$NOTES_FILE" ]; then NOTES="$(cat "$NOTES_FILE")"; else
-  NOTES="$(awk "/^## \[$NEW_VER\]/{f=1;next}/^## \[/{f=0}f" CHANGELOG.md)"; fi
-
-if [ -z "${GITEE_TOKEN:-}" ]; then
-  echo "  (GITEE_TOKEN unset: create the Release by hand at"
-  echo "   https://gitee.com/$GITEE_PROJECT/releases, paste the CHANGELOG [$NEW_VER] section,"
-  echo "   attach dist/* and dist/SHA256SUMS)"
-  exit 0
-fi
-
-PAYLOAD="$(mktemp)"
-trap 'rm -f "$PAYLOAD"' EXIT
-NOTES="$NOTES" python3 - "$PAYLOAD" "$NEW_VER" <<'PY'
-import json, os, sys
-json.dump({"tag_name": f"v{sys.argv[2]}", "name": f"litcli v{sys.argv[2]}",
-           "body": os.environ["NOTES"], "target_commitish": "master", "prerelease": False},
-          open(sys.argv[1], "w", encoding="utf-8"), ensure_ascii=False)
-PY
-curl -sS -f -X POST "$GITEE_API/repos/$GITEE_PROJECT/releases" \
-  -H "Content-Type: application/json" -H "Authorization: token $GITEE_TOKEN" \
-  --data-binary "@$PAYLOAD" > "$PAYLOAD.out" || {
-    echo "  ✗ Release creation failed (tag is pushed; fix and re-POST by hand)" >&2; exit 1; }
-RELEASE_ID="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['id'])" "$PAYLOAD.out")"
-rm -f "$PAYLOAD.out"
-echo "  ✓ Release v$NEW_VER created (id $RELEASE_ID)"
-for f in dist/*; do
-  curl -sS -f -X POST "$GITEE_API/repos/$GITEE_PROJECT/releases/$RELEASE_ID/attach_files" \
-    -H "Authorization: token $GITEE_TOKEN" -F "file=@$f" >/dev/null \
-    && echo "  ✓ attached $(basename "$f")" || echo "  ✗ attach failed: $(basename "$f")" >&2
-done
+publish_release "$NEW_VER"
 echo "==> done: v$NEW_VER"

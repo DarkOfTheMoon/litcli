@@ -39,7 +39,9 @@ scripts/release.sh --dry-run                   # 门禁 + 预演，不落盘
 scripts/release.sh --bump minor --push         # 真发：推 master + tag；设了 GITEE_TOKEN 就建 Gitee Release 并挂产物
 ```
 
-`--push` 之前改动只在本地（tag 也在本地）；外发是单独一步。版本号唯一来源是 `litcli/_version.py`（`pyproject.toml` 动态读它），首个版本用 `--bump none` 原地发。
+`--push` 之前改动只在本地（tag 也在本地）；外发是单独一步。版本号唯一来源是 `litcli/_version.py`（`pyproject.toml` 动态读它），首个版本用 `--bump none` 原地发。切版时没有 token 也没关系：`scripts/release.sh --release-only` 之后可给已推的 tag 补建 Release（不改动任何提交）。
+
+token 走 Gitee 私人令牌（`https://gitee.com/profile/personal_access_tokens`，需要 `projects` 范围），放环境变量 `GITEE_TOKEN` 或 `~/.config/litcli/gitee.token`（`chmod 600`，不入库）。
 
 ### 技能分发（不绑定某个 agent）
 
