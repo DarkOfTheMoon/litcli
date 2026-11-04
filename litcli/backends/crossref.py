@@ -6,15 +6,11 @@ Normalized to AcademicItem.
 """
 from __future__ import annotations
 
-import json
 import re
-import time
-import urllib.error
 import urllib.parse
-import urllib.request
 
 from ..models import AcademicItem
-from .base import Backend, retry_json
+from .http import HttpBackend
 
 _API = "https://api.crossref.org/works"
 
@@ -85,28 +81,22 @@ def _item_to_academic(rec: dict, source: str = "crossref") -> AcademicItem:
     )
 
 
-class CrossrefBackend(Backend):
+class CrossrefBackend(HttpBackend):
+    headers = {"Accept": "application/json"}
+    http2 = True
+
     def __init__(self, name: str = "crossref", mailto: str = "",
                  base: str = _API, max_results: int = 10):
-        self.name = name
+        super().__init__(name=name, rate=10, min_interval=0.1)
         self._base = base.rstrip("/")
         self._mailto = mailto
         self._max = max_results
+        self.UA = f"litcli/0.1 (contact: {mailto or 'none'})"
 
     @property
     def capabilities(self) -> set[str]:
         return {"read"}
 
-    def _headers(self) -> dict:
-        return {
-            "User-Agent": f"litcli/0.1 (contact: {self._mailto or 'none'})",
-            "Accept": "application/json",
-        }
-
-    def _get(self, url: str) -> dict:
-        """GET and parse JSON; do limited exponential-backoff retries on 5xx / network errors
-        (Crossref occasionally 5xxs)."""
-        return retry_json(url, self._headers(), self.name, timeout=25)
 
     def search(self, query: str, limit: int = 10, filters: dict | None = None) -> list[AcademicItem]:
         filters = self._filters(filters)
@@ -120,13 +110,13 @@ class CrossrefBackend(Backend):
         year = filters.get("year")
         if year and year.isdigit():
             params["filter"] = f"from-pub-date:{year}-01-01,until-pub-date:{year}-12-31"
-        data = self._get(f"{self._base}?{urllib.parse.urlencode(params)}")
+        data = self.fetch_json(f"{self._base}?{urllib.parse.urlencode(params)}")
         items = data.get("message", {}).get("items") or []
         return [_item_to_academic(i, self.name) for i in items]
 
     def get(self, key: str) -> AcademicItem:
         doi = urllib.parse.quote(key, safe="")
-        data = self._get(f"{self._base}/{doi}")
+        data = self.fetch_json(f"{self._base}/{doi}")
         msg = data.get("message")
         if not msg:
             raise KeyError(f"[{self.name}] not found: {key}")

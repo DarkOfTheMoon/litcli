@@ -7,18 +7,14 @@ no key. Records carry a DOI, so the normal OA fulltext chain can take over from 
 from __future__ import annotations
 
 import re
-import time
 import urllib.parse
 
 from ..models import AcademicItem, extract_year, normalize_author_name
-from .base import Backend, retry_json
+from .http import HttpBackend
 
 _API = "https://doaj.org/api/search/articles/"
-_UA = "litcli/0.1 (+https://gitee.com/simult/litcli)"
 
 # bibjson.author[].name is "Given Family"; CSL wants the split done the shared way.
-
-
 # Lucene reserves these inside a term; an unescaped "?" / "&" in a fulltext URL makes DOAJ
 # answer HTTP 400 "Query contains disallowed Lucene features".
 _LUCENE_RESERVED_RE = re.compile(r'([?&|!{}\[\]^~*"\\])')
@@ -94,32 +90,23 @@ def record_to_item(result: dict, source: str = "doaj") -> AcademicItem:
     )
 
 
-class DoajBackend(Backend):
+class DoajBackend(HttpBackend):
     """Read-only search across open-access journal articles."""
 
+    headers = {"Accept": "application/json"}
+
     def __init__(self, name: str = "doaj", base: str = _API, timeout: int = 25, delay: float = 1.0):
-        self.name = name
+        super().__init__(name=name, timeout=timeout, min_interval=delay)
         self._base = base.rstrip("/") + "/"
-        self._timeout = timeout
-        self._delay = delay
-        self._last = 0.0
 
     @property
     def capabilities(self) -> set[str]:
         return {"read"}
 
-    def _headers(self) -> dict:
-        return {"User-Agent": _UA, "Accept": "application/json"}
-
     def _query(self, query: str, page_size: int = 10, page: int = 1) -> list[dict]:
-        """GET one result page, pacing requests; returns the raw records."""
-        wait = self._delay - (time.monotonic() - self._last)
-        if wait > 0:
-            time.sleep(wait)
+        """GET one result page (paced by the shared transport); returns the raw records."""
         term = urllib.parse.quote(query, safe="")
-        data = retry_json(f"{self._base}{term}?pageSize={page_size}&page={max(1, page)}",
-                          self._headers(), self.name, timeout=self._timeout)
-        self._last = time.monotonic()
+        data = self.fetch_json(f"{self._base}{term}?pageSize={page_size}&page={max(1, page)}")
         return (data or {}).get("results") or []
 
     def _query_pages(self, query: str, limit: int) -> list[dict]:

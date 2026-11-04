@@ -21,8 +21,8 @@ from __future__ import annotations
 
 import html
 import re
-import urllib.error
-import xml.etree.ElementTree as ET
+
+from lxml import etree as ET
 
 from . import unpaywall
 from .aggregate import norm_doi
@@ -60,7 +60,7 @@ def _from_local(doi: str, backends: dict | None = None) -> dict | None:
                 if data:
                     return {"kind": "local", "data": data, "title": item.title,
                             "key": item.key, "source": name}
-        except (RuntimeError, urllib.error.URLError, OSError, NotImplementedError):
+        except (RuntimeError, OSError, NotImplementedError):
             continue
     return None
 
@@ -73,7 +73,7 @@ def _from_unpaywall(doi: str, email: str, fetch=None) -> dict | None:
     """
     try:
         info = (fetch or (lambda d: unpaywall.resolve_oa(d, email)))(doi)
-    except (RuntimeError, urllib.error.URLError, OSError):
+    except (RuntimeError, OSError):
         return None
     if not info:
         return None
@@ -88,7 +88,7 @@ def _from_unpaywall_landing(doi: str, email: str, fetch=None) -> dict | None:
     """Unpaywall's landing page: no bytes, but the last legal resort when no PDF source hits."""
     try:
         info = (fetch or (lambda d: unpaywall.resolve_oa(d, email)))(doi)
-    except (RuntimeError, urllib.error.URLError, OSError):
+    except (RuntimeError, OSError):
         return None
     if not info:
         return None
@@ -105,7 +105,7 @@ def _from_openalex(doi: str, backend) -> dict | None:
         return None
     try:
         item: AcademicItem = backend.get(doi)
-    except (RuntimeError, urllib.error.URLError, OSError, KeyError):
+    except (RuntimeError, OSError, KeyError):
         return None
     if item.attachments:
         return {"kind": "openalex", "url": item.attachments[0],
@@ -119,7 +119,7 @@ def _from_europepmc(doi: str, backend) -> dict | None:
         return None
     try:
         item: AcademicItem = backend.get(doi)
-    except (RuntimeError, urllib.error.URLError, OSError, KeyError):
+    except (RuntimeError, OSError, KeyError):
         return None
     if not item.attachments:
         return None
@@ -133,7 +133,7 @@ def _from_zenodo(doi: str, backend) -> dict | None:
         return None
     try:
         item: AcademicItem = backend.get(doi)
-    except (RuntimeError, urllib.error.URLError, OSError, KeyError):
+    except (RuntimeError, OSError, KeyError):
         return None
     if not item.attachments:
         return None
@@ -147,7 +147,7 @@ def _from_scihub(doi: str, backend) -> dict | None:
         return None
     try:
         item: AcademicItem = backend.get(doi)
-    except (RuntimeError, urllib.error.URLError, OSError, KeyError):
+    except (RuntimeError, OSError, KeyError):
         return None
     if not item.attachments:
         return None
@@ -164,7 +164,7 @@ def _default_resolvers(email: str, backends: dict | None = None,
         if doi not in cache:
             try:
                 cache[doi] = unpaywall.resolve_oa(doi, email)
-            except (RuntimeError, urllib.error.URLError, OSError):
+            except (RuntimeError, OSError):
                 cache[doi] = None
         return cache[doi]
 
@@ -201,7 +201,7 @@ def xml_to_text(data: bytes) -> str:
     """
     try:
         root = ET.fromstring(data)
-    except ET.ParseError:
+    except ET.XMLSyntaxError:
         return ""
     raw = _XML_BLOCK_RE.sub("\n", ET.tostring(root, encoding="unicode"))
     return _collapse_lines(html.unescape(_TAG_RE.sub(" ", raw)))

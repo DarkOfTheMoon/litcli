@@ -5,14 +5,10 @@ Read-only. search.json searches by title/author, or fetches a single record by a
 """
 from __future__ import annotations
 
-import json
-import time
-import urllib.error
 import urllib.parse
-import urllib.request
 
 from ..models import AcademicItem
-from .base import Backend, retry_json
+from .http import HttpBackend
 
 _SEARCH = "https://openlibrary.org/search.json"
 _SITE = "https://openlibrary.org"
@@ -48,9 +44,13 @@ def _doc_to_item(doc: dict, source: str = "openlibrary") -> AcademicItem:
     )
 
 
-class OpenLibraryBackend(Backend):
+class OpenLibraryBackend(HttpBackend):
+    UA = "litcli/0.1 (library research)"
+    headers = {"Accept": "application/json"}
+    timeout = 20.0
+
     def __init__(self, name: str = "openlibrary", base: str = _SEARCH, max_results: int = 10):
-        self.name = name
+        super().__init__(name=name, rate=5, min_interval=0.2)
         self._base = base.rstrip("/")
         self._max = max_results
 
@@ -58,11 +58,6 @@ class OpenLibraryBackend(Backend):
     def capabilities(self) -> set[str]:
         return {"read"}
 
-    def _headers(self) -> dict:
-        return {"User-Agent": "litcli/0.1 (library research)", "Accept": "application/json"}
-
-    def _get(self, url: str) -> dict:
-        return retry_json(url, self._headers(), self.name, timeout=20)
 
     def search(self, query: str, limit: int = 10, filters: dict | None = None) -> list[AcademicItem]:
         # Book search is a single ``q``; field words fold into free-text (secondary backend).
@@ -71,7 +66,7 @@ class OpenLibraryBackend(Backend):
                              filters.get("author"),
                              filters.get("container")) if t]
         params = urllib.parse.urlencode({"q": " ".join(terms), "limit": limit})
-        data = self._get(f"{self._base}?{params}")
+        data = self.fetch_json(f"{self._base}?{params}")
         return [_doc_to_item(d, self.name) for d in (data.get("docs") or [])]
 
     def get(self, key: str) -> AcademicItem:
@@ -79,7 +74,7 @@ class OpenLibraryBackend(Backend):
         ident = key.rstrip("/").split("/")[-1]
         kind = "books" if key.startswith("/books/") else "works"
         url = f"{_SITE}/{kind}/{urllib.parse.quote(ident, safe='')}.json"
-        data = self._get(url)
+        data = self.fetch_json(url)
         if not data:
             raise KeyError(f"[{self.name}] not found: {key}")
         return _doc_to_item(data | {"key": key}, self.name)

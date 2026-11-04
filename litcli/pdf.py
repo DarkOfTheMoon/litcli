@@ -1,4 +1,4 @@
-"""PDF handling: download + text extraction (via the system pdftotext CLI), no Python deps.
+"""PDF handling: download + text extraction via the system pdftotext CLI.
 
 Backend-agnostic: Zotero attachments and arXiv direct links are both normalized to
 "given bytes/path -> extract text".
@@ -9,21 +9,27 @@ import os
 import subprocess
 import tempfile
 import urllib.parse
-import urllib.request
+
+import httpx
+
+from .transport import client
 
 # Only http(s) sources may be downloaded; anything else (e.g. file://) could read local files
 # if a metadata/OA source ever handed back a path URL, so it is rejected outright.
 _ALLOWED_SCHEMES = frozenset({"http", "https"})
 
 
-def download(url: str, timeout: int = 30) -> bytes:
+def download(url: str, timeout: int = 30,
+             transport: httpx.BaseTransport | None = None) -> bytes:
     """Download a URL as bytes (http/https only)."""
     scheme = urllib.parse.urlparse(url).scheme.lower()
     if scheme not in _ALLOWED_SCHEMES:
         raise ValueError(f"refusing to download non-http(s) URL scheme '{scheme}'")
-    req = urllib.request.Request(url, headers={"User-Agent": "litcli/0.1"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read()
+    with client(timeout, transport=transport) as http:
+        response = http.get(url)
+        if response.status_code >= 400:
+            raise RuntimeError(f"download failed: HTTP {response.status_code}: {response.reason_phrase}")
+        return response.content
 
 
 def extract_text(pdf: str | bytes, max_chars: int | None = None, first_page: bool = False) -> str:

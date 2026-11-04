@@ -7,65 +7,9 @@ NotSupportedError.
 """
 from __future__ import annotations
 
-import http.cookiejar
-import json
-import time
-import urllib.error
-import urllib.request
-
 from abc import ABC, abstractmethod
 
 from ..models import AcademicItem
-
-# Config proxy for backends that build their own opener. ``install_opener`` only affects
-# ``urllib.request.urlopen``; an opener built directly (cookie jars for bot checks) would
-# otherwise go out unproxied and, in a proxy-only network, fail while search still works.
-_PROXY = ""
-
-
-def set_proxy(url: str) -> None:
-    """Remember the configured proxy for :func:`build_cookie_opener` ("" clears it)."""
-    global _PROXY
-    _PROXY = url or ""
-
-
-def build_cookie_opener() -> urllib.request.OpenerDirector:
-    """Opener with a private cookie jar that still honours the configured proxy."""
-    handlers: list = [urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())]
-    if _PROXY:
-        handlers.append(urllib.request.ProxyHandler({"http": _PROXY, "https": _PROXY}))
-    return urllib.request.build_opener(*handlers)
-
-
-def retry_json(url: str, headers: dict, name: str, timeout: int = 25,
-               attempts: int = 3) -> dict:
-    """GET ``url`` and parse JSON, retrying with exponential backoff on 5xx / network errors.
-
-    Shared by the HTTP read-only backends (crossref/openalex/openlibrary); each caller keeps its
-    own ``timeout`` and ``name`` (for the error prefix). Raises ``RuntimeError`` after the final
-    attempt. Mirrors the original per-backend behavior exactly, just deduplicated.
-    """
-    req = urllib.request.Request(url, headers=headers)
-    last: RuntimeError | None = None
-    for attempt in range(attempts):
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                return json.loads(r.read())
-        except urllib.error.HTTPError as e:
-            err = RuntimeError(f"[{name}] HTTP {e.code}: {e.reason}")
-            if e.code >= 500 and attempt < attempts - 1:
-                time.sleep(0.5 * (attempt + 1))
-                last = err
-                continue
-            raise err from e
-        except urllib.error.URLError as e:
-            err = RuntimeError(f"[{name}] unreachable: {e.reason}")
-            if attempt < attempts - 1:
-                time.sleep(0.5 * (attempt + 1))
-                last = err
-                continue
-            raise err from e
-    raise last  # pragma: no cover - already raised inside the loop
 
 
 class NotSupportedError(NotImplementedError):

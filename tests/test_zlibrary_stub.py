@@ -148,8 +148,7 @@ class ChallengeTest(unittest.TestCase):
             final, status, body = http.fetch("https://zl.test/s/x")
         self.assertEqual((status, body), (200, b"<html>ok</html>"))
         self.assertEqual(raw.call_count, 2)
-        jar = next(h.cookiejar for h in http._opener.handlers if hasattr(h, "cookiejar"))
-        cookie = {c.name: c.value for c in jar}
+        cookie = {c.name: c.value for c in http._client.cookies.jar}
         self.assertEqual(cookie["c_token"], solved)
         self.assertIn("c_time", cookie)
 

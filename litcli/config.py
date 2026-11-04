@@ -1,6 +1,6 @@
 """Config & backend discovery: read ~/.config/litcli/config.toml and instantiate backends by type.
 
-Uses :mod:`tomllib` (built into Python 3.11+), zero dependencies.
+Parsed with :mod:`tomllib` (built into Python 3.11+).
 The backend registry is try-import, so Zotero alone can work even when other backend files
 are not ready.
 """
@@ -133,12 +133,29 @@ def _make_backend(name: str, cfg: dict) -> Backend:
     return reg[backend_type](name=name, **kwargs)
 
 
-def discover_backends(config: dict | None = None) -> dict[str, Backend]:
-    """Instantiate all enabled backends from config."""
+#: Backends that could not be built, with the reason (a missing optional dependency, say).
+#: Filled by ``discover_backends`` so ``backends list/status`` can name them.
+failed_backends: dict[str, str] = {}
+
+
+def discover_backends(config: dict | None = None, strict: bool = False) -> dict[str, Backend]:
+    """Instantiate all enabled backends from config.
+
+    One broken backend (missing optional dependency, bad config value) must not take the
+    others down, so construction failures are collected in :data:`failed_backends` instead
+    of propagating - unless ``strict``.
+    """
     cfg = config if config is not None else load_config()
     out: dict[str, Backend] = {}
     for name, bcfg in (cfg.get("backends") or {}).items():
-        out[name] = _make_backend(name, bcfg)
+        try:
+            out[name] = _make_backend(name, bcfg)
+        except KeyError:  # an unknown type is a config error, always worth stopping for
+            raise
+        except Exception as e:  # noqa: BLE001 - a dependency failure is reported, not swallowed
+            if strict:
+                raise
+            failed_backends[name] = f"{type(e).__name__}: {e}"
     return out
 
 

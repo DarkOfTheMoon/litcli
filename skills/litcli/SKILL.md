@@ -5,7 +5,7 @@ description: 用 litcli 与用户的学术资料互操作——检索、读取�
 
 # litcli 学术互操作（Zotero / arXiv / OA 语料）
 
-零依赖工具 `litcli`，后端无关：领域模型统一为 `AcademicItem`，Zotero 本地库可读可写，其余后端只读。
+命令行工具 `litcli`，后端无关：领域模型统一为 `AcademicItem`，Zotero 本地库可读可写，其余后端只读。
 
 本技能是纯 markdown，不绑定某个 agent：出现 SKILL.md 目录树的地方按原样放；只吃全局上下文的，把它整篇并入上下文文件即可。
 
@@ -56,5 +56,5 @@ description: 用 litcli 与用户的学术资料互操作——检索、读取�
 - **开放获取源只给公开 OA 记录**：DOAJ / DOAB / Europe PMC / Zenodo 均免 key、开放授权；`fetch fulltext` 在合法链里用 Europe PMC（JATS XML 文本，存 `.xml`）与 Zenodo（开放文件），Unpaywall 只给落地页时退到链末并标 `HTML`。
 - **被 403 不等于你的 IP 被封**：`europepmc.org` 在 Cloudflare managed challenge/Turnstile 后面（CLI、假浏览器头、无头/有头浏览器实测都过不去，故走 EBI 的 REST）；DOAB 的 `/rest` 对无 JS 客户端 403（故走 Atom feed），但它的详情页是可解的工作量证明，litcli 本地解、换 cookie 后正常取页。这两类站点都无需换网络/代理。
 - **Sci-Hub 是可选兜底、默认不介入**：`fetch fulltext` 仍先走本地库/Unpaywall/OpenAlex，只有加 `--scihub`（或配置启用）才试盗版镜像；输出标 `source=scihub` 且注明非 OA 授权。镜像用 ALTCHA 验人，litcli 用本地 `hashlib` 解同一道题（不绕过），每次单 DOI、低频。
-- **Z-Library 是影子图书馆（非 OA 授权）**：`fetch book` 用来找 Sci-Hub 没有的图书（Sci-Hub 只按 DOI 解析论文）。零依赖、无需 Playwright，但用前要过站点“Checking your browser”工作量证明——litcli 用本地 `hashlib` 解同一道题（不绕过）。**匿名每日下载有配额**，超限会明确提示，可在 `[backends.zlibrary]` 配 `email`/`password` 登录放宽。只取公开书目元数据与公开 PDF 直链。
+- **Z-Library 是影子图书馆（非 OA 授权）**：`fetch book` 用来找 Sci-Hub 没有的图书（Sci-Hub 只按 DOI 解析论文）。无需 Playwright，但用前要过站点“Checking your browser”工作量证明——litcli 用本地 `hashlib` 解同一道题（不绕过）。**匿名每日下载有配额**，超限会明确提示，可在 `[backends.zlibrary]` 配 `email`/`password` 登录放宽。只取公开书目元数据与公开 PDF 直链。
 - **豆瓣只取公开书目元数据、不绕过反爬**：豆瓣无公开 API；`search --backend douban` 也需 `install.sh --with-douban` 装 Playwright + Chromium，但**默认无头**——搜索页 SSR 直接给书卡 JSON，无需登录/滑块。仅当被风控时手动在可见浏览器处理，脚本不程序化绕过。图书以 ISBN 为身份键（无 DOI），`search --all` 聚合时与期刊/论文的 DOI 身份键并行。

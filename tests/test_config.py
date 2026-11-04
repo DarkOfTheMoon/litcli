@@ -2,6 +2,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from litcli import config
 
@@ -17,6 +18,21 @@ class TestConfig(unittest.TestCase):
     def test_unknown_type_raises(self):
         with self.assertRaises(KeyError):
             config.discover_backends({"backends": {"x": {"type": "nope"}}})
+
+    def test_a_broken_backend_does_not_take_the_others_down(self):
+        class _B:
+            capabilities = {"read"}
+
+        def fake(name, bcfg):
+            if name == "bad":
+                raise RuntimeError("playwright is not installed")
+            return _B()
+
+        config.failed_backends.clear()
+        with mock.patch.object(config, "_make_backend", fake):
+            out = config.discover_backends({"backends": {"good": {}, "bad": {}}})
+        self.assertIn("good", out)
+        self.assertIn("playwright", config.failed_backends["bad"])
 
     def test_registry_contains_douban(self):
         self.assertIn("douban", config._registry())

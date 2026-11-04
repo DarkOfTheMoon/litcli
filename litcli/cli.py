@@ -20,20 +20,20 @@ import json
 import os
 import re
 import sys
-import urllib.error
-import urllib.request
 
 from . import pdf as pdfutil
 from . import __version__
 from . import metadata
 from . import unpaywall
 from . import fulltext as fulltext_mod
+from . import config as config_mod
 from .config import get_all_backends, get_backend, load_config, write_backend_key
 from .models import AcademicItem
 from .aggregate import cited_key, merge_items
 from .citation import render_intext, render_bibliography
 from .completions import SHELL_CHOICES, build_spec, render as render_completion
-from .backends.base import Backend, NotSupportedError, set_proxy as set_backend_proxy
+from .backends.base import Backend, NotSupportedError
+from .transport import set_proxy as set_backend_proxy
 
 
 def _add_common_backend(p: argparse.ArgumentParser) -> None:
@@ -218,7 +218,7 @@ def cmd_search(cfg, args) -> int:
                 items.extend(b.search(args.query, limit=args.limit, filters=filters))
             except NotImplementedError:
                 continue
-            except (RuntimeError, urllib.error.URLError, OSError, ValueError, SyntaxError) as e:
+            except (RuntimeError, OSError, ValueError, SyntaxError) as e:
                 # A single backend failure (not connected / HTTP error / timeout / non-JSON body /
                 # malformed XML) must not bring down the whole aggregation; skip and continue.
                 print(f"[skipped] backend {name}: {e}", file=sys.stderr)
@@ -692,9 +692,13 @@ def cmd_backends(cfg, args) -> int:
     if subcmd == "status":
         return cmd_backends_status(cfg, args)
     # Bare `backends` or `backends list`: list configured backends with capabilities (read-only)
-    for name, b in sorted(get_all_backends(cfg).items()):
+    backends = get_all_backends(cfg)
+    for name, b in sorted(backends.items()):
         caps = ", ".join(sorted(b.capabilities))
         print(f"{name:<12} caps=[{caps}]")
+    for name, why in sorted(config_mod.failed_backends.items()):
+        if name not in backends:
+            print(f"{name:<12} [unavailable] {why}")
     return 0
 
 
@@ -708,7 +712,7 @@ def _cfg_write_key(cfg: dict, name: str) -> str | None:
 def cmd_backends_status(cfg, args) -> int:
     """Per-backend read-only diagnostics: config / capabilities / authorization & reachability (never prints key plaintext)."""
     backends = get_all_backends(cfg)
-    if not backends:
+    if not backends and not config_mod.failed_backends:
         print("[no backends] check ~/.config/litcli/config.toml (or env LITCLI_CONFIG)")
         return 0
     print(f"backend diagnostics: {len(backends)} configured")
@@ -725,6 +729,9 @@ def cmd_backends_status(cfg, args) -> int:
         if callable(ping):
             probe = "  reachable" if ping() else "  [unreachable: backend not running?]"
         print(f"  {name:<12} caps=[{caps}]  {auth}{probe}")
+    for name, why in sorted(config_mod.failed_backends.items()):
+        if name not in backends:
+            print(f"  {name:<12} [unavailable] {why}")
     return 0
 
 
@@ -763,9 +770,6 @@ def _apply_proxy(cfg: dict) -> None:
         return
     if os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy"):
         return  # env var already set; it takes precedence
-    urllib.request.install_opener(urllib.request.build_opener(
-        urllib.request.ProxyHandler({"http": prog, "https": prog})))
-    # Backends that keep their own cookie opener (bot checks) do not see install_opener.
     set_backend_proxy(prog)
 
 

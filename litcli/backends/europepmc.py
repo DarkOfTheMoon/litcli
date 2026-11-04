@@ -11,15 +11,13 @@ non-OA-but-in-EPMC records (``fullTextXML`` answers 500 for those).
 from __future__ import annotations
 
 import re
-import time
 import urllib.parse
 
 from ..models import AcademicItem, extract_year, normalize_author_name
-from .base import Backend, retry_json
+from .http import HttpBackend
 
 _SEARCH = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
 _FULLTEXT_XML = "https://www.ebi.ac.uk/europepmc/webservices/rest/{pmcid}/fullTextXML"
-_UA = "litcli/0.1 (+https://gitee.com/simult/litcli)"
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _KEY_RE = re.compile(r"^(?:europepmc/)?((?:PMC)?\d+)$", re.I)
@@ -99,37 +97,28 @@ def result_to_item(result: dict, source: str = "europepmc") -> AcademicItem:
     )
 
 
-class EuropePmcBackend(Backend):
+class EuropePmcBackend(HttpBackend):
     """Read-only biomedical search with an open-access JATS XML fulltext hook."""
+
+    headers = {"Accept": "application/json"}
 
     def __init__(self, name: str = "europepmc", base: str = _SEARCH,
                  timeout: int = 30, delay: float = 0.4):
-        self.name = name
+        super().__init__(name=name, timeout=timeout, rate=3, min_interval=delay)
         self._base = base
-        self._timeout = timeout
-        self._delay = delay
-        self._last = 0.0
 
     @property
     def capabilities(self) -> set[str]:
         # ``attachment`` stays off: the XML is a URL, not a local-store copy (same as scihub).
         return {"read"}
 
-    def _headers(self) -> dict:
-        return {"User-Agent": _UA, "Accept": "application/json"}
-
     def _query(self, query: str, page_size: int = 10, result_type: str = "lite") -> list[dict]:
-        wait = self._delay - (time.monotonic() - self._last)
-        if wait > 0:
-            time.sleep(wait)
         # pageSize > 1000 answers HTTP 200 with only {"errCode": 404} (no resultList), i.e. a
         # silent empty result, so clamp to the documented range.
         params = urllib.parse.urlencode({"query": query, "format": "json",
                                          "pageSize": min(max(1, page_size), 1000),
                                          "resultType": result_type})
-        data = retry_json(f"{self._base}?{params}", self._headers(), self.name,
-                          timeout=self._timeout)
-        self._last = time.monotonic()
+        data = self.fetch_json(f"{self._base}?{params}")
         return ((data or {}).get("resultList") or {}).get("result") or []
 
     def search(self, query: str, limit: int = 10, filters: dict | None = None) -> list[AcademicItem]:

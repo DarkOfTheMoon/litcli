@@ -4,10 +4,11 @@
 # 生产装的是快照,与仓库源码**解耦**:生产期间改源码不波及已装版本(要发布新版本重跑本脚本)。
 # 开发请走仓库内 `./bin/litcli`(独立用源码,不影响生产安装)。
 # 本机 Python 3.12 是 PEP 668 externally-managed(系统/用户 pip 默认被拦),故必须 --break-system-packages;
-# litcli 零第三方依赖(纯标准库),不会与 apt 管理的包冲突;--user 限定用户作用域,无需 sudo、不写 /usr/lib。
+# litcli 的依赖(httpx / tenacity / pyrate-limiter / lxml)随程序装进用户站点,不动 apt 管理的系统包;
+# --user 限定用户作用域,无需 sudo、不写 /usr/lib。
 #
 # 可选 --with-cnki / --with-douban:额外安装 Playwright + Chromium(cnki / douban 浏览器驱动后端用,
-# 不进核心零依赖包;二者共用同一 playwright 依赖,只装一次)。
+# 不是核心依赖;二者共用同一 playwright 依赖,只装一次)。
 #
 # 技能分发(不绑定某个 agent):源是 skills/litcli/SKILL.md。默认**自动探测**已安装的 agent 配置目录
 # (~/.claude / ~/.codex / ~/.gemini / ~/.cursor),只往探测到的那些装;同时总在

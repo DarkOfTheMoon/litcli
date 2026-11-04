@@ -7,7 +7,7 @@ DOI*. ``get(doi)`` returns a minimal item carrying the PDF link in ``attachments
 chain, after the legitimate open-access sources (local store -> Unpaywall -> OpenAlex), and is
 opt-in — anything Sci-Hub returns is copyright-evading content, not an OA licence.
 
-Reaching an article takes two gates, both passable with the stdlib:
+Reaching an article takes two gates, both passable locally:
 
 * a DDoS-Guard cookie wall, handled by a per-call cookie jar (the same session a browser
   would carry), and
@@ -27,14 +27,15 @@ import base64
 import hashlib
 import json
 import re
-import urllib.error
 import urllib.parse
-import urllib.request
 from urllib.parse import urljoin
+
+import httpx
 
 from .. import pdf as pdfutil
 from ..models import AcademicItem, extract_year, normalize_author_name
-from .base import Backend, build_cookie_opener
+from ..transport import Session
+from .base import Backend
 
 # Mirrors tried in order; overridable via ``[backends.scihub].mirrors``. Probed 2026-10: ``.ru``
 # serves the captcha/article page, ``.st`` answers 403 (edge wall), ``.se`` fails DNS here.
@@ -163,27 +164,29 @@ def _mirror_base(mirror: str) -> str:
 
 # --- HTTP adapter (injectable for offline tests) ---
 
-class _Http:
-    """Tiny cookie-keeping HTTP client over urllib (the session the PoW challenge establishes)."""
+class _Http(Session):
+    """Cookie-keeping session for one bot-check run (also the base for zlibrary)."""
 
-    def __init__(self, timeout: int = 30):
-        self.timeout = timeout
-        self._opener = build_cookie_opener()
+    def __init__(self, timeout: float = 30, transport=None):
+        super().__init__(timeout, ua=_UA, transport=transport,
+                         headers={"Accept": "text/html,application/json;q=0.9,*/*;q=0.8"})
 
     def _request(self, url: str, data: bytes | None = None,
                  headers: dict | None = None) -> tuple[str, str]:
-        hdrs = {"User-Agent": _UA, "Accept": "text/html,application/json;q=0.9,*/*;q=0.8"}
-        hdrs.update(headers or {})
-        req = urllib.request.Request(url, data=data, headers=hdrs)
+        kw: dict = {}
+        if headers:
+            kw["headers"] = headers
+        if data is not None:
+            kw["content"] = data
         try:
-            with self._opener.open(req, timeout=self.timeout) as r:
-                return r.geturl(), r.read().decode("utf-8", "replace")
-        except urllib.error.HTTPError as e:
-            if e.code == 404:  # "article not found" is a page state, not a transport failure
-                return url, ""
-            raise RuntimeError(f"HTTP {e.code}: {e.reason}") from e
-        except urllib.error.URLError as e:
-            raise RuntimeError(f"unreachable: {e.reason}") from e
+            r = self.client.request("GET" if data is None else "POST", url, **kw)
+        except httpx.HTTPError as e:
+            raise RuntimeError(f"unreachable: {e}") from e
+        if r.status_code == 404:  # "article not found" is a page state, not a transport failure
+            return str(r.url), ""
+        if r.status_code >= 400:
+            raise RuntimeError(f"HTTP {r.status_code}: {r.reason_phrase}")
+        return str(r.url), r.text
 
     def get_text(self, url: str) -> tuple[str, str]:
         return self._request(url)
@@ -230,29 +233,34 @@ def resolve(doi: str, mirrors=None, timeout: int = 30, http: _Http | None = None
     clean = doi_from(doi)
     if not clean:
         raise KeyError(f"[scihub] not a DOI: {doi!r}")
+    own = http is None
     http = http or _Http(timeout)
     not_found = 0
     errors: list[str] = []
-    for mirror in (mirrors or _DEFAULT_MIRRORS):
-        try:
-            base = _mirror_base(mirror)
-            page_url, html = http.get_text(f"{base}/{urllib.parse.quote(clean, safe='/')}")
-            if not html:
-                not_found += 1
-                continue
-            if captcha_id(html):
-                page_url, html = _pass_captcha(http, base, page_url, html)
-            pdf_url = extract_pdf_url(html, page_url)
-            if not pdf_url:
-                not_found += 1
-                continue
-            return {"doi": clean, "mirror": mirror, "page_url": page_url,
-                    "pdf_url": pdf_url, "meta": parse_citation_meta(html)}
-        except RuntimeError as e:
-            errors.append(f"{mirror}: {e}")
-    if not_found:
-        raise KeyError(f"[scihub] {clean} is not in the library")
-    raise RuntimeError(f"[scihub] all mirrors failed ({'; '.join(errors)})")
+    try:
+        for mirror in (mirrors or _DEFAULT_MIRRORS):
+            try:
+                base = _mirror_base(mirror)
+                page_url, html = http.get_text(f"{base}/{urllib.parse.quote(clean, safe='/')}")
+                if not html:
+                    not_found += 1
+                    continue
+                if captcha_id(html):
+                    page_url, html = _pass_captcha(http, base, page_url, html)
+                pdf_url = extract_pdf_url(html, page_url)
+                if not pdf_url:
+                    not_found += 1
+                    continue
+                return {"doi": clean, "mirror": mirror, "page_url": page_url,
+                        "pdf_url": pdf_url, "meta": parse_citation_meta(html)}
+            except RuntimeError as e:
+                errors.append(f"{mirror}: {e}")
+        if not_found:
+            raise KeyError(f"[scihub] {clean} is not in the library")
+        raise RuntimeError(f"[scihub] all mirrors failed ({'; '.join(errors)})")
+    finally:
+        if own:
+            http.close()
 
 
 class ScihubBackend(Backend):

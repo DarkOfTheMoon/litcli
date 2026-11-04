@@ -6,4 +6,4 @@ Backend abstraction + capabilities;
 config instantiates backends from ~/.config/litcli/config.toml.
 """
 
-from ._version import __version__
+from ._version import __version__ as __version__

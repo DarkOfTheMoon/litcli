@@ -1,4 +1,4 @@
-"""Offline unit tests for pdf.py (download, extract_text, first_lines), mocking urlopen/subprocess/tempfile."""
+"""Offline unit tests for pdf.py (download, extract_text, first_lines)."""
 import os
 import sys
 import unittest
@@ -6,15 +6,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from litcli import pdf as pdfutil
-
-
-class _Resp:
-    def read(self):
-        return b"pdf-data"
-    def __enter__(self):
-        return self
-    def __exit__(self, *a):
-        return False
+from tests.http_stub import Recorder, client_spy
 
 
 class _Tmp:
@@ -28,14 +20,25 @@ class _Tmp:
 
 class DownloadTest(unittest.TestCase):
     def test_download_returns_bytes_with_ua(self):
-        from unittest import mock
-        with mock.patch("litcli.pdf.urllib.request.urlopen", return_value=_Resp()) as m:
-            data = pdfutil.download("http://x/y.pdf")
+        rec = Recorder((200, b"pdf-data"))
+        data = pdfutil.download("http://x/y.pdf", transport=rec)
         self.assertEqual(data, b"pdf-data")
-        req = m.call_args[0][0]
-        self.assertEqual(req.full_url, "http://x/y.pdf")
-        # urllib canonicalizes the UA header key; assert the value case-insensitively.
-        self.assertTrue(any(v == "litcli/0.1" for k, v in req.header_items()))
+        self.assertEqual(rec.urls[0], "http://x/y.pdf")
+        self.assertTrue(rec.header("user-agent").startswith("litcli/0.1"))
+
+    def test_download_uses_the_configured_proxy(self):
+        from unittest import mock
+
+        from litcli.transport import set_proxy
+
+        seen = {}
+        set_proxy("http://proxy:8080")
+        try:
+            with mock.patch.object(pdfutil.httpx, "Client", client_spy(seen, b"pdf-data")):
+                pdfutil.download("http://x/y.pdf")
+        finally:
+            set_proxy("")
+        self.assertEqual(seen["proxy"], "http://proxy:8080")
 
     def test_download_rejects_non_http_scheme(self):
         # A file:// (or ftp://) URL must be refused outright — it could read local files.
@@ -82,7 +85,7 @@ class ExtractTextTest(unittest.TestCase):
     def test_bytes_path_writes_temp_and_cleans_up(self):
         from unittest import mock
         proc = self._proc(0, "From bytes\n")
-        with mock.patch("litcli.pdf.tempfile.NamedTemporaryFile", return_value=_Tmp()) as ntf, \
+        with mock.patch("litcli.pdf.tempfile.NamedTemporaryFile", return_value=_Tmp()), \
              mock.patch("litcli.pdf.subprocess.run", return_value=proc) as m, \
              mock.patch("litcli.pdf.os.unlink") as unlink:
             text = pdfutil.extract_text(b"pdf-bytes")

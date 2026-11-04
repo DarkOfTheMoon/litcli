@@ -8,14 +8,12 @@ from __future__ import annotations
 
 import html
 import re
-import time
 import urllib.parse
 
 from ..models import AcademicItem, extract_year, normalize_author_name
-from .base import Backend, retry_json
+from .http import HttpBackend
 
 _API = "https://zenodo.org/api/records"
-_UA = "litcli/0.1 (+https://gitee.com/simult/litcli)"
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _DOI_ID_RE = re.compile(r"zenodo\.(\d+)$", re.I)
@@ -82,31 +80,20 @@ def record_to_item(record: dict, source: str = "zenodo") -> AcademicItem:
     )
 
 
-class ZenodoBackend(Backend):
+class ZenodoBackend(HttpBackend):
     """Read-only search over openly licensed records (datasets, software, preprints, reports)."""
 
+    headers = {"Accept": "application/json"}
+
     def __init__(self, name: str = "zenodo", base: str = _API, timeout: int = 30, delay: float = 1.0):
-        self.name = name
+        super().__init__(name=name, timeout=timeout, rate=1, min_interval=delay)
         self._base = base.rstrip("/")
-        self._timeout = timeout
-        self._delay = delay
-        self._last = 0.0
 
     @property
     def capabilities(self) -> set[str]:
         # ``attachment`` off: the file URL is remote, not a local-store copy (same as scihub).
         return {"read"}
 
-    def _headers(self) -> dict:
-        return {"User-Agent": _UA, "Accept": "application/json"}
-
-    def _get(self, url: str) -> dict:
-        wait = self._delay - (time.monotonic() - self._last)
-        if wait > 0:
-            time.sleep(wait)
-        data = retry_json(url, self._headers(), self.name, timeout=self._timeout)
-        self._last = time.monotonic()
-        return data or {}
 
     def search(self, query: str, limit: int = 10, filters: dict | None = None) -> list[AcademicItem]:
         filters = self._filters(filters)
@@ -129,7 +116,7 @@ class ZenodoBackend(Backend):
         for page in range(1, (limit + size - 1) // size + 1):
             params = urllib.parse.urlencode({"q": q, "size": size, "page": page,
                                             "sort": "bestmatch"})
-            batch = (self._get(f"{self._base}?{params}").get("hits") or {}).get("hits") or []
+            batch = (self.fetch_json(f"{self._base}?{params}").get("hits") or {}).get("hits") or []
             hits.extend(batch)
             if len(batch) < size or len(hits) >= limit:
                 break
@@ -150,12 +137,12 @@ class ZenodoBackend(Backend):
             if m:
                 record_id = m.group(1)
         if record_id:
-            record = self._get(f"{self._base}/{record_id}")
+            record = self.fetch_json(f"{self._base}/{record_id}")
             if not record.get("id"):
                 raise KeyError(f"[{self.name}] not found: {key}")
             return record_to_item(record, self.name)
         if k.lower().startswith("10."):
-            hits = (self._get(f"{self._base}?q=doi:%22{urllib.parse.quote(k, safe='')}%22&size=1")
+            hits = (self.fetch_json(f"{self._base}?q=doi:%22{urllib.parse.quote(k, safe='')}%22&size=1")
                     .get("hits") or {}).get("hits") or []
             if hits:
                 return record_to_item(hits[0], self.name)

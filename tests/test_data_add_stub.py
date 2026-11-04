@@ -78,7 +78,7 @@ class DataAddStubTest(unittest.TestCase):
         fb = _FakeBackend()
         csl = '{"title":"CSL Title","author":[{"family":"Doe","given":"J"}],"issued":{"date-parts":[[2020]]}}'
         with mock.patch("litcli.cli.get_backend", return_value=fb), \
-             mock.patch("builtins.open", mock.mock_open(read_data=csl)) as mo:
+             mock.patch("builtins.open", mock.mock_open(read_data=csl)):
             rc = cmd_data_add({}, _args(csl="/tmp/x.json", doi="10.9/z", title="Ignored"))
         self.assertEqual(rc, 0)
         self.assertEqual(len(fb.added), 1)
@@ -87,7 +87,7 @@ class DataAddStubTest(unittest.TestCase):
     def test_csl_missing_authors_hits_half_gate(self):
         fb = _FakeBackend()
         with mock.patch("litcli.cli.get_backend", return_value=fb), \
-             mock.patch("builtins.open", mock.mock_open(read_data='{"title":"NoAuthor"}')) as mo:
+             mock.patch("builtins.open", mock.mock_open(read_data='{"title":"NoAuthor"}')):
             rc = cmd_data_add({}, _args(csl="/tmp/x.json"))
         self.assertEqual(rc, 2)  # semi-import gate rejection (no authors, no year)
         self.assertEqual(len(fb.added), 0)

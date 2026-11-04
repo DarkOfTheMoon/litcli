@@ -1,14 +1,14 @@
-# litcli — 通用学术 CLI（零依赖，多后端可插拔）
+# litcli — 通用学术 CLI（多后端可插拔）
 
 同一条学术文献（期刊论文或图书），在多个后端之间统一读写：本机 Zotero、arXiv、Crossref、OpenAlex，可选 OpenLibrary、USPTO、CNKI（知网题录）、Douban（豆瓣图书），全部归一化为一个领域模型。它面向 Claude Code 代理与个人学术资料库互操作——检索、读全文、新增/修改、导出引文。
 
-- **零第三方依赖**：只用 Python 3.11+ 标准库（`urllib` / `tomllib` / `xml.etree` / `subprocess`）。
+- **用成熟的轮子，不重造网络层**：`httpx` 负责连接池 / HTTP/2 / 代理 / 超时，`tenacity` 负责 429 与 5xx 退避，`pyrate-limiter` 负责按站点限速，`lxml` 负责 HTML/XML 解析。
 - **后端无关领域层**：`models` / `citation` / `pdf` / `metadata` / `aggregate`，可独立复用。
 - **可插拔后端**：`backends/` 定义抽象 `Backend` 与 `capabilities`。默认启用 Zotero、arXiv、Crossref、OpenAlex；OpenLibrary、USPTO、CNKI、Douban 按需在配置中启用（CNKI/Douban 需额外装 Playwright）。
 
 ## 安装 / 运行
 
-标准 Python 包安装：`pyproject.toml` 入口点 `litcli = "litcli.cli:main"`。本机 Python 3.12 是 PEP 668（externally-managed）环境，`install.sh` 用 `pip install --break-system-packages --user .`（非 editable）。安装时把源码复制为冻结快照放到 `~/.local`，生产 `litcli` 与仓库源码解耦：生产期间改源码不波及已装版本，发布新版本时重跑安装即可。零第三方依赖，`--break-system-packages` 不会与 apt 包冲突；`--user` 限定用户作用域，免 sudo。开发直接用 `./bin/litcli`，与生产快照互不影响。
+标准 Python 包安装：`pyproject.toml` 入口点 `litcli = "litcli.cli:main"`。本机 Python 3.12 是 PEP 668（externally-managed）环境，`install.sh` 用 `pip install --break-system-packages --user .`（非 editable）。安装时把源码复制为冻结快照放到 `~/.local`，生产 `litcli` 与仓库源码解耦：生产期间改源码不波及已装版本，发布新版本时重跑安装即可。依赖与程序一起装进用户站点（`--user`），不动系统包、免 sudo。开发直接用 `./bin/litcli`，与生产快照互不影响。
 
 ```bash
 # 生产方式：./install.sh = pip install --break-system-packages --user .(复制快照，无 venv)
@@ -121,7 +121,7 @@ type = "uspto"
 ```
 litcli/
 ├── models.py      AcademicItem 归一化模型 + ⇄ CSL JSON / BibTeX
-├── citation.py    零依赖 author-date in-text / 参考文献渲染
+├── citation.py    author-date in-text / 参考文献简版渲染（纯函数）
 ├── pdf.py         下载 + pdftotext 抽文本（后端无关）
 ├── metadata.py    PDF 首页启发式元数据（纯函数，离线）
 ├── aggregate.py   跨后端聚合：去重/合并/排序（纯函数）
@@ -142,7 +142,7 @@ skills/litcli/      agent 技能源（install.sh 按目标 agent 分发）
 python3 -m unittest discover -s tests
 ```
 
-用 stub 服务器 / mock urlopen 离线跑（不连真库、不联网）：覆盖归一化、聚合去重/合并/排序、Zotero 写入请求形状（含 `Zotero-Server-ID` / `If-Unmodified-Since-Version`）、arXiv 请求构造与 Atom 解析、错误包装。
+用 stub 服务器 / `httpx.MockTransport` 离线跑（不连真库、不联网）：覆盖归一化、聚合去重/合并/排序、Zotero 写入请求形状（含 `Zotero-Server-ID` / `If-Unmodified-Since-Version`）、arXiv 请求构造与 Atom 解析、错误包装。
 
 ## 已知限制
 
@@ -150,7 +150,7 @@ python3 -m unittest discover -s tests
 - arXiv 联网在部分环境（如受限沙箱）返回 406；代码已把 HTTP 错误包装为 `RuntimeError`，`--all` 会跳过失败后端继续。
 - **专利检索（USPTO）需真实 API key**：免 key 可达的 Crossref/OpenAlex 公开版专利记录趋近 0，专利以 USPTO 为主通道。免费注册 key（<https://developer.uspto.gov> 顶部 “Get a developer key”）后写入 config 的 `api_key`；缺 key 时 `search --backend uspto` 明确提示而非堆栈。
 - **开放获取语料源只取公开 OA 记录**：DOAJ（OA 期刊）、DOAB（OA 图书）、Europe PMC（生物医学题录 + OA JATS XML 全文）、Zenodo（开放记录与文件）都是免 key 的开放授权来源，`fetch fulltext` 只在合法 OA 渠道内使用它们。Europe PMC XML 是**文本而非排版 PDF**，默认存 `.xml`；Unpaywall 只给落地页时会退到链末（输出 `HTML` 并提示浏览器打开）。
-- **站点反爬墙：挡的是“无 JS 的客户端”，不是某条 IP**：`europepmc.org` 网页在 Cloudflare **managed challenge + Turnstile** 后面（`cf-mitigated: challenge`）：纯 urllib 403，带全套 Chrome 请求头/HTTP2 仍 403，无头与有头 Chromium 也基本卡在 “Just a moment…”（偶发通过），因此 Europe PMC 的检索与全文都走 `www.ebi.ac.uk` 的开放 REST，链接按标识符拼。代价是非 OA 但 `inEPMC=Y` 的记录 REST 的 `fullTextXML` 直接 500，正文只剩被墙的页面。DOAB 用 Anubis：`/rest/*` 对无 JS 客户端直接 403（改走 `/open-search` 的 Atom feed），而 `/handle/*` 是**可解的**工作量证明（`sha256(randomData+n)` 前缀若干十六进制零），litcli 用本地 `hashlib` 解一次、换 cookie 后续用，不绕过。`backends status` 里这类站点显示为可达，不必怀疑自己的 IP 被封。
+- **站点反爬墙：挡的是“无 JS 的客户端”，不是某条 IP**：`europepmc.org` 网页在 Cloudflare **managed challenge + Turnstile** 后面（`cf-mitigated: challenge`）：简单 HTTP 客户端 403，带全套 Chrome 请求头/HTTP2 仍 403，无头与有头 Chromium 也基本卡在 “Just a moment…”（偶发通过），因此 Europe PMC 的检索与全文都走 `www.ebi.ac.uk` 的开放 REST，链接按标识符拼。代价是非 OA 但 `inEPMC=Y` 的记录 REST 的 `fullTextXML` 直接 500，正文只剩被墙的页面。DOAB 用 Anubis：`/rest/*` 对无 JS 客户端直接 403（改走 `/open-search` 的 Atom feed），而 `/handle/*` 是**可解的**工作量证明（`sha256(randomData+n)` 前缀若干十六进制零），litcli 用本地 `hashlib` 解一次、换 cookie 后续用，不绕过。`backends status` 里这类站点显示为可达，不必怀疑自己的 IP 被封。
 - **Sci-Hub 为可选兜底，不默认介入**：合法全文仍先走 `litcli fetch fulltext` 的本地库 → Unpaywall → OpenAlex → Europe PMC → Zenodo；加 `--scihub`（或在配置里启用 `[backends.scihub]`）才在合法渠道全无结果后再试盗版镜像，输出会标注 `source=scihub` 与“非 OA 授权”。镜像用 ALTCHA 工作量证明验人（不绕过），每次调用单个 DOI、低频。
 - **Z-Library 为影子图书馆**：`litcli fetch book` 走 Z-Library 图书检索 + 下载，非 OA 授权，只取公开书目元数据与公开 PDF 直链，不绕过任何登录墙/验证码。站点以“Checking your browser”工作量证明验人，litcli 用本地 `hashlib` 解同一道题（不绕过）；入口域名会轮换，实现从 302 自动解析真实前端主机。**匿名每日下载有配额**，超限会明确提示（可在 `[backends.zlibrary]` 填 `email`/`password` 登录后放宽）。
 - **CNKI（知网）后端只取公开题录，不抓全文**：知网无开放 API，`search --backend cnki` 驱动**可见浏览器**（复用你自己的登录会话）检索，从结果列表页提取标题/作者/刊名/年份/摘要片段。**不实现任何下载/抓取付费墙全文的路径**；遇滑块验证码交给你在可见浏览器手动完成，程序不绕过。需先 `./install.sh --with-cnki` 装 Playwright + Chromium，首次搜索会弹浏览器请你手动过滑块 + 登录一次，之后会话复用。

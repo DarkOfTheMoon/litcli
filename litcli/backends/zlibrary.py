@@ -1,12 +1,12 @@
-"""Z-Library book search / metadata / download backend (read-only, stdlib HTTP).
+"""Z-Library book search / metadata / download backend (read-only, server-rendered pages).
 
 Z-Library holds Chinese and foreign *books* that the article-oriented sources cannot
 reach, which is the reason this backend exists. Its pages are server-rendered: a search
 page emits ``<z-bookcard>`` elements with the card fields as attributes, and a book page
 carries the bibliographic record in ``bookProperty`` blocks. Neither needs a browser, so
-this backend is plain ``urllib`` like arXiv / Crossref — unlike CNKI and Douban.
+this backend parses the HTML like the other HTTP sources — no browser, unlike CNKI and Douban.
 
-Two gates stand before the content, both passable with the stdlib:
+Two gates stand before the content, both passable locally:
 
 * a **browser-check interstitial** (HTTP 503, ``Checking your browser ...``) that runs an
   obfuscated script: SHA-1 of ``c_token`` + a counter until two digest bytes hit a marker,
@@ -31,12 +31,11 @@ from __future__ import annotations
 
 import hashlib
 import html as html_mod
-import http.cookiejar
 import re
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
+
+import httpx
 
 from ..models import AcademicItem, extract_year, normalize_author_name
 from .base import Backend
@@ -248,38 +247,29 @@ class _Http(_ScihubHttp):
 
     def _raw(self, url: str, referer: str = "") -> tuple[str, int, bytes]:
         """GET ``url`` returning ``(final_url, status, body)``; 4xx/5xx come back, not raise."""
-        headers = {"User-Agent": _UA, "Accept": "text/html,application/pdf,*/*;q=0.8"}
+        return self._call("GET", url, referer=referer)
+
+    def _post(self, url: str, data: bytes) -> tuple[str, int, bytes]:
+        """POST a form body (login); same tuple contract as :meth:`_raw`."""
+        return self._call("POST", url, data=data, referer=url)
+
+    def _call(self, method: str, url: str, data: bytes | None = None,
+              referer: str = "") -> tuple[str, int, bytes]:
+        headers = {"User-Agent": _UA}
+        if data is None:
+            headers["Accept"] = "text/html,application/pdf,*/*;q=0.8"
+        else:
+            headers.update({"Accept": "text/html",
+                            "Content-Type": "application/x-www-form-urlencoded"})
         if referer:
             headers["Referer"] = referer
         try:
-            with self._opener.open(urllib.request.Request(url, headers=headers),
-                                   timeout=self.timeout) as r:
-                return r.geturl(), r.status, r.read()
-        except urllib.error.HTTPError as e:
-            return e.geturl() or url, e.code, e.read()
-        except urllib.error.URLError as e:
-            raise RuntimeError(f"unreachable: {e.reason}") from e
+            r = self.client.request(method, url, content=data, headers=headers)
+        except httpx.HTTPError as e:
+            raise RuntimeError(f"unreachable: {e}") from e
         finally:
             self._last = time.monotonic()
-
-    def _set_cookie(self, url: str, name: str, value: str) -> None:
-        """Place a cookie in the jar for the host of ``url`` (the solved challenge's host)."""
-        host = urllib.parse.urlparse(url).netloc.split(":")[0]
-        for handler in self._opener.handlers:
-            jar = getattr(handler, "cookiejar", None)
-            if jar is not None:
-                jar.set_cookie(http.cookiejar.Cookie(
-                    0, name, value, None, False, host, False, False, "/", True, False,
-                    None, False, None, None, {}))
-                return
-
-    def cookie(self, name: str) -> str:
-        """Return a cookie value from the jar ("" when absent)."""
-        for handler in self._opener.handlers:
-            jar = getattr(handler, "cookiejar", None)
-            if jar is not None:
-                return next((c.value for c in jar if c.name == name), "")
-        return ""
+        return str(r.url), r.status_code, r.content
 
     def _retry(self, call, url: str, referer: str) -> tuple[str, int, bytes]:
         """Run one request; on a browser check, solve it and run it once more."""
@@ -288,8 +278,8 @@ class _Http(_ScihubHttp):
         if status == 503:
             token = challenge_token(body.decode("utf-8", "replace"))
             if token:
-                self._set_cookie(final, "c_token", token)
-                self._set_cookie(final, "c_time", "0.2")
+                self.set_cookie(final, "c_token", token)
+                self.set_cookie(final, "c_time", "0.2")
                 self._pace()
                 final, status, body = call(final, referer)
         return final, status, body
@@ -297,20 +287,6 @@ class _Http(_ScihubHttp):
     def fetch(self, url: str, referer: str = "") -> tuple[str, int, bytes]:
         """GET with the browser check handled (solved locally, at most once per response)."""
         return self._retry(self._raw, url, referer)
-
-    def _post(self, url: str, data: bytes) -> tuple[str, int, bytes]:
-        headers = {"User-Agent": _UA, "Referer": url,
-                   "Content-Type": "application/x-www-form-urlencoded", "Accept": "text/html"}
-        try:
-            with self._opener.open(urllib.request.Request(url, data=data, headers=headers),
-                                   timeout=self.timeout) as r:
-                return r.geturl(), r.status, r.read()
-        except urllib.error.HTTPError as e:
-            return url, e.code, e.read()
-        except urllib.error.URLError as e:
-            raise RuntimeError(f"unreachable: {e.reason}") from e
-        finally:
-            self._last = time.monotonic()
 
     def login(self, base: str, email: str, password: str) -> bool:
         """Log in with the configured credentials; True when a session cookie came back.
@@ -365,19 +341,22 @@ class ZlibraryBackend(Backend):
         self._email = email
         self._password = password
         self._login_failed = False
+        self._session: _Http | None = None
 
     # --- transport ---
 
     def _http(self) -> _Http:
-        """A fresh session; logs in first when credentials are configured (anonymous otherwise)."""
-        http = _Http(self._timeout, self._delay)
-        if self._email and self._password and not self._login_failed:
-            try:
-                if not http.login(self._resolve_base(http), self._email, self._password):
-                    self._login_failed = True
-            except RuntimeError:
-                self._login_failed = True  # anonymous access still works; do not retry per call
-        return http
+        """The session, created (and logged in) once; anonymous when no credentials work."""
+        if self._session is None:
+            http = _Http(self._timeout, self._delay)
+            if self._email and self._password and not self._login_failed:
+                try:
+                    if not http.login(self._resolve_base(http), self._email, self._password):
+                        self._login_failed = True
+                except RuntimeError:
+                    self._login_failed = True  # anonymous access still works; do not retry per call
+            self._session = http
+        return self._session
 
     def _resolve_base(self, http: _Http) -> str:
         """Return the live front host, discovering it from a rotating entry domain once."""

@@ -9,17 +9,12 @@ from __future__ import annotations
 
 import concurrent.futures
 import http.client
-import json
 import re
-import threading
-import time
-import urllib.error
 import urllib.parse
-import urllib.request
 
 from ..aggregate import cited_key
 from ..models import AcademicItem
-from .base import Backend, retry_json
+from .http import HttpBackend
 
 _API = "https://api.openalex.org/works"
 
@@ -135,52 +130,24 @@ def _work_to_item(rec: dict, source: str = "openalex") -> AcademicItem:
     )
 
 
-class _RateLimiter:
-    """Spacing limiter: at least ``min_interval`` seconds between successive ``wait`` calls.
+class OpenAlexBackend(HttpBackend):
+    headers = {"Accept": "application/json"}
+    http2 = True
 
-    Thread-safe (a lock guards the schedule). The first call does not block, so a single
-    interactive request is unthrottled; a parallel batch (like ``_fetch_works``) is spaced out.
-    """
-
-    def __init__(self, min_interval: float):
-        self._min = min_interval
-        self._lock = threading.Lock()
-        self._next = 0.0
-
-    def wait(self) -> None:
-        with self._lock:
-            now = time.monotonic()
-            delay = self._next - now
-            if delay > 0:
-                time.sleep(delay)
-                now = time.monotonic()
-            self._next = max(now, self._next) + self._min
-
-
-class OpenAlexBackend(Backend):
     def __init__(self, name: str = "openalex", mailto: str = "",
                  base: str = _API, max_results: int = 10, rate_per_sec: float = 10.0):
-        self.name = name
+        super().__init__(name=name, rate=int(rate_per_sec) or 10,
+                         min_interval=1.0 / rate_per_sec if rate_per_sec > 0 else 0.0)
         self._base = base.rstrip("/")
         self._mailto = mailto
         self._max = max_results
-        # Polite-pool pacing: cap the request rate so parallel graph fetches don't throttle/ban us.
-        self._limiter = _RateLimiter(1.0 / rate_per_sec if rate_per_sec > 0 else 0.0)
+        # Polite pool: the address rides in the UA too, not only in the mailto parameter.
+        self.UA = f"litcli/0.1 (mailto: {mailto or 'unknown'})"
 
     @property
     def capabilities(self) -> set[str]:
         return {"read"}
 
-    def _headers(self) -> dict:
-        return {
-            "User-Agent": f"litcli/0.1 (mailto: {self._mailto or 'unknown'})",
-            "Accept": "application/json",
-        }
-
-    def _get(self, url: str) -> dict:
-        """GET, pacing the polite-pool request rate, then parse with 5xx/network retries."""
-        self._limiter.wait()
-        return retry_json(url, self._headers(), self.name, timeout=25)
 
     def _with_mailto(self, url: str) -> str:
         """Append the polite ``&mailto=`` param (OpenAlex asks for it) to a URL."""
@@ -214,7 +181,7 @@ class OpenAlexBackend(Backend):
 
     def _work(self, key: str) -> dict:
         """Fetch one raw work dict (single GET): DOI/W-id integration + key-miss guard."""
-        data = self._get(self._with_mailto(self._work_url(key)))
+        data = self.fetch_json(self._with_mailto(self._work_url(key)))
         if not data:
             raise KeyError(f"[{self.name}] not found: {key}")
         return data
@@ -236,7 +203,7 @@ class OpenAlexBackend(Backend):
         if oa_filters:
             params["filter"] = ",".join(oa_filters)
         qs = urllib.parse.urlencode(params)
-        data = self._get(self._with_mailto(f"{self._base}?{qs}"))
+        data = self.fetch_json(self._with_mailto(f"{self._base}?{qs}"))
         return [_work_to_item(w, self.name) for w in (data.get("results") or [])]
 
     def _fetch_works(self, ids: list[str]) -> list[AcademicItem]:
@@ -246,7 +213,7 @@ class OpenAlexBackend(Backend):
             return []
         results: dict[str, AcademicItem] = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(ids))) as ex:
-            futures = {ex.submit(self._get, self._with_mailto(self._work_url(i))): i
+            futures = {ex.submit(self.fetch_json, self._with_mailto(self._work_url(i))): i
                        for i in ids}
             for fut in concurrent.futures.as_completed(futures):
                 i = futures[fut]
@@ -317,7 +284,7 @@ class OpenAlexBackend(Backend):
             wid = _wid(rec.get("id") or "")
         if not wid:
             raise RuntimeError(f"[{self.name}] unable to resolve an internal OpenAlex id for {key}")
-        data = self._get(self._with_mailto(
+        data = self.fetch_json(self._with_mailto(
             f"{self._base}?filter=cites:{wid}&per_page={per_page}&sort=cited_by_count:desc"))
         return [_work_to_item(w, self.name) for w in (data.get("results") or [])][:limit]
 

@@ -16,12 +16,8 @@ the CLI degrades gracefully.
 """
 from __future__ import annotations
 
-import json
-import urllib.error
-import urllib.request
-
 from ..models import AcademicItem
-from .base import Backend
+from .http import HttpBackend, HttpError
 
 _API = "https://api.uspto.gov/api/v1/patent/search"
 
@@ -67,15 +63,19 @@ def _pat_to_item(rec: dict, source: str = "uspto") -> AcademicItem:
     )
 
 
-class UsptoBackend(Backend):
+class UsptoBackend(HttpBackend):
     """USPTO patent search backend (read-only, key-gated)."""
+
+    UA = "litcli/0.1 (uspto)"
 
     def __init__(self, name: str = "uspto", api_key: str = "",
                  base: str = _API, max_results: int = 10):
-        self.name = name
+        super().__init__(name=name, rate=2, min_interval=0.5)
         self._api_key = api_key
         self._base = base.rstrip("/")
         self._max = max_results
+        self.headers = {"Accept": "application/json", "Content-Type": "application/json",
+                        "X-Api-Key": api_key}
 
     @property
     def capabilities(self) -> set[str]:
@@ -89,21 +89,13 @@ class UsptoBackend(Backend):
                 "the config's api_key")
 
     def _post(self, url: str, body: dict) -> dict:
-        req = urllib.request.Request(
-            url, method="POST",
-            data=json.dumps(body).encode(),
-            headers={"User-Agent": f"litcli/0.1 ({self.name})",
-                     "Accept": "application/json",
-                     "Content-Type": "application/json",
-                     "X-Api-Key": self._api_key})
         try:
-            with urllib.request.urlopen(req, timeout=25) as r:
-                return json.loads(r.read())
-        except urllib.error.HTTPError as e:
-            hint = "check api_key (403/401 usually means an invalid or unauthorized key)" if e.code in (401, 403) else ""
-            raise RuntimeError(f"[{self.name}] HTTP {e.code}: {e.reason} {hint}".strip()) from e
-        except urllib.error.URLError as e:
-            raise RuntimeError(f"[{self.name}] unreachable: {e.reason}") from e
+            return self.request("POST", url, json=body).json()
+        except HttpError as e:
+            if e.status in (401, 403):
+                raise RuntimeError(f"{e} check api_key (401/403 usually means an invalid or "
+                                   "unauthorized key)") from e
+            raise
 
     def _results(self, data: dict) -> list[dict]:
         """Extract the results array from the response; tolerate missing fields such as =None."""

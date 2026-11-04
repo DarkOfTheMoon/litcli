@@ -20,18 +20,15 @@ import hashlib
 import html as html_mod
 import json
 import re
-import time
-import urllib.error
 import urllib.parse
-import urllib.request
-import xml.etree.ElementTree as ET
+
+from lxml import etree as ET
 
 from ..models import AcademicItem, extract_year, normalize_author_name
-from .base import Backend, build_cookie_opener
+from .http import HttpBackend, HttpError
 
 _SITE = "https://directory.doabooks.org"
 _SEARCH = f"{_SITE}/open-search/discover"
-_UA = "litcli/0.1 (+https://gitee.com/simult/litcli)"
 _ATOM = "{http://www.w3.org/2005/Atom}"
 _KEY_SUFFIX = "doab/"
 _MAX_TRIES = 20_000_000
@@ -203,7 +200,7 @@ def feed_to_items(data: bytes, source: str = "doab") -> list[AcademicItem]:
     """Parse an Atom feed body into normalized items, dropping untitled/imprint entries."""
     try:
         root = ET.fromstring(data)
-    except ET.ParseError as e:
+    except ET.XMLSyntaxError as e:
         raise DoabError(f"DOAB did not return Atom XML: {e}") from e
     items = []
     for entry in root.findall(f"{_ATOM}entry"):
@@ -215,44 +212,24 @@ def feed_to_items(data: bytes, source: str = "doab") -> list[AcademicItem]:
     return items
 
 
-class DoabBackend(Backend):
+class DoabBackend(HttpBackend):
     """Read-only open-access book search (feed) and record lookup (Anubis-walled pages)."""
 
     def __init__(self, name: str = "doab", base: str = _SEARCH, timeout: int = 30, delay: float = 1.0):
-        self.name = name
+        super().__init__(name=name, timeout=timeout, rate=1, min_interval=delay)
         self._base = base
         parsed = urllib.parse.urlsplit(base)
         # Page/challenge URLs hang off the host, so a ``base`` override must move them too.
         self._site_root = f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else _SITE
-        self._timeout = timeout
-        self._delay = delay
-        self._last = 0.0
-        self._opener = None
 
     @property
     def capabilities(self) -> set[str]:
         # ``attachment`` stays off: the file link is remote, not a local-store copy.
         return {"read"}
 
-    def _pace(self) -> None:
-        wait = self._delay - (time.monotonic() - self._last)
-        if wait > 0:
-            time.sleep(wait)
-        self._last = time.monotonic()
-
-    def _site(self) -> urllib.request.OpenerDirector:
-        """Cookie-jar opener: the Anubis auth cookie has to survive across requests."""
-        if self._opener is None:
-            self._opener = build_cookie_opener()
-        return self._opener
-
     def _has_auth_cookie(self) -> bool:
         """True when the Anubis auth cookie sits in the jar (the bot check is cleared)."""
-        for handler in getattr(self._site(), "handlers", []):
-            jar = getattr(handler, "cookiejar", None)
-            if jar is not None and any(c.name.endswith("anubis-auth") and c.value for c in jar):
-                return True
-        return False
+        return self.has_cookie("anubis-auth")
 
     def _pass_challenge(self, body: str, redir: str) -> bool:
         """Solve the Anubis proof-of-work and exchange it for an auth cookie."""
@@ -262,67 +239,42 @@ class DoabBackend(Backend):
         params.update({"redir": redir, "elapsedTime": "0"})
         url = (f"{self._site_root}/.within.website/x/cmd/anubis/api/pass-challenge?"
                f"{urllib.parse.urlencode(params)}")
-        ok = False
-        try:
-            with self._site().open(urllib.request.Request(url, headers={"User-Agent": _UA}),
-                                   timeout=self._timeout) as r:
-                ok = r.status == 200
-        except (urllib.error.HTTPError, urllib.error.URLError):
-            ok = False
+        try:  # only the status and the Set-Cookie header matter here
+            self.fetch_status(url)
+        except RuntimeError:
+            pass
         # pass-challenge redirects to the target, so a missing record answers 404 even though
         # the cookie was set: judge by the cookie, not by the redirect target's status.
-        return ok or self._has_auth_cookie()
+        return self._has_auth_cookie()
+
+    def _page(self, url: str, path: str) -> str:
+        """GET a page, turning a 404 into the "not found" error."""
+        try:
+            return self.fetch_text(url)
+        except HttpError as e:
+            if e.status == 404:
+                raise RuntimeError(f"[{self.name}] not found: {path}") from e
+            raise
 
     def _get_page(self, path: str) -> str:
         """GET a site page, answering the bot check once if it is served."""
-        last_403: urllib.error.HTTPError | None = None
-        for _ in range(2):
-            self._pace()
-            try:
-                with self._site().open(urllib.request.Request(self._site_root + path,
-                                                              headers={"User-Agent": _UA}),
-                                       timeout=self._timeout) as r:
-                    return r.read().decode("utf-8", "replace")
-            except urllib.error.HTTPError as e:
-                body = e.read().decode("utf-8", "replace")
-                if e.code == 404:
-                    raise RuntimeError(f"[{self.name}] not found: {path}") from e
-                if e.code == 403 and self._pass_challenge(body, path):
-                    last_403 = e
-                    continue
-                raise RuntimeError(f"[{self.name}] HTTP {e.code}: {e.reason}") from e
-            except urllib.error.URLError as e:
-                raise RuntimeError(f"[{self.name}] unreachable: {e.reason}") from e
-        if last_403 is not None:  # solved, but the page kept refusing the (stale) cookie
-            raise RuntimeError(f"[{self.name}] HTTP {last_403.code}: {last_403.reason}") from last_403
-        raise RuntimeError(f"[{self.name}] bot check did not clear for {path}")  # pragma: no cover
+        url = self._site_root + path
+        try:
+            return self._page(url, path)
+        except HttpError as e:
+            if e.status == 403 and self._pass_challenge(e.body, path):
+                return self._page(url, path)
+            raise
 
     def _fetch(self, query: str, rpp: int = 0, start: int = 0) -> list[AcademicItem]:
-        self._pace()
         url = f"{self._base}?query={urllib.parse.quote(query)}"
         if rpp > 0:
             url += f"&rpp={min(rpp, 100)}"
         if start > 0:
             url += f"&start={start}"
-        req = urllib.request.Request(url, headers={"User-Agent": _UA, "Accept": "application/atom+xml"})
-        last: RuntimeError | None = None
-        try:
-            for attempt in range(3):
-                try:
-                    with urllib.request.urlopen(req, timeout=self._timeout) as r:
-                        return feed_to_items(r.read(), self.name)
-                except urllib.error.HTTPError as e:
-                    last = RuntimeError(f"[{self.name}] HTTP {e.code}: {e.reason}")
-                    if e.code < 500 or attempt == 2:
-                        raise last from e
-                except urllib.error.URLError as e:
-                    last = RuntimeError(f"[{self.name}] unreachable: {e.reason}")
-                    if attempt == 2:
-                        raise last from e
-                time.sleep(0.5 * (attempt + 1))  # the feed answers transient 500s under load
-        finally:
-            self._last = time.monotonic()
-        raise last  # pragma: no cover - raised inside the loop
+        # The feed answers transient 500s under load; the shared transport retries those.
+        data = self.fetch(url, headers={"Accept": "application/atom+xml"}).content
+        return feed_to_items(data, self.name)
 
     def search(self, query: str, limit: int = 10, filters: dict | None = None) -> list[AcademicItem]:
         filters = self._filters(filters)
@@ -371,13 +323,10 @@ class DoabBackend(Backend):
             raise RuntimeError(f"[{self.name}] no download link on the record: {key}")
         errors: list[str] = []
         for url in item.attachments:
-            self._pace()
             try:
-                with self._site().open(urllib.request.Request(url, headers={"User-Agent": _UA}),
-                                       timeout=self._timeout) as r:
-                    data = r.read()
-            except (urllib.error.HTTPError, urllib.error.URLError) as e:
-                errors.append(f"{url}: {getattr(e, 'reason', e)}")
+                data = self.fetch_bytes(url)
+            except RuntimeError as e:
+                errors.append(f"{url}: {e}")
                 continue
             if data.startswith(b"%PDF"):
                 return data

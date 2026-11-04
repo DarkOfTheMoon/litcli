@@ -1,13 +1,12 @@
 """Zenodo backend offline stub tests: type mapping, PDF attachment, key forms."""
-import json
 import os
 import sys
 import unittest
-from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from litcli.backends.zenodo import ZenodoBackend, record_to_item
+from tests.http_stub import speed_up, stub
 
 RECORD = {
     "id": 13770811, "doi": "10.5281/zenodo.13770811",
@@ -28,23 +27,10 @@ RECORD = {
 }
 
 
-class _Resp:
-    def __init__(self, data):
-        self._d = data
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        return False
-
-    def read(self):
-        return json.dumps(self._d).encode()
-
-
 class ZenodoStubTest(unittest.TestCase):
     def setUp(self):
         self.be = ZenodoBackend(delay=0)
+        speed_up(self.be)
 
     def test_record_maps_type_abstract_and_pdf(self):
         it = record_to_item(RECORD)
@@ -62,56 +48,53 @@ class ZenodoStubTest(unittest.TestCase):
         self.assertEqual(record_to_item(no_pdf).attachments, [])
 
     def test_search_uses_field_queries_and_year_post_filter(self):
-        with mock.patch("urllib.request.urlopen",
-                        return_value=_Resp({"hits": {"hits": [RECORD]}})) as m:
-            items = self.be.search("volúmenes", filters={"year": "2024", "author": "García"})
-        url = m.call_args[0][0].full_url
+        rec = stub(self.be, (200, {"hits": {"hits": [RECORD]}}))
+        items = self.be.search("volúmenes", filters={"year": "2024", "author": "García"})
+        url = rec.urls[0]
         self.assertIn("creators.name%3A%22Garc%C3%ADa%22", url)
         self.assertEqual(len(items), 1)
-        with mock.patch("urllib.request.urlopen",
-                        return_value=_Resp({"hits": {"hits": [RECORD]}})):
-            self.assertEqual(self.be.search("volúmenes", filters={"year": "1999"}), [])
+        stub(self.be, (200, {"hits": {"hits": [RECORD]}}))
+        self.assertEqual(self.be.search("volúmenes", filters={"year": "1999"}), [])
 
     def test_search_never_asks_for_more_than_the_anonymous_page_cap(self):
-        with mock.patch("urllib.request.urlopen", return_value=_Resp({"hits": {"hits": []}})) as m:
-            self.be.search("volúmenes", limit=100)
-        self.assertIn("size=25", m.call_args[0][0].full_url)
+        rec = stub(self.be, (200, {"hits": {"hits": []}}))
+        self.be.search("volúmenes", limit=100)
+        self.assertIn("size=25", rec.urls[0])
 
     def test_search_pages_past_the_anonymous_cap(self):
         pages = [{"hits": {"hits": [RECORD] * 25}}, {"hits": {"hits": [RECORD] * 5}}]
-        with mock.patch("urllib.request.urlopen",
-                        side_effect=[_Resp(p) for p in pages]) as m:
-            items = self.be.search("volúmenes", limit=30)
+        rec = stub(self.be, *[(200, p) for p in pages])
+        items = self.be.search("volúmenes", limit=30)
         self.assertEqual(len(items), 30)
-        self.assertEqual(m.call_count, 2)
-        self.assertIn("page=2", m.call_args_list[1][0][0].full_url)
+        self.assertEqual(len(rec.requests), 2)
+        self.assertIn("page=2", rec.urls[1])
 
     def test_get_accepts_a_record_url(self):
         for url in ("https://zenodo.org/records/13770811",
                     "https://zenodo.org/api/records/13770811"):
-            with mock.patch("urllib.request.urlopen", return_value=_Resp(RECORD)) as m:
-                it = self.be.get(url)
-            self.assertTrue(m.call_args[0][0].full_url.endswith("/13770811"))
+            rec = stub(self.be, (200, RECORD))
+            it = self.be.get(url)
+            self.assertTrue(rec.urls[0].endswith("/13770811"))
             self.assertEqual(it.doi, "10.5281/zenodo.13770811")
 
     def test_search_pushes_the_year_into_the_query(self):
-        with mock.patch("urllib.request.urlopen", return_value=_Resp({"hits": {"hits": [RECORD]}})) as m:
-            self.be.search("volúmenes", filters={"year": "2017"})
-        url = m.call_args[0][0].full_url
+        rec = stub(self.be, (200, {"hits": {"hits": [RECORD]}}))
+        self.be.search("volúmenes", filters={"year": "2017"})
+        url = rec.urls[0]
         self.assertIn("publication_date", url)
         self.assertIn("2017-01-01", url)
-        self.assertEqual(m.call_count, 1)
+        self.assertEqual(len(rec.requests), 1)
 
     def test_get_by_numeric_id(self):
-        with mock.patch("urllib.request.urlopen", return_value=_Resp(RECORD)) as m:
-            it = self.be.get("zenodo/13770811")
-        self.assertTrue(m.call_args[0][0].full_url.endswith("/13770811"))
+        rec = stub(self.be, (200, RECORD))
+        it = self.be.get("zenodo/13770811")
+        self.assertTrue(rec.urls[0].endswith("/13770811"))
         self.assertEqual(it.doi, "10.5281/zenodo.13770811")
 
     def test_get_by_doi_derives_the_record_id(self):
-        with mock.patch("urllib.request.urlopen", return_value=_Resp(RECORD)) as m:
-            self.be.get("10.5281/zenodo.13770811")
-        self.assertTrue(m.call_args[0][0].full_url.endswith("/13770811"))
+        rec = stub(self.be, (200, RECORD))
+        self.be.get("10.5281/zenodo.13770811")
+        self.assertTrue(rec.urls[0].endswith("/13770811"))
 
     def test_get_unknown_key_raises(self):
         with self.assertRaises(KeyError):

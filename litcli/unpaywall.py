@@ -6,10 +6,11 @@ open-access version is available, it gives a downloadable direct link.
 """
 from __future__ import annotations
 
-import json
-import urllib.error
 import urllib.parse
-import urllib.request
+
+import httpx
+
+from .transport import client
 
 _API = "https://api.unpaywall.org/v2"
 
@@ -27,21 +28,21 @@ def _best_oa(data: dict) -> dict:
     }
 
 
-def resolve_oa(doi: str, email: str = DEFAULT_EMAIL, timeout: int = 25) -> dict:
+def resolve_oa(doi: str, email: str = DEFAULT_EMAIL, timeout: int = 25,
+               transport: httpx.BaseTransport | None = None) -> dict:
     """Look up OA info by DOI: returns is_oa / oa_status / best_pdf / best_landing / title / year."""
     url = f"{_API}/{urllib.parse.quote(doi, safe='')}?email={urllib.parse.quote(email)}"
-    req = urllib.request.Request(url, headers={
-        "User-Agent": "litcli/0.1 (oa resolver)",
-        "Accept": "application/json",
-    })
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            data = json.loads(r.read())
-    except urllib.error.HTTPError as e:
-        hint = "the email param may be the 422 cause (provide a valid email)" if e.code == 422 else ""
-        raise RuntimeError(f"[unpaywall] HTTP {e.code}: {e.reason} {hint}") from e
-    except urllib.error.URLError as e:
-        raise RuntimeError(f"[unpaywall] cannot access: {e.reason}") from e
+        with client(timeout, ua="litcli/0.1 (oa resolver)", transport=transport) as http:
+            response = http.get(url, headers={"Accept": "application/json"})
+    except httpx.HTTPError as e:
+        raise RuntimeError(f"[unpaywall] cannot access: {e}") from e
+    if response.status_code >= 400:
+        hint = (" the email param may be the 422 cause (provide a valid email)"
+                if response.status_code == 422 else "")
+        raise RuntimeError(f"[unpaywall] HTTP {response.status_code}: "
+                           f"{response.reason_phrase}{hint}")
+    data = response.json()
 
     info = _best_oa(data)
     info["title"] = data.get("title", "")

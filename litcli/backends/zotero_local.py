@@ -9,12 +9,12 @@ from __future__ import annotations
 import json
 import os
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
+
+import httpx
 
 from ..models import AcademicItem
-from .base import Backend
+from .http import HttpBackend
 
 _ITEMTYPE_MAP = {
     "journalArticle": "article",
@@ -82,10 +82,13 @@ def _item_to_academic(data: dict, source: str = "zotero") -> AcademicItem:
     )
 
 
-class ZoteroLocalBackend(Backend):
+class ZoteroLocalBackend(HttpBackend):
+    timeout = 20.0
+    retries = 1             # the write paths handle their own version conflicts
+
     def __init__(self, name: str = "zotero", base: str = "http://localhost:23119/api",
                  library: str = "0", api_key: str | None = None, app_name: str = "litcli"):
-        self.name = name
+        super().__init__(name=name)
         self._base = base.rstrip("/")
         self._users = f"users/{library or '0'}"
         self._api_key = api_key
@@ -116,14 +119,12 @@ class ZoteroLocalBackend(Backend):
         """The real /api/local/authorize handshake: asks Zotero to pop the local authorization dialog
         and returns the local key."""
         body = json.dumps({"appName": self._app_name}).encode()
-        req = urllib.request.Request(
-            self._url("local/authorize"), data=body, method="POST",
-            headers={"Zotero-API-Version": "3",
-                     "Zotero-Server-ID": self._server_id(),
-                     "Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=120) as r:  # Wait for the user's UI approval
-            data = json.loads(r.read())
-            return data.get("key", "")
+        r = self.request("POST", self._url("local/authorize"), content=body,
+                         headers={"Zotero-API-Version": "3",
+                                  "Zotero-Server-ID": self._server_id(),
+                                  "Content-Type": "application/json"},
+                         timeout=120)  # wait for the user's UI approval
+        return (r.json() or {}).get("key", "")
 
     def authorize(self) -> str:
         """Force a local authorization handshake and return the key, caching it (for the CLI
@@ -135,9 +136,8 @@ class ZoteroLocalBackend(Backend):
         """
         try:
             key = self._do_authorize()
-        except (urllib.error.URLError, OSError) as e:
-            raise RuntimeError(f"[{self.name}] local authorization failed: "
-                               f"{getattr(e, 'reason', e)}") from e
+        except (httpx.HTTPError, RuntimeError, OSError) as e:
+            raise RuntimeError(f"[{self.name}] local authorization failed: {e}") from e
         self._app_key_val = key
         return key
 
@@ -204,17 +204,11 @@ class ZoteroLocalBackend(Backend):
                     pass
                 headers["Zotero-API-Key"] = self._app_key_val or "localhost"
         data = json.dumps(body).encode() if body is not None else None
-        req = urllib.request.Request(url, data=data, headers=headers, method=method)
-        try:
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                raw = resp.read()
-                hdr = dict(resp.headers)
-                self._cache_server_id(hdr)
-                return resp.status, hdr, raw
-        except urllib.error.HTTPError as e:
-            hdr = dict(e.headers)
-            self._cache_server_id(hdr)
-            return e.code, hdr, e.read()
+        r = self.request(method, url, content=data, headers=headers,
+                         raise_for_status=False)  # 4xx comes back as a status
+        hdr = dict(r.headers)
+        self._cache_server_id(hdr)
+        return r.status_code, hdr, r.content
 
     def _json_path(self, path: str, params: dict | None = None):
         status, headers, raw = self._request("GET", path, params)
@@ -277,7 +271,7 @@ class ZoteroLocalBackend(Backend):
                     _, data = self._json_path(path, dict(page_params, limit=size))
                     rows = data or []
                     break
-                except (urllib.error.URLError, OSError, RuntimeError) as e:
+                except (OSError, RuntimeError) as e:
                     if attempt == 2:
                         raise RuntimeError(f"[{self.name}] failed to fetch {path} start={start}: {e}") from e
                     time.sleep(0.3 * (attempt + 1))

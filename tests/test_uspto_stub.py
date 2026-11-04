@@ -1,13 +1,13 @@
-"""USPTO patent backend offline stub tests: mock urlopen, assert request construction / X-Api-Key / parse / error wrapping."""
+"""USPTO patent backend offline stub tests: assert request construction / X-Api-Key / parse / error wrapping."""
 import json
 import os
 import sys
 import unittest
-from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from litcli.backends.uspto import UsptoBackend, _pat_to_item
+from tests.http_stub import stub
 
 REC = {
     "patent_patent_id": "US10123456B2",
@@ -22,31 +22,16 @@ REC = {
 DATA = {"results": [REC], "total_results": 1}
 
 
-class _Resp:
-    def __init__(self, data):
-        self._d = data
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        return False
-
-    def read(self):
-        return json.dumps(self._d).encode()
-
-
 class UsptoStubTest(unittest.TestCase):
     def test_search_request_shape(self):
         b = UsptoBackend(api_key="KEY123")
-        with mock.patch("urllib.request.urlopen", return_value=_Resp(DATA)) as m:
-            items = b.search("battery electrolyte")
-        req = m.call_args[0][0]
+        rec = stub(b, (200, DATA))
+        items = b.search("battery electrolyte")
+        req = rec.requests[0]
         self.assertEqual(req.method, "POST")
-        self.assertEqual(req.full_url, "https://api.uspto.gov/api/v1/patent/search")
-        hdrs = {k.lower(): v for k, v in req.headers.items()}
-        self.assertEqual(hdrs.get("x-api-key"), "KEY123")
-        body = json.loads(req.data.decode())
+        self.assertEqual(str(req.url), "https://api.uspto.gov/api/v1/patent/search")
+        self.assertEqual(rec.header("x-api-key"), "KEY123")
+        body = json.loads(req.content.decode())
         self.assertEqual(body["query"]["fq"], ["battery electrolyte"])
         self.assertEqual(len(items), 1)
         it = items[0]
@@ -67,21 +52,19 @@ class UsptoStubTest(unittest.TestCase):
         self.assertIn("api_key", str(ctx.exception))
 
     def test_403_wrapped_with_hint(self):
-        from urllib.error import HTTPError
-        err = HTTPError("u", 403, "Forbidden", None, None)
-        with mock.patch("urllib.request.urlopen", side_effect=err):
-            b = UsptoBackend(api_key="BAD")
-            with self.assertRaises(RuntimeError) as ctx:
-                b.search("battery")
+        b = UsptoBackend(api_key="BAD")
+        stub(b, (403, "Forbidden"))
+        with self.assertRaises(RuntimeError) as ctx:
+            b.search("battery")
         self.assertIn("403", str(ctx.exception))
         self.assertIn("api_key", str(ctx.exception))
 
     def test_get_not_found(self):
         no = {"results": [], "total_results": 0}
-        with mock.patch("urllib.request.urlopen", return_value=_Resp(no)):
-            b = UsptoBackend(api_key="K")
-            with self.assertRaises(KeyError):
-                b.get("US00000000A1")
+        b = UsptoBackend(api_key="K")
+        stub(b, (200, no))
+        with self.assertRaises(KeyError):
+            b.get("US00000000A1")
 
     def test_pat_to_item_tolerates_missing(self):
         it = _pat_to_item({"patent_title": "T", "patent_date": "2020-01-01"})

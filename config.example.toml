@@ -65,7 +65,7 @@ mirrors = ["sci-hub.ru", "sci-hub.st", "sci-hub.se"]
 # timeout = 30
 
 # 可选:Z-Library 图书检索 + 下载(影子图书馆,非 OA 授权)。默认不内置。
-# 页面是服务端渲染的,零依赖 urllib 即可(无需 Playwright);用前会先过站点的
+# 页面是服务端渲染的,无需 Playwright;用前会先过站点的
 # “Checking your browser” 工作量证明(litcli 本地 hashlib 解,不绕过)。入口域名会轮换,
 # 故只配入口 base,真实前端主机从 302 自动解析。匿名每日下载有配额,超限报错提示。
 [backends.zlibrary]

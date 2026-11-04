@@ -5,11 +5,16 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "litcli"
 dynamic = ["version"]
-description = "通用学术 CLI:后端无关的领域库 + 可插拔多后端(本机 Zotero / arXiv / Crossref / OpenAlex)互操作"
+description = "通用学术 CLI:后端无关的领域库 + 可插拔多后端(本机 Zotero / arXiv / Crossref / OpenAlex / 中文题录与图书)互操作"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.11"
-dependencies = []  # 零第三方依赖,仅 Python 标准库
+dependencies = [
+  "httpx[http2]>=0.27",   # transport: pooling, HTTP/2, proxy, explicit timeouts
+  "tenacity>=8.2",        # retry policy for 429/5xx/transport errors
+  "pyrate-limiter>=3",    # per-site request pacing
+  "lxml>=5",              # HTML/XML parsing
+]
 authors = [{ name = "ZhangHuiJie" }]
 keywords = ["zotero", "arxiv", "academic", "cli", "csl"]
 classifiers = [
