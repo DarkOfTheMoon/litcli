@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.0] - 2026-11-04
 
 ### Added
 
@@ -37,3 +37,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Zotero 收藏集合成员罗列（Zotero 忽略 `collection` 参数，改由本地 `collections` 字段归属）。
 - Crossref 裸 DOI 与 OpenAlex 完整 URL、两种 ISBN 写法统一归一，避免同一本书去重失败。
+
+## [Unreleased]
+
