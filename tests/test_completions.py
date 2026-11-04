@@ -1,6 +1,6 @@
 """Shell-completion generator offline tests: spec introspection + static renderers.
 
-Fully offline: builds the spec from ``_build_parser()`` (no network/backends) and checks the
+Fully offline: builds the spec from ``build_parser()`` (no network/backends) and checks the
 emitted scripts' structure. One subprocess test sources the generated bash script and exercises
 its completion engine, so the most important behavior (the emitted script actually completes) is
 covered without a live shell.
@@ -13,12 +13,12 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from litcli.cli import _build_parser
+from litcli.commands.parser import build_parser
 from litcli.completions import BACKENDS, SHELL_CHOICES, TYPES, build_spec, render
 
 
 def _spec():
-    return build_spec(_build_parser())
+    return build_spec(build_parser())
 
 
 class BuildSpecTest(unittest.TestCase):
@@ -96,7 +96,7 @@ class RenderTest(unittest.TestCase):
 class BashEngineTest(unittest.TestCase):
     def test_engine_resolves_candidates(self):
         """Source the generated bash script and check it resolves several tab contexts."""
-        spec = build_spec(_build_parser())
+        spec = build_spec(build_parser())
         script = render("bash", spec)
         with tempfile.NamedTemporaryFile("w", suffix=".bash", delete=False) as f:
             f.write(script)

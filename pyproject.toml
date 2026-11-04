@@ -39,5 +39,5 @@ litcli = "litcli.cli:main"
 version = {attr = "litcli._version.__version__"}
 
 [tool.setuptools]
-packages = ["litcli", "litcli.backends"]
+packages = ["litcli", "litcli.backends", "litcli.commands"]
 license-files = ["LICENSE"]

@@ -7,7 +7,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from litcli.cli import cmd_data_add
+from litcli.commands.data import cmd_data_add
 
 
 class _FakeBackend:
@@ -41,8 +41,8 @@ def _args(**over):
 class DataAddStubTest(unittest.TestCase):
     def test_pdf_heuristic_shows_candidate_then_writes(self):
         fb = _FakeBackend()
-        with mock.patch("litcli.cli.metadata.extract_metadata", return_value=_item(title="Deep learning", doi="10.1/x")), \
-             mock.patch("litcli.cli.get_backend", return_value=fb):
+        with mock.patch("litcli.metadata.extract_metadata", return_value=_item(title="Deep learning", doi="10.1/x")), \
+             mock.patch("litcli.commands.data.get_backend", return_value=fb):
             rc = cmd_data_add({}, _args(pdf="/tmp/a.pdf", yes=True))
         self.assertEqual(rc, 0)
         self.assertEqual(len(fb.added), 1)
@@ -51,8 +51,8 @@ class DataAddStubTest(unittest.TestCase):
     def test_pdf_heuristic_cancel_does_not_write(self):
         # Without --yes/--force the confirm prompt must be answered; a negative answer cancels the write.
         fb = _FakeBackend()
-        with mock.patch("litcli.cli.metadata.extract_metadata", return_value=_item(title="Deep learning", doi="10.1/x")), \
-             mock.patch("litcli.cli.get_backend", return_value=fb), \
+        with mock.patch("litcli.metadata.extract_metadata", return_value=_item(title="Deep learning", doi="10.1/x")), \
+             mock.patch("litcli.commands.data.get_backend", return_value=fb), \
              mock.patch("builtins.input", return_value="n"):
             rc = cmd_data_add({}, _args(pdf="/tmp/a.pdf"))
         self.assertEqual(rc, 2)
@@ -60,16 +60,16 @@ class DataAddStubTest(unittest.TestCase):
 
     def test_duplicate_doi_rejected_without_force(self):
         fb = _FakeBackend(existing=[_item(doi="10.1/x", title="Old")])
-        with mock.patch("litcli.cli.metadata.extract_metadata", return_value=_item(title="New", doi="10.1/x")), \
-             mock.patch("litcli.cli.get_backend", return_value=fb):
+        with mock.patch("litcli.metadata.extract_metadata", return_value=_item(title="New", doi="10.1/x")), \
+             mock.patch("litcli.commands.data.get_backend", return_value=fb):
             rc = cmd_data_add({}, _args(pdf="/tmp/a.pdf"))
         self.assertEqual(rc, 2)
         self.assertEqual(len(fb.added), 0)
 
     def test_force_overrides_duplicate(self):
         fb = _FakeBackend(existing=[_item(doi="10.1/x", title="Old")])
-        with mock.patch("litcli.cli.metadata.extract_metadata", return_value=_item(title="New", doi="10.1/x")), \
-             mock.patch("litcli.cli.get_backend", return_value=fb):
+        with mock.patch("litcli.metadata.extract_metadata", return_value=_item(title="New", doi="10.1/x")), \
+             mock.patch("litcli.commands.data.get_backend", return_value=fb):
             rc = cmd_data_add({}, _args(pdf="/tmp/a.pdf", force=True))
         self.assertEqual(rc, 0)
         self.assertEqual(len(fb.added), 1)
@@ -77,7 +77,7 @@ class DataAddStubTest(unittest.TestCase):
     def test_csl_input_uses_from_csl(self):
         fb = _FakeBackend()
         csl = '{"title":"CSL Title","author":[{"family":"Doe","given":"J"}],"issued":{"date-parts":[[2020]]}}'
-        with mock.patch("litcli.cli.get_backend", return_value=fb), \
+        with mock.patch("litcli.commands.data.get_backend", return_value=fb), \
              mock.patch("builtins.open", mock.mock_open(read_data=csl)):
             rc = cmd_data_add({}, _args(csl="/tmp/x.json", doi="10.9/z", title="Ignored"))
         self.assertEqual(rc, 0)
@@ -86,7 +86,7 @@ class DataAddStubTest(unittest.TestCase):
 
     def test_csl_missing_authors_hits_half_gate(self):
         fb = _FakeBackend()
-        with mock.patch("litcli.cli.get_backend", return_value=fb), \
+        with mock.patch("litcli.commands.data.get_backend", return_value=fb), \
              mock.patch("builtins.open", mock.mock_open(read_data='{"title":"NoAuthor"}')):
             rc = cmd_data_add({}, _args(csl="/tmp/x.json"))
         self.assertEqual(rc, 2)  # semi-import gate rejection (no authors, no year)

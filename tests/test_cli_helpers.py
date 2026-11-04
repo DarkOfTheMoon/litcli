@@ -1,63 +1,66 @@
-"""CLI helper-function stub tests: arXiv key normalization + backends subcommand surface + search --type.
+"""CLI stub tests: key normalization, the argparse surface, rendering, and the backend-failure paths.
 
 No network; only pure functions and the argparse surface (no backend instantiation, no requests).
+Backend helpers are patched on the command module that uses them, not on ``litcli.cli``.
 """
-import sys
 import os
+import sys
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from litcli.backends.base import Backend, NotSupportedError
-from litcli.cli import _arxiv_id_from_key, _normalize_export_key, _normalize_related_key, _build_parser
+from litcli.commands.keys import arxiv_id_from_key, normalize_export_key, normalize_related_key
+from litcli.commands.parser import build_parser
+from litcli.commands.render import print_items
 from litcli.models import AcademicItem
 
 
 class ArxivKeyNormalizeTest(unittest.TestCase):
     def test_arxiv_id_from_prefixed_forms(self):
-        self.assertEqual(_arxiv_id_from_key("arxiv/1806.09180"), "1806.09180")
-        self.assertEqual(_arxiv_id_from_key("arXiv:1806.09180"), "1806.09180")
-        self.assertEqual(_arxiv_id_from_key("arxiv/1806.09180v1"), "1806.09180")
+        self.assertEqual(arxiv_id_from_key("arxiv/1806.09180"), "1806.09180")
+        self.assertEqual(arxiv_id_from_key("arXiv:1806.09180"), "1806.09180")
+        self.assertEqual(arxiv_id_from_key("arxiv/1806.09180v1"), "1806.09180")
 
     def test_arxiv_id_from_non_arxiv(self):
-        self.assertIsNone(_arxiv_id_from_key("10.1/abc"))
-        self.assertIsNone(_arxiv_id_from_key("10.48550/arxiv.1806.09180"))
-        self.assertIsNone(_arxiv_id_from_key(""))
+        self.assertIsNone(arxiv_id_from_key("10.1/abc"))
+        self.assertIsNone(arxiv_id_from_key("10.48550/arxiv.1806.09180"))
+        self.assertIsNone(arxiv_id_from_key(""))
 
     def test_normalize_for_arxiv_backend_uses_bare_id(self):
-        self.assertEqual(_normalize_export_key("arxiv/1806.09180", "arxiv"), "1806.09180")
+        self.assertEqual(normalize_export_key("arxiv/1806.09180", "arxiv"), "1806.09180")
 
     def test_normalize_for_other_backend_uses_doi(self):
         # Non-arxiv backends (openalex/crossref) need DOI form to resolve, otherwise queried as an OpenAlex id -> 404
-        self.assertEqual(_normalize_export_key("arxiv/1806.09180", "openalex"),
+        self.assertEqual(normalize_export_key("arxiv/1806.09180", "openalex"),
                          "10.48550/arxiv.1806.09180")
 
     def test_non_arxiv_key_passthrough(self):
-        self.assertEqual(_normalize_export_key("10.1/abc", "crossref"), "10.1/abc")
+        self.assertEqual(normalize_export_key("10.1/abc", "crossref"), "10.1/abc")
 
 
 class RelatedKeyNormalizeTest(unittest.TestCase):
     def test_strips_source_prefix(self):
-        self.assertEqual(_normalize_related_key("openalex/10.1016/j.cma.2004.11.019"),
+        self.assertEqual(normalize_related_key("openalex/10.1016/j.cma.2004.11.019"),
                          "10.1016/j.cma.2004.11.019")
-        self.assertEqual(_normalize_related_key("zotero/AB12"), "AB12")
-        self.assertEqual(_normalize_related_key("scihub/10.1016/j.cma.2004.11.019"),
+        self.assertEqual(normalize_related_key("zotero/AB12"), "AB12")
+        self.assertEqual(normalize_related_key("scihub/10.1016/j.cma.2004.11.019"),
                          "10.1016/j.cma.2004.11.019")
 
     def test_arxiv_prefix_to_doi(self):
-        self.assertEqual(_normalize_related_key("arxiv/1806.09180"), "10.48550/arxiv.1806.09180")
+        self.assertEqual(normalize_related_key("arxiv/1806.09180"), "10.48550/arxiv.1806.09180")
 
     def test_openalex_url_and_doi_passthrough(self):
         # extra["openalex_id"] form (CLI-provided) is delivered as-is; bare DOI is also left untouched
-        self.assertEqual(_normalize_related_key("https://openalex.org/W2919115771"),
+        self.assertEqual(normalize_related_key("https://openalex.org/W2919115771"),
                          "https://openalex.org/W2919115771")
-        self.assertEqual(_normalize_related_key("10.48550/arxiv.1806.09180"),
+        self.assertEqual(normalize_related_key("10.48550/arxiv.1806.09180"),
                          "10.48550/arxiv.1806.09180")
 
 
 class BackendsParserTest(unittest.TestCase):
     def test_backends_accepts_list_and_status(self):
-        p = _build_parser()
+        p = build_parser()
         for cmd in ("list", "status"):
             a = p.parse_args(["backends", cmd])
             self.assertEqual(a.backends_cmd, cmd)
@@ -67,15 +70,15 @@ class BackendsParserTest(unittest.TestCase):
         self.assertEqual(a.backends_cmd, "authorize")
 
     def test_search_accepts_type_filter(self):
-        a = _build_parser().parse_args(["search", "q", "--type", "article"])
+        a = build_parser().parse_args(["search", "q", "--type", "article"])
         self.assertEqual(a.type, "article")
 
     def test_search_type_defaults_none(self):
-        a = _build_parser().parse_args(["search", "q"])
+        a = build_parser().parse_args(["search", "q"])
         self.assertIsNone(a.type)
 
     def test_edge_subcommands_share_options(self):
-        p = _build_parser()
+        p = build_parser()
         for cmd in ("refs", "citing", "related"):
             a = p.parse_args([cmd, "10.1/x", "--limit", "7", "--sort", "cited",
                               "--backend", "openalex", "--format", "json"])
@@ -91,11 +94,10 @@ class PrintItemsTest(unittest.TestCase):
         # Empty json/csl results must emit a machine-readable ``[]``, not a silent stdout.
         import contextlib
         import io
-        from litcli.cli import _print_items
 
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            rc = _print_items([], "json", False, "[no related]")
+            rc = print_items([], "json", False, "[no related]")
         self.assertEqual(rc, 0)
         self.assertEqual(buf.getvalue().strip(), "[]")
 
@@ -134,7 +136,7 @@ class FetchBookTest(unittest.TestCase):
         import litcli.cli as cli
 
         buf = io.StringIO()
-        with mock.patch.object(cli, "get_backend", return_value=backend), \
+        with mock.patch("litcli.commands.fetch.get_backend", return_value=backend), \
              contextlib.redirect_stdout(buf):
             rc = cli.main(argv)
         return rc, buf.getvalue()
@@ -186,7 +188,7 @@ class MainCatchTest(unittest.TestCase):
         # A single backend returning a non-JSON body (ValueError) must be skipped, not crash --all.
         import argparse, contextlib, io
         from unittest import mock
-        from litcli.cli import cmd_search
+        from litcli.commands.search import cmd_search
         from litcli.models import AcademicItem
 
         class _Raises:
@@ -206,7 +208,7 @@ class MainCatchTest(unittest.TestCase):
                                   title=None, author=None, year=None, container=None)
         out = io.StringIO()
         err = io.StringIO()
-        with mock.patch("litcli.cli.get_all_backends", return_value={"bad": _Raises(), "ok": _Ok()}):
+        with mock.patch("litcli.commands.search.get_all_backends", return_value={"bad": _Raises(), "ok": _Ok()}):
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                 rc = cmd_search({}, args)
         self.assertEqual(rc, 0)

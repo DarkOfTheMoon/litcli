@@ -127,14 +127,16 @@ litcli/
 ├── aggregate.py   跨后端聚合：去重/合并/排序（纯函数）
 ├── fulltext.py    全文定位（本地→OA→可选 Sci-Hub）+ should_import 收录查重门（纯函数）
 ├── config.py      配置读取、后端发现、get_backend/get_all_backends
-├── cli.py         argparse 意图分族编排（search/refs/citing/related/export/backends/data/fetch/completions）
-├── backends/      base.py（Backend ABC）+ zotero_local / arxiv / crossref / openalex / openlibrary / uspto / cnki / douban / doaj / europepmc / doab / zenodo / scihub / zlibrary
+├── transport.py   httpx 传输原语：配置的代理、client 工厂、HttpError、cookie 会话
+├── cli.py         入口：解析、代理、分发、统一异常映射
+├── commands/      parser.py（argparse 面）+ render/keys 共用 + search/graph/data/export/fetch/diagnostics 各族命令
+├── backends/      http.py（HttpBackend）+ base.py（Backend ABC）+ zotero_local / arxiv / crossref / openalex / openlibrary / uspto / cnki / douban / doaj / europepmc / doab / zenodo / scihub / zlibrary
 └── tests/          unittest 单测（stub 后端，离线）
 
 skills/litcli/      agent 技能源（install.sh 按目标 agent 分发）
 ```
 
-分层原则：**领域层**（后端无关，纯函数优先）→ **后端层**（可插拔，读/写/附件由 capabilities 标注）→ **配置层** → **CLI 编排层**。
+分层原则：**领域层**（后端无关，纯函数优先）→ **传输层**（代理 / 会话 / 重试，领域层与后端层共用）→ **后端层**（可插拔，读/写/附件由 capabilities 标注）→ **配置层** → **CLI 编排层**（入口只管分发，命令按意图分族在 `commands/`）。
 
 ## 测试
 
