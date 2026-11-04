@@ -166,6 +166,8 @@ if [ "${INSTALL_PKG}" = "1" ]; then
     python3 -m pip install --break-system-packages --user playwright
     python3 -m playwright install chromium
     if [ "${WITH_CNKI}" = "1" ]; then
+      # jieba 只服务知网的查询分词(中文关键词连写时 CNKI 会当成一个词而 0 命中)。
+      python3 -m pip install --break-system-packages --user jieba
       echo "[litcli] CNKI 依赖已装。首次搜索会在可见浏览器里请你手动过滑块 + 登录知网(校外账号),之后会话复用。"
     fi
     if [ "${WITH_DOUBAN}" = "1" ]; then

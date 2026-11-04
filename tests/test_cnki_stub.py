@@ -12,7 +12,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from litcli.backends.cnki import CnkiBackend, rows_to_items
+from litcli.backends.cnki import CnkiBackend, kw_expression, rows_to_items, split_terms
 from litcli.models import extract_year, normalize_author_name
 from litcli import config
 
@@ -68,6 +68,63 @@ class CnkiParseTest(unittest.TestCase):
         self.assertEqual(extract_year("2016年6月"), "2016")
         self.assertEqual(extract_year("no digits"), "")
         self.assertEqual(extract_year(""), "")
+
+
+# --- query term splitting (pure) ---
+
+class CnkiSplitTermsTest(unittest.TestCase):
+    def test_concatenated_keywords_become_separate_terms(self):
+        # CNKI matches a concatenated run as one term and returns 0; the words must be split.
+        out = split_terms("风电叶片复合材料疲劳损伤寿命预测")
+        self.assertIn(" ", out)
+        self.assertEqual(out.replace(" ", ""), "风电叶片复合材料疲劳损伤寿命预测")
+        self.assertIn("风电", out)
+        self.assertIn("预测", out)
+
+    def test_already_separated_query_is_kept(self):
+        self.assertEqual(split_terms("深度学习 图像分类"), "深度学习 图像分类")
+
+    def test_short_runs_are_left_alone(self):
+        # A single word / short fixed term needs no splitting, with or without neighbours.
+        self.assertEqual(split_terms("湍流"), "湍流")
+        self.assertEqual(split_terms("深度学习 湍流"), "深度学习 湍流")
+
+    def test_latin_and_operators_untouched(self):
+        self.assertEqual(split_terms("RANS 湍流模型"), "RANS 湍流模型")
+        self.assertEqual(split_terms("A AND B"), "A AND B")
+
+    def test_mixed_run_segments_only_the_cjk_part(self):
+        out = split_terms("OpenFOAM湍流模型验证")
+        self.assertIn("OpenFOAM", out)
+        self.assertIn("湍流", out)
+
+    def test_empty_query(self):
+        self.assertEqual(split_terms(""), "")
+        self.assertEqual(split_terms("   "), "")
+
+    def test_terms_are_and_joined_with_star(self):
+        # Whitespace (and '+') OR the words on CNKI; only '*' ANDs them.
+        expr = kw_expression("风电叶片复合材料疲劳损伤寿命预测")
+        self.assertIn("*", expr)
+        self.assertNotIn(" ", expr)
+        self.assertEqual(expr.replace("*", ""), "风电叶片复合材料疲劳损伤寿命预测")
+
+    def test_user_written_operators_keep_the_query_verbatim(self):
+        self.assertEqual(kw_expression("湍流 大涡模拟"), "湍流*大涡模拟")
+        self.assertEqual(kw_expression("湍流*大涡模拟"), "湍流*大涡模拟")
+        self.assertEqual(kw_expression("湍流+大涡模拟"), "湍流+大涡模拟")
+        self.assertEqual(kw_expression("湍流 AND 大涡模拟"), "湍流 AND 大涡模拟")
+
+    def test_page_url_encodes_the_and_expression(self):
+        # The adapter must send the split, AND-joined query, not the raw concatenation.
+        url = CnkiBackend()._page_url("风电叶片复合材料疲劳损伤寿命预测")
+        self.assertTrue(url.endswith("%E9%A2%84%E6%B5%8B"), url)  # "预测", no trailing separator
+        self.assertIn("kw=%E9%A3%8E%E7%94%B5%2A", url)  # "风电*" at the start
+
+    @mock.patch("litcli.backends.cnki._lcut", False)
+    def test_falls_back_to_the_raw_run_without_jieba(self):
+        self.assertEqual(split_terms("风电叶片复合材料疲劳损伤寿命预测"),
+                         "风电叶片复合材料疲劳损伤寿命预测")
 
 
 # --- backend register ---

@@ -27,6 +27,11 @@ classifiers = [
   "Topic :: Scientific/Engineering",
 ]
 
+[project.optional-dependencies]
+# Browser-driven backends (install.sh --with-cnki / --with-douban installs these too).
+cnki = ["playwright>=1.40", "jieba>=0.42"]   # jieba: splits concatenated Chinese keywords
+douban = ["playwright>=1.40"]
+
 [project.urls]
 Homepage = "https://gitee.com/simult/litcli"
 Repository = "https://gitee.com/simult/litcli"

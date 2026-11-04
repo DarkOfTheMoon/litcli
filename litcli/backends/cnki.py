@@ -24,6 +24,8 @@ session; it does not programmatically bypass the captcha or scrape paywalled ful
 """
 from __future__ import annotations
 
+import logging
+import re
 from pathlib import Path
 from urllib.parse import urljoin, urlencode
 
@@ -53,6 +55,60 @@ _ROW_CELLS = {
 
 # Result-row node selector (shared by virtualizing and by the positive-signal wait below).
 _ROW_SELECTOR = ".result-table-list tbody tr, .result-list tbody tr, .list2_table tbody tr, div.result-table-item"
+
+# CJK ideographs (BMP, extension A, compatibility) - the runs the query term splitter targets.
+_CJK_RUN_RE = re.compile(r"[㐀-䶿一-鿿豈-﫿]+")
+#: A CJK run shorter than this is one word or a short fixed term CNKI matches as-is.
+_MIN_SPLIT = 5
+#: Boolean operators a user may already have put in the query (left as typed).
+_OPERATOR_RE = re.compile(r"[*+]|\b(?:AND|OR|NOT)\b", re.IGNORECASE)
+
+# jieba's segmenter, imported on first use (it loads a dictionary, so never at module import).
+_lcut = None
+
+
+def _segment(run: str) -> str:
+    """Space-separate one CJK run into words (jieba, or the run unchanged when unavailable)."""
+    global _lcut
+    if _lcut is None:
+        try:
+            import jieba
+
+            jieba.setLogLevel(logging.INFO)  # first cut logs "Building prefix dict" otherwise
+            _lcut = jieba.lcut
+        except ImportError:  # optional dependency; the caller still gets a usable query
+            _lcut = False
+    if not _lcut:
+        return run
+    return " ".join(word for word in _lcut(run) if word.strip())
+
+
+def split_terms(query: str) -> str:
+    """Split concatenated Chinese keywords into space-separated words.
+
+    CNKI's simple ``kw`` box matches the whole string as a single term, so
+    ``风电叶片复合材料疲劳损伤寿命预测`` returns nothing while
+    ``风电叶片 复合材料 疲劳损伤 寿命预测`` matches. Every CJK run of ``_MIN_SPLIT`` chars or
+    more is segmented; explicit separators, operators and Latin text are left untouched.
+    """
+    out = _CJK_RUN_RE.sub(lambda m: _segment(m.group(0))
+                          if len(m.group(0)) >= _MIN_SPLIT else m.group(0), query or "")
+    return " ".join(out.split())
+
+
+def kw_expression(query: str) -> str:
+    """Turn a query into a CNKI ``kw`` expression that ANDs its terms.
+
+    In ``kw``, whitespace and ``+`` mean *or* (an energy query over four terms yielded
+    705,032 hits led by unrelated recent papers), while ``*`` means *and* (the same query
+    with ``*`` yielded 16 hits, all on topic). So the split words are joined with ``*``.
+    A query that already carries an operator (``*``, ``+``, AND/OR/NOT) is left as the user
+    wrote it, whitespace included.
+    """
+    spaced = split_terms(query)
+    if _OPERATOR_RE.search(spaced):
+        return spaced
+    return "*".join(spaced.split())
 
 
 def _row_to_item(row: dict, source: str = _SOURCE) -> AcademicItem:
@@ -106,7 +162,7 @@ class CnkiBackend(PlaywrightBackend):
                          timeout=timeout, max_results=max_results)
 
     def _page_url(self, query: str) -> str:
-        return f"{_SEARCH_URL}?{urlencode({'kw': query})}"
+        return f"{_SEARCH_URL}?{urlencode({'kw': kw_expression(query)})}"
 
     def _detect_captcha(self, page) -> bool:
         """Return True if the page is a CNKI slider captcha (``/verify/`` URL or slider text)."""
@@ -217,7 +273,12 @@ class CnkiBackend(PlaywrightBackend):
         self._wait_for_signal(page, _ROW_SELECTOR)
 
     def search(self, query: str, limit: int = 10, filters: dict | None = None) -> list[AcademicItem]:
-        """Search CNKI and return normalized title metadata (read-only)."""
+        """Search CNKI and return normalized title metadata (read-only).
+
+        Concatenated Chinese keywords are split into words and AND-joined
+        (:func:`kw_expression`); CNKI would otherwise match the whole run as one term and
+        find nothing, and its plain whitespace separator only ORs the words.
+        """
         filters = self._filters(filters)
         # CNKI has no stabilized field query we can rely on; fold title/author words into
         # the free query so a broad hit is still narrowed (post-filter below is optional).
@@ -243,7 +304,7 @@ class CnkiBackend(PlaywrightBackend):
         if not key:
             raise KeyError(f"[{self.name}] empty key")
         with self._browser() as page:
-            url = key if key.startswith("http") else f"{_SEARCH_URL}?kw={key}"
+            url = key if key.startswith("http") else self._page_url(key)
             self._open_results(page, url)
             title = page.title()
             if not title or "安全验证" in title:
