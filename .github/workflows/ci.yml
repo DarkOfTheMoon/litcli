@@ -2,7 +2,8 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master]
+    tags: ["v*"]
   pull_request:
 
 jobs:
@@ -16,6 +17,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Lint (ruff, configured in pyproject.toml)
+        run: |
+          pip install ruff
+          ruff check litcli tests
       # Install builds the package from pyproject (verifies packaging metadata + console entry point).
       - name: Install package
         run: pip install .
@@ -23,3 +28,20 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Smoke-test console entry point
         run: litcli --version
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Releases ship an sdist + a wheel built exactly this way; a broken build must fail CI.
+      - name: Build sdist and wheel
+        run: |
+          pip install build
+          python -m build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

@@ -19,7 +19,27 @@ litcli backends       # 自测：列出已配置后端及能力
 ./bin/litcli search "drop"
 ```
 
+从某个发布版本安装（发布页附 `SHA256SUMS`，可先校验再装）：
+
+```bash
+git clone --branch v0.1.0 --depth 1 https://gitee.com/simult/litcli.git litcli-0.1.0
+cd litcli-0.1.0 && ./install.sh
+# 或者用发布页上的 wheel：pip install --break-system-packages --user litcli-0.1.0-py3-none-any.whl
+```
+
 PDF 全文抽取依赖系统 `pdftotext`（poppler-utils）；缺失时返回空文本，其余功能不受影响。
+
+### 发布
+
+`scripts/release.sh` 是唯一的发布入口，全程非交互。它先跑门禁——在 `master` 且与 origin 齐平、工作区干净、全量测试绿、`ruff` 干净、能出包、CHANGELOG 的 `[Unreleased]` 非空、目标 tag 未被占用——全部通过才改版本号、把 `[Unreleased]` 收成带日期的版本段、提交 `chore(release): vX.Y.Z`、打 tag、构建 `dist/` 与 `SHA256SUMS`。
+
+```bash
+scripts/release.sh --check                     # 只跑门禁，什么都不改
+scripts/release.sh --dry-run                   # 门禁 + 预演，不落盘
+scripts/release.sh --bump minor --push         # 真发：推 master + tag；设了 GITEE_TOKEN 就建 Gitee Release 并挂产物
+```
+
+`--push` 之前改动只在本地（tag 也在本地）；外发是单独一步。版本号唯一来源是 `litcli/_version.py`（`pyproject.toml` 动态读它），首个版本用 `--bump none` 原地发。
 
 ### 技能分发（不绑定某个 agent）
 
@@ -142,6 +162,7 @@ skills/litcli/      agent 技能源（install.sh 按目标 agent 分发）
 
 ```bash
 python3 -m unittest discover -s tests
+ruff check litcli tests          # 规则集固定在 pyproject.toml 的 [tool.ruff]
 ```
 
 用 stub 服务器 / `httpx.MockTransport` 离线跑（不连真库、不联网）：覆盖归一化、聚合去重/合并/排序、Zotero 写入请求形状（含 `Zotero-Server-ID` / `If-Unmodified-Since-Version`）、arXiv 请求构造与 Atom 解析、错误包装。
