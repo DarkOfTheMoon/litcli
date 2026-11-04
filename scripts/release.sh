@@ -22,8 +22,9 @@
 #   scripts/release.sh --check                                  gates only, change nothing
 #   scripts/release.sh --dry-run                                gates + show what would happen
 #   scripts/release.sh [--bump patch|minor|major|none] [--notes <file.md>] [--push] [--no-release]
-#   scripts/release.sh --release-only                           (re)create the Release of the tag on
-#                                                               HEAD; nothing is bumped or pushed
+#   scripts/release.sh --release-only [vX.Y.Z]                  (re)create the Release of that tag
+#                                                               (default: the tag on HEAD); nothing is
+#                                                               bumped, committed or pushed
 #
 # Environment:
 #   GITEE_TOKEN   Gitee personal access token (releases scope), falls back to
@@ -40,72 +41,6 @@ BRANCH_REQUIRED="master"
 GITEE_API="https://gitee.com/api/v5"
 # owner/repo from git@gitee.com:owner/repo.git (strip .git first; a lazy regex swallows it)
 GITEE_PROJECT="$(git remote get-url origin | sed -E 's#\.git$##; s#^.*[:/]([^/]+/[^/]+)$#\1#')"
-
-CHECK_ONLY=0
-DRY_RUN=0
-RELEASE_ONLY=0
-BUMP="patch"
-NOTES_FILE=""
-DO_PUSH=0
-DO_RELEASE=1
-
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --check) CHECK_ONLY=1 ;;
-    --dry-run) DRY_RUN=1 ;;
-    --release-only) RELEASE_ONLY=1 ;;
-    --bump) BUMP="${2:?--bump needs an argument}"; shift ;;
-    --notes) NOTES_FILE="${2:?--notes needs a path}"; shift ;;
-    --push) DO_PUSH=1 ;;
-    --no-release) DO_RELEASE=0 ;;
-    -h|--help) sed -n '2,33p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) echo "unknown argument: $1" >&2; exit 2 ;;
-  esac
-  shift
-done
-case "$BUMP" in major|minor|patch|none) ;; *) echo "--bump must be major|minor|patch|none" >&2; exit 2 ;; esac
-
-# Secret lookup: environment first, then the untracked per-user file (600).
-if [ -z "${GITEE_TOKEN:-}" ] && [ -f "${HOME}/.config/litcli/gitee.token" ]; then
-  GITEE_TOKEN="$(tr -d '\n' < "${HOME}/.config/litcli/gitee.token")"
-fi
-
-# Re-attach a Release to a tag that already exists (the run that cut it had no token, the token
-# was missing the scope, or the upload half-failed). Nothing is bumped, committed or pushed.
-if [ "$RELEASE_ONLY" = 1 ]; then
-  REL_VER="$(git describe --tags --exact-match HEAD 2>/dev/null || true)"
-  [ -n "$REL_VER" ] || { echo "--release-only: HEAD is not tagged" >&2; exit 1; }
-  REL_VER="${REL_VER#v}"
-  echo "==> release-only: v$REL_VER"
-  git ls-remote --tags --exit-code origin "refs/tags/v$REL_VER" >/dev/null 2>&1 || {
-    echo "  ✗ v$REL_VER is not pushed yet: git push origin v$REL_VER" >&2; exit 1; }
-  echo "  ✓ tag is pushed"
-  if [ ! -d dist ] || [ -z "$(ls -A dist 2>/dev/null)" ]; then
-    echo "  - dist/ missing, rebuilding ..."
-    python3 -m build --no-isolation --outdir dist >/dev/null
-    ( cd dist && sha256sum ./* > SHA256SUMS )
-    echo "  ✓ dist/ rebuilt"
-  fi
-  publish_release "$REL_VER" || exit 1
-  echo "==> done: v$REL_VER"
-  exit 0
-fi
-
-# The target version is resolved up front so gate ⑦ tests what will actually be tagged.
-VER="$(python3 -c "import re,pathlib; print(re.search(r'__version__ = \"(.*)\"', pathlib.Path('$VERSION_FILE').read_text()).group(1))")"
-bump_ver() {
-  python3 - "$VER" "$1" <<'PY'
-import sys
-if sys.argv[2] == "none":
-    print(sys.argv[1]); raise SystemExit
-v = [int(x) for x in sys.argv[1].split(".")]
-if sys.argv[2] == "major": v = [v[0] + 1, 0, 0]
-elif sys.argv[2] == "minor": v = [v[0], v[1] + 1, 0]
-else: v = [v[0], v[1], v[2] + 1]
-print(".".join(map(str, v)))
-PY
-}
-NEW_VER="$(bump_ver "$BUMP")"
 
 publish_release() {
   local ver="$1" notes
@@ -141,6 +76,76 @@ PAYLOAD
       && echo "  ✓ attached $(basename "$f")" || echo "  ✗ attach failed: $(basename "$f")" >&2
   done
 }
+
+CHECK_ONLY=0
+DRY_RUN=0
+RELEASE_ONLY=0
+BUMP="patch"
+NOTES_FILE=""
+DO_PUSH=0
+DO_RELEASE=1
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --check) CHECK_ONLY=1 ;;
+    --dry-run) DRY_RUN=1 ;;
+    --release-only) RELEASE_ONLY=1
+      case "${2:-}" in v[0-9]*|[0-9]*) REL_VER="${2#v}"; shift ;; esac ;;
+    --bump) BUMP="${2:?--bump needs an argument}"; shift ;;
+    --notes) NOTES_FILE="${2:?--notes needs a path}"; shift ;;
+    --push) DO_PUSH=1 ;;
+    --no-release) DO_RELEASE=0 ;;
+    -h|--help) sed -n '2,33p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+  esac
+  shift
+done
+case "$BUMP" in major|minor|patch|none) ;; *) echo "--bump must be major|minor|patch|none" >&2; exit 2 ;; esac
+
+# Secret lookup: environment first, then the untracked per-user file (600).
+if [ -z "${GITEE_TOKEN:-}" ] && [ -f "${HOME}/.config/litcli/gitee.token" ]; then
+  GITEE_TOKEN="$(tr -d '\n' < "${HOME}/.config/litcli/gitee.token")"
+fi
+
+# Re-attach a Release to a tag that already exists (the run that cut it had no token, the token
+# was missing the scope, or the upload half-failed). Nothing is bumped, committed or pushed.
+if [ "$RELEASE_ONLY" = 1 ]; then
+  if [ -z "${REL_VER:-}" ]; then
+    REL_VER="$(git describe --tags --exact-match HEAD 2>/dev/null || git describe --tags --abbrev=0)"
+  fi
+  REL_VER="${REL_VER#v}"
+  git rev-parse --verify --quiet "refs/tags/v$REL_VER" >/dev/null || {
+    echo "--release-only: v$REL_VER is not a tag" >&2; exit 1; }
+  echo "==> release-only: v$REL_VER"
+  git ls-remote --tags --exit-code origin "refs/tags/v$REL_VER" >/dev/null 2>&1 || {
+    echo "  ✗ v$REL_VER is not pushed yet: git push origin v$REL_VER" >&2; exit 1; }
+  echo "  ✓ tag is pushed"
+  if [ ! -d dist ] || [ -z "$(ls -A dist 2>/dev/null)" ]; then
+    echo "  - dist/ missing, rebuilding ..."
+    python3 -m build --no-isolation --outdir dist >/dev/null
+    ( cd dist && sha256sum ./* > SHA256SUMS )
+    echo "  ✓ dist/ rebuilt"
+  fi
+  publish_release "$REL_VER" || exit 1
+  echo "==> done: v$REL_VER"
+  exit 0
+fi
+
+# The target version is resolved up front so gate ⑦ tests what will actually be tagged.
+VER="$(python3 -c "import re,pathlib; print(re.search(r'__version__ = \"(.*)\"', pathlib.Path('$VERSION_FILE').read_text()).group(1))")"
+bump_ver() {
+  python3 - "$VER" "$1" <<'PY'
+import sys
+if sys.argv[2] == "none":
+    print(sys.argv[1]); raise SystemExit
+v = [int(x) for x in sys.argv[1].split(".")]
+if sys.argv[2] == "major": v = [v[0] + 1, 0, 0]
+elif sys.argv[2] == "minor": v = [v[0], v[1] + 1, 0]
+else: v = [v[0], v[1], v[2] + 1]
+print(".".join(map(str, v)))
+PY
+}
+NEW_VER="$(bump_ver "$BUMP")"
 
 fail=""
 echo "==> [1/6] gates"
