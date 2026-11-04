@@ -2,6 +2,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from typing import ClassVar
 from unittest import mock
 
 from litcli import config
@@ -21,7 +22,7 @@ class TestConfig(unittest.TestCase):
 
     def test_a_broken_backend_does_not_take_the_others_down(self):
         class _B:
-            capabilities = {"read"}
+            capabilities: ClassVar[set[str]] = {"read"}
 
         def fake(name, bcfg):
             if name == "bad":
@@ -59,7 +60,8 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(backends["a"].name, "a")
 
     def test_write_backend_key_creates_skeleton(self):
-        # When the file is missing, write the built-in default skeleton first, then inject api_key into the zotero section
+        # When the file is missing, write the built-in default skeleton first, then inject api_key into
+        # the zotero section
         d = Path(tempfile.mkdtemp())
         cfg = d / "config.toml"
         cfg.unlink(missing_ok=True)
@@ -76,7 +78,8 @@ class TestConfig(unittest.TestCase):
         # Existing zotero section already has api_key: replace rather than duplicate
         d = Path(tempfile.mkdtemp())
         cfg = d / "config.toml"
-        cfg.write_text("[backends.zotero]\ntype = \"zotero_local\"\nbase = \"http://x\"\napi_key = \"OLD\"\n\n[backends.arxiv]\ntype = \"arxiv\"\n", encoding="utf-8")
+        cfg.write_text("[backends.zotero]\ntype = \"zotero_local\"\nbase = \"http://x\"\n"
+                       "api_key = \"OLD\"\n\n[backends.arxiv]\ntype = \"arxiv\"\n", encoding="utf-8")
         config.write_backend_key("zotero", "NEW", path=cfg)
         text = cfg.read_text()
         self.assertIn("api_key = \"NEW\"", text)

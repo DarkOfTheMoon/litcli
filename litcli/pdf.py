@@ -40,9 +40,8 @@ def extract_text(pdf: str | bytes, max_chars: int | None = None, first_page: boo
     is_bytes = isinstance(pdf, (bytes, bytearray))
     cleanup = None
     if is_bytes:
-        tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
-        tmp.write(pdf)
-        tmp.close()
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp.write(pdf)
         path = tmp.name
         cleanup = path
     else:

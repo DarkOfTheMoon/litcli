@@ -1,10 +1,12 @@
 """Aggregate domain-layer unit tests: normalization / identity keys / dedup / merge / sort."""
+import os
+import sys
 import unittest
-import sys, os
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from litcli.aggregate import identity, merge_items, norm_doi, norm_isbn, norm_title
 from litcli.models import AcademicItem
-from litcli.aggregate import norm_title, norm_doi, norm_isbn, identity, merge_items
 
 
 class NormTest(unittest.TestCase):
@@ -98,7 +100,8 @@ class MergeTest(unittest.TestCase):
         self.assertIsNot(out[0], a)
 
     def test_merge_backfills_container_fields(self):
-        # crossref has volume/pages but no abstract; openalex has abstract but no volume/pages; after merging both are present
+        # crossref has volume/pages but no abstract; openalex has abstract but no volume/pages; after
+        # merging both are present
         a = AcademicItem(source="crossref", key="10.1/x", title="T", doi="10.1/x",
                          container_title="J. Fluid Mech.", volume="45", page="1-9")
         b = AcademicItem(source="openalex", key="10.1/x", title="T", doi="10.1/x",

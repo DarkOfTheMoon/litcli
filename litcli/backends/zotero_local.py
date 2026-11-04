@@ -6,6 +6,7 @@ to the real library id). Writes use the If-Unmodified-Since-Version concurrency-
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import time
@@ -30,6 +31,9 @@ _ITEMTYPE_MAP = {
 
 # Zotero write-JSON field names (camelCase) and the AcademicItem correspondence
 _ZOTERO_RESPONSE_FIELDS = ("version", "key")
+
+# Appended to any 401 so the operator knows the one-off fix (the key is granted at runtime).
+_WRITE_HINT = "; writing needs a local authorization key, run `litcli backends authorize zotero`"
 
 
 def first_digit_year(text: str) -> str:
@@ -198,10 +202,8 @@ class ZoteroLocalBackend(HttpBackend):
                 headers.setdefault("Zotero-Server-ID", sid)
             if not self._api_key:
                 # Lazily obtain the local authorization key (first time only; skipped when config provides an api_key)
-                try:
+                with contextlib.suppress(RuntimeError):
                     self._write_key()
-                except RuntimeError:
-                    pass
                 headers["Zotero-API-Key"] = self._app_key_val or "localhost"
         data = json.dumps(body).encode() if body is not None else None
         r = self.request(method, url, content=data, headers=headers,
@@ -227,7 +229,7 @@ class ZoteroLocalBackend(HttpBackend):
         if filt.get("year") and filt["year"].isdigit():
             terms.append(filt["year"])
         q = " ".join(terms) or query
-        headers, data = self._json_path(
+        _headers, data = self._json_path(
             f"/{self._users}/items",
             {"q": q, "qmode": "everything", "limit": limit, "format": "json"})
         return [_item_to_academic(it["data"], self.name) for it in (data or []) if "data" in it]
@@ -372,12 +374,12 @@ class ZoteroLocalBackend(HttpBackend):
         version = self._library_version()
         # The local API write body uses a plain JSON array (not the Web API's {"items": [...]})
         payload = [self._to_zotero_json(item)]
-        status, headers, raw = self._request(
+        status, _headers, raw = self._request(
             "POST", f"/{self._users}/items", body=payload,
             extra_headers={"If-Unmodified-Since-Version": version},
         )
         if status >= 400:
-            hint = "; writing needs a local authorization key, run `litcli backends authorize zotero`" if status == 401 else ""
+            hint = _WRITE_HINT if status == 401 else ""
             raise RuntimeError(f"[{self.name}] add -> HTTP {status}{hint}: {raw[:250]!r}")
         resp = json.loads(raw) or {}
         ok = resp.get("successful", {}) or {}
@@ -408,7 +410,7 @@ class ZoteroLocalBackend(HttpBackend):
             extra_headers={"If-Unmodified-Since-Version": str(version)},
         )
         if status >= 400:
-            hint = "; writing needs a local authorization key, run `litcli backends authorize zotero`" if status == 401 else ""
+            hint = _WRITE_HINT if status == 401 else ""
             raise RuntimeError(f"[{self.name}] patch {key} -> HTTP {status}{hint}: {raw[:250]!r}")
         return self.get(key)
 
@@ -421,7 +423,7 @@ class ZoteroLocalBackend(HttpBackend):
             extra_headers={"If-Unmodified-Since-Version": version},
         )
         if status >= 400:
-            hint = "; writing needs a local authorization key, run `litcli backends authorize zotero`" if status == 401 else ""
+            hint = _WRITE_HINT if status == 401 else ""
             raise RuntimeError(f"[{self.name}] delete {key} -> HTTP {status}{hint}: {raw[:250]!r}")
 
     def attach(self, key: str, src: str) -> str:
@@ -449,7 +451,7 @@ class ZoteroLocalBackend(HttpBackend):
             extra_headers={"If-Unmodified-Since-Version": version},
         )
         if status >= 400:
-            hint = "; writing needs a local authorization key, run `litcli backends authorize zotero`" if status == 401 else ""
+            hint = _WRITE_HINT if status == 401 else ""
             raise RuntimeError(f"[{self.name}] attach {key} -> HTTP {status}{hint}: {raw[:250]!r}")
         resp = json.loads(raw) or {}
         ok = resp.get("successful", {}) or {}
@@ -466,7 +468,8 @@ class ZoteroLocalBackend(HttpBackend):
 
     @staticmethod
     def _to_zotero_json(item: AcademicItem) -> dict:
-        # Prefer the original zotero itemType (already stored in extra at parse time); otherwise infer from the CSL type, with article conflicting to journalArticle
+        # Prefer the original zotero itemType (already stored in extra at parse time); otherwise infer
+        # from the CSL type, with article conflicting to journalArticle
         raw_type = item.extra.get("zoteroItemType") if isinstance(item.extra, dict) else None
         if not raw_type:
             csl_to_type = {v: k for k, v in _ITEMTYPE_MAP.items()}

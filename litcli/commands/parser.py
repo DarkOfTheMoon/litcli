@@ -46,7 +46,8 @@ def build_parser() -> argparse.ArgumentParser:
         pg.add_argument("--limit", type=int, default=5)
         pg.add_argument("--format", choices=["table", "json", "csl"], default="table")
         pg.add_argument("--sort", choices=["cited"], default=None,
-                        help="sort descending by citation count (refs/citing are already citation-desc; this flag applies to related)")
+                        help="sort descending by citation count (refs/citing are already citation-desc; "
+                             "this flag applies to related)")
         pg.add_argument("--no-cite", action="store_true", help="do not show in-text citations in table mode")
 
     p = sub.add_parser("export", help="export citations (read-only, no PDF)")
@@ -57,7 +58,8 @@ def build_parser() -> argparse.ArgumentParser:
     cp = sub.add_parser("completions", help="generate shell completion scripts (enable via eval; bash/zsh/fish)")
     cp.add_argument("shell", choices=SHELL_CHOICES, help="target shell")
 
-    p = sub.add_parser("backends", help="backend diagnostics / authorization (get a write key via `backends authorize` before writing)")
+    p = sub.add_parser("backends", help="backend diagnostics / authorization "
+                                        "(get a write key via `backends authorize` before writing)")
     bsub = p.add_subparsers(dest="backends_cmd")
     bsub.add_parser("list", help="list configured backends with capabilities (read-only)")
     bsub.add_parser("status", help="show each backend's authorization / connectivity status (read-only)")
@@ -85,7 +87,8 @@ def build_parser() -> argparse.ArgumentParser:
     dp.add_argument("--url", default="")
     dp.add_argument("--abstract", default="")
     dp.add_argument("--force", action="store_true", help="skip dedup / completeness gate and write directly")
-    dp.add_argument("--yes", action="store_true", help="skip the interactive confirmation prompt (for --pdf; --force already implies this)")
+    dp.add_argument("--yes", action="store_true",
+                    help="skip the interactive confirmation prompt (for --pdf; --force already implies this)")
     add_common_backend(dp)
 
     dp = dsub.add_parser("set", help="modify item fields")
@@ -121,7 +124,9 @@ def build_parser() -> argparse.ArgumentParser:
     f = sub.add_parser("fetch", help="get fulltext / metadata (read-only, no store)")
     fsub = f.add_subparsers(dest="fetch_cmd", required=True)
 
-    fp = fsub.add_parser("fulltext", help="locate fulltext by DOI (local store → Unpaywall → OpenAlex → Europe PMC/Zenodo; --scihub adds a fallback)")
+    fp = fsub.add_parser("fulltext",
+                         help="locate fulltext by DOI (local store → Unpaywall → OpenAlex → Europe PMC/Zenodo; "
+                              "--scihub adds a fallback)")
     fp.add_argument("doi")
     fp.add_argument("--email", default=None)
     fp.add_argument("--download", action="store_true",
@@ -131,7 +136,8 @@ def build_parser() -> argparse.ArgumentParser:
     fp.add_argument("--scihub", action="store_true",
                     help="also try Sci-Hub after the legitimate OA sources (copyright-evading mirror)")
 
-    bp = fsub.add_parser("book", help="search a book by title/ISBN on a book backend (default Z-Library) and resolve one hit")
+    bp = fsub.add_parser("book", help="search a book by title/ISBN on a book backend (default Z-Library) "
+                                     "and resolve one hit")
     bp.add_argument("query", help="title, author or ISBN")
     bp.add_argument("--backend", default="zlibrary", help="book backend (default zlibrary)")
     bp.add_argument("--limit", type=int, default=5, help="candidate count to list")

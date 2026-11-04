@@ -6,6 +6,7 @@ Read-only. search.json searches by title/author, or fetches a single record by a
 from __future__ import annotations
 
 import urllib.parse
+from typing import ClassVar
 
 from ..models import AcademicItem
 from .http import HttpBackend
@@ -46,7 +47,7 @@ def _doc_to_item(doc: dict, source: str = "openlibrary") -> AcademicItem:
 
 class OpenLibraryBackend(HttpBackend):
     UA = "litcli/0.1 (library research)"
-    headers = {"Accept": "application/json"}
+    headers: ClassVar[dict] = {"Accept": "application/json"}
     timeout = 20.0
 
     def __init__(self, name: str = "openlibrary", base: str = _SEARCH, max_results: int = 10):

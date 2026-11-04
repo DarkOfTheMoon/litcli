@@ -7,7 +7,7 @@ suitable for quick CLI previews.
 """
 from __future__ import annotations
 
-from typing import Iterable
+from collections.abc import Iterable
 
 from .models import AcademicItem
 

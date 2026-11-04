@@ -65,7 +65,8 @@ def identity(item: AcademicItem) -> str:
 
 
 def _info_score(item: AcademicItem) -> tuple:
-    """Information-completeness score (coarse): add per present abstract/doi/isbn/url, with title length as the tie-breaker."""
+    """Information-completeness score (coarse): add per present abstract/doi/isbn/url, with title
+    length as the tie-breaker."""
     return (
         1 if item.abstract else 0,
         1 if item.doi else 0,

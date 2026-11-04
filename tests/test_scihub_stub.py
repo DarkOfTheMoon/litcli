@@ -14,7 +14,8 @@ from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from litcli import config, fulltext as ft
+from litcli import config
+from litcli import fulltext as ft
 from litcli.backends import scihub
 
 _PAGE = ('<html><head><meta name="citation_title" content="A Paper">'

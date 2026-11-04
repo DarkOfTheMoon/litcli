@@ -1,7 +1,9 @@
 '''arXiv backend offline stub tests: assert request construction and Atom parsing, and error wrapping.'''
+import os
+import sys
 import unittest
+
 import httpx
-import sys, os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 

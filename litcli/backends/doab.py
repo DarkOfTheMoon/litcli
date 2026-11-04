@@ -16,6 +16,7 @@ against any particular address:
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import html as html_mod
 import json
@@ -93,7 +94,7 @@ def handle_of(entry) -> str:
 
 def _clean_summary(summary: str, title: str, names: list[str]) -> str:
     """Drop the title/author lines the feed repeats at the head of each summary."""
-    for lead in [title] + names:
+    for lead in [title, *names]:
         if lead and summary.startswith(lead):
             summary = summary[len(lead):].lstrip(" ;,.:-")
     return summary
@@ -239,10 +240,9 @@ class DoabBackend(HttpBackend):
         params.update({"redir": redir, "elapsedTime": "0"})
         url = (f"{self._site_root}/.within.website/x/cmd/anubis/api/pass-challenge?"
                f"{urllib.parse.urlencode(params)}")
-        try:  # only the status and the Set-Cookie header matter here
+        # Only the status and the Set-Cookie header matter here.
+        with contextlib.suppress(RuntimeError):
             self.fetch_status(url)
-        except RuntimeError:
-            pass
         # pass-challenge redirects to the target, so a missing record answers 404 even though
         # the cookie was set: judge by the cookie, not by the redirect target's status.
         return self._has_auth_cookie()

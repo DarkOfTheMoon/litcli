@@ -42,13 +42,13 @@ def build_spec(parser: argparse.ArgumentParser) -> dict:
         opts: dict = {}
         for act in parser_._actions:
             if isinstance(act, argparse._SubParsersAction):
-                children = [name for name in act.choices.keys()]
+                children = [name for name in act.choices]
                 if path:
                     spec["subs"][path] = children
                 else:
                     spec["top"] = children
                 for name, sub in act.choices.items():
-                    visit(sub, path + (name,))
+                    visit(sub, (*path, name))
             elif act.option_strings:
                 for flag in act.option_strings:
                     if flag in ("-h", "--help"):
@@ -344,7 +344,7 @@ def _fish_lines(spec: dict) -> list[str]:
                 lines.append(f"complete -c litcli -n '{cond}' -l {name} -r -F")
             elif _boolean_flag(flag):
                 lines.append(f"complete -c litcli -n '{cond}' -l {name}")
-    for (path, table) in spec["file_positionals"].items():
+    for (path, _table) in spec["file_positionals"].items():
         seen = " ".join(path)
         lines.append(f"complete -c litcli -n '__fish_seen_subcommand_from {seen}' -r -F")
     return lines

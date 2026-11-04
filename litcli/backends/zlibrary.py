@@ -39,7 +39,8 @@ import httpx
 
 from ..models import AcademicItem, extract_year, normalize_author_name
 from .base import Backend
-from .scihub import _UA, _Http as _ScihubHttp
+from .scihub import _UA
+from .scihub import _Http as _ScihubHttp
 
 # Entry domains, tried in order. ``z-library.by`` 302s to the live front host (probed
 # 2026-10); the rest are the front hosts themselves, used when the entry is stranded.

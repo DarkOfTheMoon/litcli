@@ -4,19 +4,22 @@ The purpose is to prove the request shape is correct (METHOD/PATH/HEADERS/BODY),
 cause of writes not landing to Zotero-side authorization rather than this code.
 '''
 import json
+import os
+import sys
 import threading
 import unittest
-import sys, os
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from litcli.models import AcademicItem
+from typing import ClassVar
+
 from litcli.backends.zotero_local import ZoteroLocalBackend
+from litcli.models import AcademicItem
 
 
 class _Handler(BaseHTTPRequestHandler):
-    reqlog = []   # (method, path, headers, body)
+    reqlog: ClassVar[list] = []   # (method, path, headers, body)
 
     def _send(self, obj=None, status=200, extra=None):
         body = json.dumps(obj).encode() if obj is not None else b""
@@ -86,7 +89,7 @@ class ZoteroWriteStubTest(unittest.TestCase):
 
     def setUp(self):
         _Handler.reqlog = []
-        self.be = ZoteroLocalBackend(name="zotero", base="http://127.0.0.1:%d/api" % self.port, library="0")
+        self.be = ZoteroLocalBackend(name="zotero", base=f"http://127.0.0.1:{self.port}/api", library="0")
 
     def _headers(self, rec):
         return {k.lower(): v for k, v in rec[2].items()}
@@ -166,7 +169,8 @@ class ZoteroWriteStubTest(unittest.TestCase):
     def test_authorize_obtains_local_key(self):
         key = self.be.authorize()
         self.assertEqual(key, "AUTHKEY123")
-        # subsequent write operations use that key directly, no repeated auth dialog (the second authorize still runs once)
+        # subsequent write operations use that key directly, no repeated auth dialog (the second
+        # authorize still runs once)
         self.assertEqual(self.be._app_key_val, "AUTHKEY123")
         rec = self._find("POST", "local/authorize")
         self.assertIsNotNone(rec)

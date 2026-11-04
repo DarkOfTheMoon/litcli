@@ -10,8 +10,14 @@ from tests.http_stub import Recorder, client_spy
 
 
 class _Tmp:
+    """Stand-in for ``NamedTemporaryFile`` (used as a context manager by ``extract_text``)."""
+
     def __init__(self, *a, **k):
         self.name = "/fake/tmp.pdf"
+    def __enter__(self):
+        return self
+    def __exit__(self, *a):
+        return False
     def write(self, b):
         pass
     def close(self):

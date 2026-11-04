@@ -1,5 +1,6 @@
 """Domain-layer models (CSL convert/build/export) offline unit tests."""
 import unittest
+from typing import ClassVar
 
 from litcli.models import AcademicItem
 
@@ -71,7 +72,7 @@ class TestAcademicItemToRis(unittest.TestCase):
 class TestExportContainerFields(unittest.TestCase):
     """Backfilled export fields: container-title/volume/issue/page/publisher should enter csl/bibtex/ris."""
 
-    ARTL = dict(source="crossref", key="10.1/abc", title="T",
+    ARTL: ClassVar[dict] = dict(source="crossref", key="10.1/abc", title="T",
                 creators=[{"family": "Smith", "given": "J"}], year="2020",
                 container_title="J. Fluid Mech.", volume="45", issue="3", page="123-130",
                 doi="10.1/abc", url="https://doi.org/10.1/abc", item_type="article")
@@ -140,7 +141,7 @@ class TestExportContainerFields(unittest.TestCase):
 class TestExportBookFields(unittest.TestCase):
     """Book isbn/edition should enter csl/bibtex/ris and round-trip via from_csl."""
 
-    BOOK = dict(source="douban", key="subject/3061999", title="有限体积法基础",
+    BOOK: ClassVar[dict] = dict(source="douban", key="subject/3061999", title="有限体积法基础",
                 creators=[{"family": "李仁宪"}], year="1998-09",
                 publisher="国防工业出版社", isbn="9787118048348", edition="第1版",
                 item_type="book", url="https://book.douban.com/subject/3061999/")

@@ -11,6 +11,7 @@ import concurrent.futures
 import http.client
 import re
 import urllib.parse
+from typing import ClassVar
 
 from ..aggregate import cited_key
 from ..models import AcademicItem
@@ -131,7 +132,7 @@ def _work_to_item(rec: dict, source: str = "openalex") -> AcademicItem:
 
 
 class OpenAlexBackend(HttpBackend):
-    headers = {"Accept": "application/json"}
+    headers: ClassVar[dict] = {"Accept": "application/json"}
     http2 = True
 
     def __init__(self, name: str = "openalex", mailto: str = "",

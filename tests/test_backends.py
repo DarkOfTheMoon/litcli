@@ -2,7 +2,7 @@
 import unittest
 import xml.etree.ElementTree as ET
 
-from litcli.backends import zotero_local, arxiv
+from litcli.backends import arxiv, zotero_local
 
 
 class TestZoteroParse(unittest.TestCase):

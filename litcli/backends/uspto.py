@@ -127,5 +127,7 @@ class UsptoBackend(HttpBackend):
         return _pat_to_item(rows[0], self.name)
 
     def get_attachment(self, key: str) -> bytes:
-        # USPTO official full-text PDFs need the key via the print/download endpoint; this does not promise automatic full-text PDF fetching.
-        raise RuntimeError(f"[{self.name}] automatic full-text PDF download not yet supported for {key} (USPTO requires separate authorization)")
+        # USPTO official full-text PDFs need the key via the print/download endpoint; this does not
+        # promise automatic full-text PDF fetching.
+        raise RuntimeError(f"[{self.name}] automatic full-text PDF download not yet supported for {key} "
+                           "(USPTO requires separate authorization)")

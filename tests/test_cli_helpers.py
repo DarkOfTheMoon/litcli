@@ -9,6 +9,8 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from typing import ClassVar
+
 from litcli.backends.base import Backend, NotSupportedError
 from litcli.commands.keys import arxiv_id_from_key, normalize_export_key, normalize_related_key
 from litcli.commands.parser import build_parser
@@ -107,7 +109,7 @@ class FetchBookTest(unittest.TestCase):
 
     class OpenLibrary:
         name = "openlibrary"
-        capabilities = {"read"}
+        capabilities: ClassVar[set[str]] = {"read"}
 
         def search(self, q, limit=10, filters=None):
             return [AcademicItem(source="openlibrary", key="/books/OL1M", title="T", item_type="book")]
@@ -133,6 +135,7 @@ class FetchBookTest(unittest.TestCase):
         import contextlib
         import io
         from unittest import mock
+
         import litcli.cli as cli
 
         buf = io.StringIO()
@@ -158,12 +161,12 @@ class FetchBookTest(unittest.TestCase):
                                 url="https://openlibrary.org/books/OL1M")
 
     def test_metadata_only_backend_has_no_download_hint(self):
-        rc, out = self._run(["fetch", "book", "x", "--backend", "openlibrary"], self.MetadataOnly())
+        _rc, out = self._run(["fetch", "book", "x", "--backend", "openlibrary"], self.MetadataOnly())
         self.assertIn("metadata only, no file", out)
         self.assertNotIn("Add --download", out)
 
     def test_shadow_label_survives_a_renamed_backend(self):
-        rc, out = self._run(["fetch", "book", "x", "--backend", "books"], self.Shadow())
+        _rc, out = self._run(["fetch", "book", "x", "--backend", "books"], self.Shadow())
         self.assertIn("shadow library", out)
         self.assertNotIn("record (open access)", out)
 
@@ -171,8 +174,11 @@ class FetchBookTest(unittest.TestCase):
 class MainCatchTest(unittest.TestCase):
     def test_config_syntax_error_surfaces_as_error(self):
         # A malformed config.toml (TOMLDecodeError) must surface as [error] exit 2, never a traceback.
-        import contextlib, io, tomllib
+        import contextlib
+        import io
+        import tomllib
         from unittest import mock
+
         import litcli.cli as cli
 
         with mock.patch("litcli.cli.load_config", side_effect=tomllib.TOMLDecodeError("bad config")), \
@@ -186,8 +192,11 @@ class MainCatchTest(unittest.TestCase):
 
     def test_search_all_skips_valueerror_backend(self):
         # A single backend returning a non-JSON body (ValueError) must be skipped, not crash --all.
-        import argparse, contextlib, io
+        import argparse
+        import contextlib
+        import io
         from unittest import mock
+
         from litcli.commands.search import cmd_search
         from litcli.models import AcademicItem
 
@@ -208,9 +217,10 @@ class MainCatchTest(unittest.TestCase):
                                   title=None, author=None, year=None, container=None)
         out = io.StringIO()
         err = io.StringIO()
-        with mock.patch("litcli.commands.search.get_all_backends", return_value={"bad": _Raises(), "ok": _Ok()}):
-            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-                rc = cmd_search({}, args)
+        backend_map = {"bad": _Raises(), "ok": _Ok()}
+        with mock.patch("litcli.commands.search.get_all_backends", return_value=backend_map), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = cmd_search({}, args)
         self.assertEqual(rc, 0)
         self.assertIn("[skipped]", err.getvalue())
         self.assertIn("Good", out.getvalue())

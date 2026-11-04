@@ -15,8 +15,9 @@ from ..models import AcademicItem
 class NotSupportedError(NotImplementedError):
     """Raised when an unsupported operation is attempted on a given backend."""
 
-    def __init__(self, op: str, backend: "Backend"):
-        super().__init__(f"[{backend.name}] does not support operation {op} (capabilities={sorted(backend.capabilities)})")
+    def __init__(self, op: str, backend: Backend):
+        super().__init__(f"[{backend.name}] does not support operation {op} "
+                         f"(capabilities={sorted(backend.capabilities)})")
 
 
 class Backend(ABC):

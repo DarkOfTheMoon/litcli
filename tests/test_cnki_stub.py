@@ -5,17 +5,16 @@ network; these tests mock the browser (sync_api -> launch_persistent_context) so
 adapter's captcha detection and row virtualisation are exercised without a real browser
 or any network. The parser (rows_to_items / _normalize_author) is pure and browser-free.
 """
-import sys
 import os
+import sys
 import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from litcli import config
 from litcli.backends.cnki import CnkiBackend, kw_expression, rows_to_items, split_terms
 from litcli.models import extract_year, normalize_author_name
-from litcli import config
-
 
 # --- pure parser / author normalisation ---
 
@@ -245,9 +244,9 @@ class CnkiAdapterTest(unittest.TestCase):
 
     def test_missing_playwright_raises_clear_message(self):
         cnki = CnkiBackend()
-        with mock.patch.dict(sys.modules, {"playwright.sync_api": None}):
-            with self.assertRaises(RuntimeError) as ctx:
-                cnki._playwright()
+        with mock.patch.dict(sys.modules, {"playwright.sync_api": None}), \
+                self.assertRaises(RuntimeError) as ctx:
+            cnki._playwright()
         self.assertIn("Playwright is not installed", str(ctx.exception))
         self.assertIn("--with-cnki", str(ctx.exception))
 

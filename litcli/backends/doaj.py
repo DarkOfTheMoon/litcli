@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 import urllib.parse
+from typing import ClassVar
 
 from ..models import AcademicItem, extract_year, normalize_author_name
 from .http import HttpBackend
@@ -93,7 +94,7 @@ def record_to_item(result: dict, source: str = "doaj") -> AcademicItem:
 class DoajBackend(HttpBackend):
     """Read-only search across open-access journal articles."""
 
-    headers = {"Accept": "application/json"}
+    headers: ClassVar[dict] = {"Accept": "application/json"}
 
     def __init__(self, name: str = "doaj", base: str = _API, timeout: int = 25, delay: float = 1.0):
         super().__init__(name=name, timeout=timeout, min_interval=delay)

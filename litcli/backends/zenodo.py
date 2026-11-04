@@ -9,6 +9,7 @@ from __future__ import annotations
 import html
 import re
 import urllib.parse
+from typing import ClassVar
 
 from ..models import AcademicItem, extract_year, normalize_author_name
 from .http import HttpBackend
@@ -83,7 +84,7 @@ def record_to_item(record: dict, source: str = "zenodo") -> AcademicItem:
 class ZenodoBackend(HttpBackend):
     """Read-only search over openly licensed records (datasets, software, preprints, reports)."""
 
-    headers = {"Accept": "application/json"}
+    headers: ClassVar[dict] = {"Accept": "application/json"}
 
     def __init__(self, name: str = "zenodo", base: str = _API, timeout: int = 30, delay: float = 1.0):
         super().__init__(name=name, timeout=timeout, rate=1, min_interval=delay)

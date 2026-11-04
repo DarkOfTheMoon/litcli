@@ -29,7 +29,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from ..models import AcademicItem, extract_year, normalize_author_name
-from .playwright import PlaywrightBackend, _PLAYWRIGHT_HINT
+from .playwright import _PLAYWRIGHT_HINT, PlaywrightBackend
 
 # Product version, used only by the pure parsers for the AcademicItem.extra provenance.
 _SOURCE = "douban"
@@ -136,7 +136,8 @@ _INFO_FIELDS = {"作者": "author", "出版社": "publisher", "出版年": "pubd
 def _parse_info(info_text: str) -> dict:
     """Parse a subject page's ``#info`` text into field dict (author/publisher/...).
 
-    Format observed live: ``作者: 李人宪\n出版社: 国防工业出版社\n出版年: 2008-3\nISBN: 9787118055559\n页数: 226\n定价: 22.00元``.
+    Format observed live: ``作者: 李人宪\n出版社: 国防工业出版社\n出版年: 2008-3\nISBN: 9787118055559``
+    ``\n页数: 226\n定价: 22.00元``.
     ``#info`` is block-level, so ``innerText`` joins label/value pairs with ``\\n``
     (the canonical separator for this adapter). Each line is ``label: value`` (``:``
     ASCII or fullwidth). Returns a dict with keys author / publisher / pubdate / isbn /

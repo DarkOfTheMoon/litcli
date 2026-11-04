@@ -145,7 +145,7 @@ class ChallengeTest(unittest.TestCase):
         with mock.patch.object(http, "_raw", side_effect=[
                 ("https://zl.test/s/x", 503, _CAPTCHA.encode()),
                 ("https://zl.test/s/x", 200, b"<html>ok</html>")]) as raw:
-            final, status, body = http.fetch("https://zl.test/s/x")
+            _final, status, body = http.fetch("https://zl.test/s/x")
         self.assertEqual((status, body), (200, b"<html>ok</html>"))
         self.assertEqual(raw.call_count, 2)
         cookie = {c.name: c.value for c in http._client.cookies.jar}
@@ -247,35 +247,35 @@ class BackendTest(unittest.TestCase):
 
     def test_get_missing_book_raises_keyerror(self):
         backend, _ = _backend()
-        with mock.patch.object(ZlibraryBackend, "_resolve_base", return_value="https://zl.test"):
-            with self.assertRaises(KeyError):
-                backend.get("book/NOPE123/x.html")
+        with mock.patch.object(ZlibraryBackend, "_resolve_base", return_value="https://zl.test"), \
+                self.assertRaises(KeyError):
+            backend.get("book/NOPE123/x.html")
 
     def test_get_attachment_downloads_pdf(self):
-        backend, http = _backend(**{_BOOK_URL: _BOOK, _DL_URL: b"%PDF-1.7 bytes"})
+        backend, _http = _backend(**{_BOOK_URL: _BOOK, _DL_URL: b"%PDF-1.7 bytes"})
         with mock.patch.object(ZlibraryBackend, "_resolve_base", return_value="https://zl.test"):
             self.assertEqual(backend.get_attachment("book/BEmQB5d5EN/x.html"), b"%PDF-1.7 bytes")
 
     def test_unavailable_page_204_reports_actionable_error(self):
         backend, _ = _backend(empty={_BOOK_URL})
-        with mock.patch.object(ZlibraryBackend, "_resolve_base", return_value="https://zl.test"):
-            with self.assertRaises(RuntimeError) as ctx:
-                backend.get("book/BEmQB5d5EN/x.html")
+        with mock.patch.object(ZlibraryBackend, "_resolve_base", return_value="https://zl.test"), \
+                self.assertRaises(RuntimeError) as ctx:
+            backend.get("book/BEmQB5d5EN/x.html")
         self.assertIn("HTTP 204", str(ctx.exception))
         self.assertIn("another candidate", str(ctx.exception))
 
     def test_get_attachment_204_reports_limit(self):
         backend, _ = _backend(empty={_DL_URL}, **{_BOOK_URL: _BOOK})
-        with mock.patch.object(ZlibraryBackend, "_resolve_base", return_value="https://zl.test"):
-            with self.assertRaises(RuntimeError) as ctx:
-                backend.get_attachment("book/BEmQB5d5EN/x.html")
+        with mock.patch.object(ZlibraryBackend, "_resolve_base", return_value="https://zl.test"), \
+                self.assertRaises(RuntimeError) as ctx:
+            backend.get_attachment("book/BEmQB5d5EN/x.html")
         self.assertIn("daily download limit", str(ctx.exception))
 
     def test_get_attachment_rejects_non_pdf(self):
         backend, _ = _backend(**{_BOOK_URL: _BOOK, _DL_URL: b"<html>login</html>"})
-        with mock.patch.object(ZlibraryBackend, "_resolve_base", return_value="https://zl.test"):
-            with self.assertRaises(RuntimeError):
-                backend.get_attachment("book/BEmQB5d5EN/x.html")
+        with mock.patch.object(ZlibraryBackend, "_resolve_base", return_value="https://zl.test"), \
+                self.assertRaises(RuntimeError):
+            backend.get_attachment("book/BEmQB5d5EN/x.html")
 
 
 class BaseDiscoveryTest(unittest.TestCase):

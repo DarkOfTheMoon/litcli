@@ -5,7 +5,6 @@ import os
 import sys
 import unittest
 
-
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from litcli.backends.doab import DoabBackend, feed_to_items, page_to_item, solve_challenge

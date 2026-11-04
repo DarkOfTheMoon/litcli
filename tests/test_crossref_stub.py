@@ -1,8 +1,8 @@
-"""Crossref backend offline stub tests: assert request construction / parsing / type mapping / 5xx retry / error wrapping."""
+"""Crossref backend offline stub tests: assert request construction / parsing / type mapping /
+5xx retry / error wrapping."""
 import os
 import sys
 import unittest
-
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -40,13 +40,17 @@ class CrossrefStubTest(unittest.TestCase):
         self.assertNotIn("jats", it.abstract.lower())  # tags stripped
 
     def test_type_map_book(self):
-        rec = dict(REC); rec["type"] = "book"; rec["title"] = ["A Book"]
+        rec = dict(REC)
+        rec["type"] = "book"
+        rec["title"] = ["A Book"]
         stub(self.be, (200, {"message": rec}))
         it = self.be.get("10.1/book")
         self.assertEqual(it.item_type, "book")
 
     def test_type_map_patent(self):
-        rec = dict(REC); rec["type"] = "patent"; rec["title"] = ["A Patent"]
+        rec = dict(REC)
+        rec["type"] = "patent"
+        rec["title"] = ["A Patent"]
         stub(self.be, (200, {"message": rec}))
         it = self.be.get("10.1/pat")
         self.assertEqual(it.item_type, "patent")

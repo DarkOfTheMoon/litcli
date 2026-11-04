@@ -1,4 +1,5 @@
-"""data add ingestion-flow stub tests: mock metadata + backend, assert --pdf heuristic candidate / dedup gate / --force / --csl."""
+"""data add ingestion-flow stub tests: mock metadata + backend, assert --pdf heuristic candidate /
+dedup gate / --force / --csl."""
 import argparse
 import os
 import sys

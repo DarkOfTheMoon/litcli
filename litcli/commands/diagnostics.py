@@ -28,7 +28,8 @@ def _cfg_write_key(cfg: dict, name: str) -> str | None:
 
 
 def cmd_backends_status(cfg, args) -> int:
-    """Per-backend read-only diagnostics: config / capabilities / authorization & reachability (never prints key plaintext)."""
+    """Per-backend read-only diagnostics: config / capabilities / authorization & reachability
+    (never prints key plaintext)."""
     backends = get_all_backends(cfg)
     if not backends and not config_mod.failed_backends:
         print("[no backends] check ~/.config/litcli/config.toml (or env LITCLI_CONFIG)")
@@ -38,7 +39,8 @@ def cmd_backends_status(cfg, args) -> int:
         caps = ", ".join(sorted(b.capabilities))
         has_write = "write" in b.capabilities
         if has_write:
-            auth = "authorized (has write key)" if _cfg_write_key(cfg, name) else "unauthorized (write needs `backends authorize`)"
+            auth = ("authorized (has write key)" if _cfg_write_key(cfg, name)
+                    else "unauthorized (write needs `backends authorize`)")
         else:
             auth = "read-only backend, no auth needed"
         # Lightweight reachability probe only for backends providing ping() (zotero local); non-fatal if it fails.

@@ -7,7 +7,7 @@ export, and citation rendering.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 
 
 def extract_year(text: str) -> str:
@@ -196,7 +196,7 @@ class AcademicItem:
         return "\n".join(lines) + "\n"
 
     @classmethod
-    def from_csl(cls, csl: dict, source: str = "", key: str = "") -> "AcademicItem":
+    def from_csl(cls, csl: dict, source: str = "", key: str = "") -> AcademicItem:
         """Build an AcademicItem from CSL JSON (often needed before writing to a backend)."""
         authors = csl.get("author") or []
         year = ""
@@ -233,7 +233,7 @@ class AcademicItem:
             return "Anon"
         names = [self._author_str(a) for a in self.creators[:3]]
         if len(self.creators) > 3:
-            names = names[:2] + ["et al."]
+            names = [*names[:2], "et al."]
         return ", ".join(names)
 
     @staticmethod

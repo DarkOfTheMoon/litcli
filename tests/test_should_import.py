@@ -5,8 +5,8 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from litcli.models import AcademicItem
 from litcli import fulltext as ft
+from litcli.models import AcademicItem
 
 
 def mk(doi="", title="T", creators=None, year="2020"):

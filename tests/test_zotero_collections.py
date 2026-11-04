@@ -6,9 +6,10 @@ Here a stub server pins that behavior, and verifies recursive (with sub-collecti
 (only this collection) semantics.
 '''
 import json
+import os
+import sys
 import threading
 import unittest
-import sys, os
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -87,7 +88,7 @@ class ZoteroCollectionsStubTest(unittest.TestCase):
 
     def setUp(self):
         self.be = ZoteroLocalBackend(
-            name="zotero", base="http://127.0.0.1:%d/api" % self.port, library="0"
+            name="zotero", base=f"http://127.0.0.1:{self.port}/api", library="0"
         )
 
     def test_collection_tree_returns_parents(self):

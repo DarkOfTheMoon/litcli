@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 from pyrate_limiter import Duration, Limiter, Rate
@@ -44,7 +44,7 @@ class HttpBackend(Session, Backend):
     name = ""
     UA = DEFAULT_UA
     #: Extra client-wide request headers (Accept, API key, polite-pool hints).
-    headers: dict = {}
+    headers: ClassVar[dict] = {}
     timeout = 30.0
     #: Minimum seconds between two requests from this backend (0 = rate limit only).
     min_interval = 0.0

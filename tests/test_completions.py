@@ -90,7 +90,8 @@ class RenderTest(unittest.TestCase):
         out = render("fish", _spec())
         self.assertIn("complete -c litcli", out)
         self.assertIn("__fish_use_subcommand", out)
-        self.assertIn("-l backend -a 'zotero arxiv crossref openalex openlibrary uspto cnki douban scihub zlibrary doaj europepmc doab zenodo'", out)
+        self.assertIn("-l backend -a 'zotero arxiv crossref openalex openlibrary uspto cnki douban scihub "
+                      "zlibrary doaj europepmc doab zenodo'", out)
 
 
 class BashEngineTest(unittest.TestCase):

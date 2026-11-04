@@ -10,8 +10,8 @@ import urllib.parse
 
 from lxml import etree as ET
 
-from ..models import AcademicItem
 from .. import pdf as pdfutil
+from ..models import AcademicItem
 from .http import HttpBackend, HttpError
 
 _NS = {"a": "http://www.w3.org/2005/Atom",

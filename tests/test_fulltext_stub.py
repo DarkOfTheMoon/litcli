@@ -1,4 +1,5 @@
-"""fulltext legitimate-OA-channel stub tests: inject resolvers, assert priority / blocked marking / single-step failure doesn't sink the run."""
+"""fulltext legitimate-OA-channel stub tests: inject resolvers, assert priority / blocked marking /
+single-step failure doesn't sink the run."""
 import os
 import sys
 import unittest

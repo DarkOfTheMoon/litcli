@@ -5,8 +5,8 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from litcli.citation import render_bibliography, render_intext
 from litcli.models import AcademicItem
-from litcli.citation import render_intext, render_bibliography
 
 
 class TestCitation(unittest.TestCase):

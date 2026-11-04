@@ -11,8 +11,8 @@ from unittest import mock
 import httpx
 from tenacity import wait_none
 
-from litcli.transport import set_proxy
 from litcli.backends.http import HttpBackend, HttpError
+from litcli.transport import set_proxy
 from tests.http_stub import Recorder, error, stub
 
 

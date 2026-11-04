@@ -6,21 +6,20 @@ launch_persistent_context) rather than drive a real one. The pure parsers
 browser-free. Payloads below mirror the live SSR window.__DATA__ schema (see the ground-truth
 probe in the session summary).
 """
-import sys
 import os
+import sys
 import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from litcli import config
 from litcli.backends.douban import (
     DoubanBackend,
-    window_data_to_items,
     _parse_info,
     _subject_to_item,
+    window_data_to_items,
 )
-from litcli import config
-
 
 # --- pure parsers (browser-free) ---
 
@@ -70,7 +69,8 @@ class DoubanParseTest(unittest.TestCase):
 
     def test_parse_info_newline_separated(self):
         # Live #info renders block-level (innerText uses '\n' between label/value pairs).
-        info = _parse_info("作者: 李人宪\n出版社: 国防工业出版社\n出版年: 2008-3\nISBN: 9787118055559\n页数: 226\n定价: 22.00元\n")
+        info = _parse_info("作者: 李人宪\n出版社: 国防工业出版社\n出版年: 2008-3\nISBN: 9787118055559\n"
+                           "页数: 226\n定价: 22.00元\n")
         self.assertEqual(info["author"], "李人宪")
         self.assertEqual(info["publisher"], "国防工业出版社")
         self.assertEqual(info["pubdate"], "2008-3")
@@ -155,9 +155,9 @@ class DoubanAdapterTest(unittest.TestCase):
 
     def test_missing_playwright_raises_clear_message(self):
         db = DoubanBackend()
-        with mock.patch.dict(sys.modules, {"playwright.sync_api": None}):
-            with self.assertRaises(RuntimeError) as ctx:
-                db._playwright()
+        with mock.patch.dict(sys.modules, {"playwright.sync_api": None}), \
+                self.assertRaises(RuntimeError) as ctx:
+            db._playwright()
         self.assertIn("Playwright is not installed", str(ctx.exception))
         self.assertIn("--with-douban", str(ctx.exception))
 

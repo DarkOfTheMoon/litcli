@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import re
 
-from .models import AcademicItem
 from . import pdf as pdfutil
+from .models import AcademicItem
 
 _YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
 _ABSTRACT_RE = re.compile(r"(^|\b)abstract\b", re.I)

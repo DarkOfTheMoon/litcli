@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 import urllib.parse
+from typing import ClassVar
 
 from ..models import AcademicItem
 from .http import HttpBackend
@@ -82,7 +83,7 @@ def _item_to_academic(rec: dict, source: str = "crossref") -> AcademicItem:
 
 
 class CrossrefBackend(HttpBackend):
-    headers = {"Accept": "application/json"}
+    headers: ClassVar[dict] = {"Accept": "application/json"}
     http2 = True
 
     def __init__(self, name: str = "crossref", mailto: str = "",

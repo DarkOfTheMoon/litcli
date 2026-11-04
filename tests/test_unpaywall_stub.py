@@ -29,7 +29,9 @@ class UnpaywallStubTest(unittest.TestCase):
         self.assertEqual(info["title"], "Deep learning")
 
     def test_no_oa(self):
-        no = dict(DATA); no["is_oa"] = False; no["best_oa_location"] = None
+        no = dict(DATA)
+        no["is_oa"] = False
+        no["best_oa_location"] = None
         info = unpaywall.resolve_oa("10.1/x", "t@e.com", transport=Recorder((200, no)))
         self.assertFalse(info["is_oa"])
         self.assertEqual(info["best_pdf"], "")

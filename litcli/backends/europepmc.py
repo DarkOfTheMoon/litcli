@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import urllib.parse
+from typing import ClassVar
 
 from ..models import AcademicItem, extract_year, normalize_author_name
 from .http import HttpBackend
@@ -100,7 +101,7 @@ def result_to_item(result: dict, source: str = "europepmc") -> AcademicItem:
 class EuropePmcBackend(HttpBackend):
     """Read-only biomedical search with an open-access JATS XML fulltext hook."""
 
-    headers = {"Accept": "application/json"}
+    headers: ClassVar[dict] = {"Accept": "application/json"}
 
     def __init__(self, name: str = "europepmc", base: str = _SEARCH,
                  timeout: int = 30, delay: float = 0.4):

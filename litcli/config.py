@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import os
 import tomllib
-from functools import lru_cache
+from functools import cache
 from pathlib import Path
 
 from .backends.base import Backend
 
-# Key: built-in default backends when nothing is configured (local Zotero read/write + arXiv read-only, works out of the box)
+# Key: built-in default backends when nothing is configured (local Zotero read/write + arXiv read-only,
+# works out of the box)
 _INBUILT_DEFAULT = {"backends": {
     "zotero": {"type": "zotero_local", "base": "http://localhost:23119/api"},
     "arxiv": {"type": "arxiv"},
@@ -26,7 +27,8 @@ DEFAULT_CONFIG = Path.home() / ".config" / "litcli" / "config.toml"
 
 
 def load_config(path: str | Path | None = None) -> dict:
-    """Load config; precedence: explicit path > env var LITCLI_CONFIG > default ~/.config/litcli/config.toml > built-in default."""
+    """Load config; precedence: explicit path > env var LITCLI_CONFIG > default
+    ~/.config/litcli/config.toml > built-in default."""
     for candidate in (path, Path(os.environ[CONFIG_ENV]) if CONFIG_ENV in os.environ else None, DEFAULT_CONFIG):
         if candidate and Path(candidate).exists():
             with open(candidate, "rb") as f:
@@ -34,7 +36,7 @@ def load_config(path: str | Path | None = None) -> dict:
     return dict(_INBUILT_DEFAULT)
 
 
-@lru_cache(maxsize=None)
+@cache
 def _registry() -> dict[str, type[Backend]]:
     """Backend type registry (type string -> class). Cached per-process: the try-import
     blocks are static, and the registry is rebuilt on every backend instantiation and again
@@ -152,7 +154,7 @@ def discover_backends(config: dict | None = None, strict: bool = False) -> dict[
             out[name] = _make_backend(name, bcfg)
         except KeyError:  # an unknown type is a config error, always worth stopping for
             raise
-        except Exception as e:  # noqa: BLE001 - a dependency failure is reported, not swallowed
+        except Exception as e:
             if strict:
                 raise
             failed_backends[name] = f"{type(e).__name__}: {e}"
@@ -221,10 +223,7 @@ def write_backend_key(name: str, key: str, path: str | Path | None = None) -> Pa
     is lost. Returns the actual file path written.
     """
     path = Path(path) if path else (Path(os.environ[CONFIG_ENV]) if CONFIG_ENV in os.environ else DEFAULT_CONFIG)
-    if path.exists():
-        text = path.read_text(encoding="utf-8")
-    else:
-        text = _default_toml_text()
+    text = path.read_text(encoding="utf-8") if path.exists() else _default_toml_text()
     text = _upsert_key(text, f"backends.{name}", "api_key", _toml_string(key))
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")

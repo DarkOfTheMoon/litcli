@@ -27,10 +27,10 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from urllib.parse import urljoin, urlencode
+from urllib.parse import urlencode, urljoin
 
 from ..models import AcademicItem, extract_year, normalize_author_name
-from .playwright import PlaywrightBackend, _PLAYWRIGHT_HINT
+from .playwright import _PLAYWRIGHT_HINT, PlaywrightBackend
 
 # Product version, used only by the pure parser for the AcademicItem.extra provenance.
 _SOURCE = "cnki"

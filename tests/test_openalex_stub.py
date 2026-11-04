@@ -124,7 +124,8 @@ class OpenAlexStubTest(unittest.TestCase):
         self.assertIn("mailto=t%40e.com", url)
 
     def test_search_filter_comma_quoted(self):
-        # An author with a comma (e.g. "Bonaventura, J.") must be quoted, otherwise OpenAlex splits the filter on the comma -> 400.
+        # An author with a comma (e.g. "Bonaventura, J.") must be quoted, otherwise OpenAlex splits the
+        # filter on the comma -> 400.
         rec = stub(self.be, (200, RESULTS))
         self.be.search("turbulence", limit=3, filters={"author": "Bonaventura, J."})
         self.assertIn('raw_author_name.search%3A%22Bonaventura%2C+J.%22', rec.urls[0])
@@ -184,8 +185,8 @@ class OpenAlexStubTest(unittest.TestCase):
 
     def test_references_not_supported_on_other_backends(self):
         # Non-openalex read-only backends raise NotSupportedError for references/citing.
-        from litcli.backends.crossref import CrossrefBackend
         from litcli.backends.base import NotSupportedError
+        from litcli.backends.crossref import CrossrefBackend
         be = CrossrefBackend(mailto="t@e.com")
         for method in ("references", "citing"):
             with self.assertRaises(NotSupportedError):
