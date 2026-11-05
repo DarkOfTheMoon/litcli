@@ -165,6 +165,7 @@ skills/litcli/      agent 技能源（install.sh 按目标 agent 分发）
 ```bash
 python3 -m unittest discover -s tests
 ruff check litcli tests          # 规则集固定在 pyproject.toml 的 [tool.ruff]
+scripts/verify_release.sh vX.Y.Z # 消费者视角校验已发布版本（下载附件→核 SHA256→临时 venv 装包跑真实命令）
 ```
 
 用 stub 服务器 / `httpx.MockTransport` 离线跑（不连真库、不联网）：覆盖归一化、聚合去重/合并/排序、Zotero 写入请求形状（含 `Zotero-Server-ID` / `If-Unmodified-Since-Version`）、arXiv 请求构造与 Atom 解析、错误包装。

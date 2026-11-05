@@ -42,6 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `tests/test_cli_surface.py`：遍历 argparse 全树逐个跑 `--help`，并断言每个子命令都有对应的分发处理，
+  防住「改了参数表没人发现」。
+- `tests/test_skill_commands.py`：`SKILL.md` 的命令表与后端名和 parser、后端注册表比对，防文档漂移。
+- `scripts/verify_release.sh <tag>`：按消费者视角验证已发布产物——下载附件、核对 `SHA256SUMS`、装进临时
+  venv、跑 `--version` 与一条真实检索；`release.sh --push` 发完自动调用，装不起来就算发布失败。
 - `scripts/release.sh --release-only`：给已存在的 tag 补建 Release（切版时没有 token 时用），不 bump、
   不提交、不推送；`dist/` 缺失会重建。
 - 发布 token 也可放 `~/.config/litcli/gitee.token`（`chmod 600`，不入库），脚本优先读环境变量。

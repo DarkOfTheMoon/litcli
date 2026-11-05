@@ -12,8 +12,10 @@
 #      current __version__ in place) and harvest CHANGELOG [Unreleased] into a dated section
 #   3) commit `chore(release): vX.Y.Z` + tag vX.Y.Z
 #   4) build dist/ artifacts + SHA256SUMS
-#   5) only with --push: push master + tag, and create the Gitee Release with the artifacts
-#      attached when GITEE_TOKEN is set (otherwise print the manual steps)
+#   5) only with --push: push master + tag to every remote, and create the Gitee Release with the
+#      artifacts attached when a token is configured (otherwise print the manual steps)
+#   6) consumer check: download the published assets back and install them in a throwaway venv
+#      (scripts/verify_release.sh) — skipped when no Release was created
 #
 # Two-phase on purpose: the gates and the local artifacts are cheap and reversible; publishing
 # outward needs --push. `--check` runs the gates only and changes nothing.
@@ -95,7 +97,7 @@ while [ $# -gt 0 ]; do
     --notes) NOTES_FILE="${2:?--notes needs a path}"; shift ;;
     --push) DO_PUSH=1 ;;
     --no-release) DO_RELEASE=0 ;;
-    -h|--help) sed -n '2,33p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,35p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
@@ -286,13 +288,28 @@ if [ "$DO_PUSH" = 0 ]; then
 fi
 
 echo "==> [5/6] push $BRANCH_REQUIRED + v$NEW_VER"
-git push origin "$BRANCH_REQUIRED"
-git push origin "v$NEW_VER"
-echo "  ✓ pushed"
+# Every configured remote gets the branch and the tag; a mirror (e.g. the GitHub side that runs
+# CI) must not silently lag behind what was released.
+REMOTES="origin"
+git remote get-url github >/dev/null 2>&1 && REMOTES="$REMOTES github"
+for r in $REMOTES; do
+  git push "$r" "$BRANCH_REQUIRED" && git push "$r" "v$NEW_VER" || {
+    echo "  ✗ push to $r failed (tag is local/partial; re-run once fixed)" >&2; exit 1; }
+  echo "  ✓ pushed to $r"
+done
 
 if [ "$DO_RELEASE" = 0 ]; then
   echo "==> [6/6] release skipped (--no-release)"; exit 0
 fi
 
 publish_release "$NEW_VER"
+
+# Verify what consumers actually get, not what the gates proved about the working tree.
+if curl -sS -f -o /dev/null "$GITEE_API/repos/$GITEE_PROJECT/releases/tags/v$NEW_VER"; then
+  echo "==> [7/7] consumer check"
+  scripts/verify_release.sh "v$NEW_VER" || { echo "  ✗ published release is not consumable" >&2; exit 1; }
+else
+  echo "==> [7/7] consumer check skipped (no Release yet; after creating it run"
+  echo "    scripts/verify_release.sh v$NEW_VER)"
+fi
 echo "==> done: v$NEW_VER"
