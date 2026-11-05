@@ -22,8 +22,9 @@ jobs:
           pip install ruff
           ruff check litcli tests
       # Install builds the package from pyproject (verifies packaging metadata + console entry point).
+      # jieba is the optional `[cnki]` extra's splitter; the cnki query tests need it present.
       - name: Install package
-        run: pip install .
+        run: pip install . jieba
       - name: Run offline unit tests
         run: python -m unittest discover -s tests -v
       - name: Smoke-test console entry point

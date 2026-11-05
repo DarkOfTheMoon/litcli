@@ -71,6 +71,15 @@ class CnkiParseTest(unittest.TestCase):
 
 # --- query term splitting (pure) ---
 
+def _has_jieba():
+    try:
+        import jieba  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+@unittest.skipUnless(_has_jieba(), "jieba is an optional dependency (install.sh --with-cnki)")
 class CnkiSplitTermsTest(unittest.TestCase):
     def test_concatenated_keywords_become_separate_terms(self):
         # CNKI matches a concatenated run as one term and returns 0; the words must be split.
