@@ -162,6 +162,9 @@ skills/litcli/      agent 技能源（install.sh 按目标 agent 分发）
 
 ## 测试
 
+CI 跑在 GitHub 镜像仓（`DarkOfTheMoon/litcli`）：`master` 与 `v*` tag 上都会跑 lint、全量测试、入口冒烟
+与打包作业。Gitee 是发布与国内分发的主仓，两边的发布脚本会自动同步推送。
+
 ```bash
 python3 -m unittest discover -s tests
 ruff check litcli tests          # 规则集固定在 pyproject.toml 的 [tool.ruff]
