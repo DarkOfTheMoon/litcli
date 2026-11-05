@@ -24,7 +24,6 @@ EXPECTED = {
 }
 EXPECTED_PARENTS = {
     "data": {"get", "add", "set", "del", "attach", "tree", "members"},
-    "fetch": {"fulltext", "book"},
     "backends": {"list", "status", "authorize"},
 }
 
@@ -64,11 +63,10 @@ class CliSurfaceTest(unittest.TestCase):
     def test_every_command_is_dispatched(self):
         """A parser entry with no handler fails nothing until someone runs it — pin the wiring."""
         dispatched = set(cli._TOP_LEVEL_COMMANDS) | set(graph.EDGE_METHODS)
-        dispatched |= set(cli._DATA_COMMANDS) | set(cli._FETCH_COMMANDS)
+        dispatched |= set(cli._DATA_COMMANDS)
         dispatched |= {"data", "fetch", "backends"}
         self.assertEqual(set(_subparsers(self.parser)) - dispatched, set())
         self.assertEqual(set(cli._DATA_COMMANDS), EXPECTED_PARENTS["data"])
-        self.assertEqual(set(cli._FETCH_COMMANDS), EXPECTED_PARENTS["fetch"])
 
     def test_completion_spec_covers_the_surface(self):
         spec = completions_mod.build_spec(self.parser)

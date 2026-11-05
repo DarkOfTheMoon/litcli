@@ -20,9 +20,17 @@ def search_filters(args) -> dict:
 
 
 def cmd_search(cfg, args) -> int:
+    """Search one backend, or (the default) every enabled one plus the keyless OA corpora.
+
+    Aggregating is the default because a caller should not have to know that the interesting
+    results live outside their local store. A backend that fails is skipped with one stderr line
+    instead of sinking the whole search; an explicitly requested ``--backend`` still raises.
+    """
     filters = search_filters(args)
-    if args.all:
-        backends = get_all_backends(cfg)
+    if args.backend is None:
+        # Corpora are keyless open-access sources: consulted even when unconfigured, mirroring
+        # what ``fetch`` does for fulltext, so an empty config still searches the OA literature.
+        backends = get_all_backends(cfg, corpora=True)
         items: list[AcademicItem] = []
         for name, b in backends.items():
             try:
@@ -38,8 +46,8 @@ def cmd_search(cfg, args) -> int:
         backend = get_backend(args.backend, cfg)
         items = backend.search(args.query, limit=args.limit, filters=filters)
 
-    # Aggregation: dedup / merge / sort and mark sources only when --all yields many items.
-    if args.all and items and len(items) > 1:
+    # Aggregation: dedup / merge / sort and mark sources only when several items came back.
+    if args.backend is None and items and len(items) > 1:
         items = merge_items(items)
 
     # --type filter: drop noisy items (book titles / off-topic). Post-merge so --all dedup
@@ -51,5 +59,9 @@ def cmd_search(cfg, args) -> int:
     # --sort cited: descending by citation count (default is merge's year/title order).
     if getattr(args, "sort", None) == "cited":
         items = sorted(items, key=cited_key)
+
+    # --limit is a cap on what the caller sees, not per backend: nine backends at 10 each would
+    # otherwise return ninety rows for a ten-row request.
+    items = items[:args.limit]
 
     return print_items(items, args.format, args.no_cite, "[no results]")

@@ -33,7 +33,6 @@ class BuildSpecTest(unittest.TestCase):
         self.assertEqual(spec["subs"][("data",)],
                          ["get", "add", "set", "del", "attach", "tree", "members"])
         self.assertIn("list", spec["subs"][("backends",)])
-        self.assertIn("fulltext", spec["subs"][("fetch",)])
         self.assertEqual(spec["subs"][("completions",)], SHELL_CHOICES)
 
     def test_search_flags_and_choices(self):
@@ -53,11 +52,11 @@ class BuildSpecTest(unittest.TestCase):
         self.assertIn("--pdf", spec["files"])
         self.assertIn("--csl", spec["files"])
 
-    def test_fetch_fulltext_flags(self):
-        opts = _spec()["opts"][("fetch", "fulltext")]
-        self.assertIn("--out", opts)
+    def test_fetch_flags(self):
+        opts = _spec()["opts"][("fetch",)]
+        for flag in ("--out", "--book", "--no-download", "--scihub"):
+            self.assertIn(flag, opts)
         self.assertIn("--out", _spec()["files"])
-        self.assertIn("--download", opts)
 
     def test_export_format_choices(self):
         opts = _spec()["opts"][("export",)]

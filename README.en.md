@@ -23,14 +23,15 @@ own library.
 ```bash
 python3 -m venv .venv && . .venv/bin/activate                    # or use an environment you have
 pip install .                                                    # Debian/Ubuntu PEP 668: use ./install.sh
-litcli search --backend doaj "graph neural network" --limit 5     # open access; the key is the DOI
+litcli search "graph neural network" --limit 5            # every source by default; the key is the DOI
 litcli data get 10.1038/s41598-024-80509-9 --backend crossref --format json
 litcli export 10.1038/s41598-024-80509-9 --backend crossref --format csljson
-litcli fetch fulltext 10.1038/s41598-024-80509-9 --download
+litcli fetch 10.1038/s41598-024-80509-9            # saved to the current directory; stdout is the path
 ```
 
-`--format json` prints one record per line; an empty result prints `[]`, so it pipes into `jq`. `--download` writes to the
-current directory; `--out DIR` overrides.
+`search` covers every source by default; `--backend` narrows it. `--format json` prints one record per line and an
+empty result prints `[]`. `fetch` writes into the current directory (`--out DIR` overrides), prints only the path
+on stdout and its reasons on stderr; exit codes `0` file saved / `1` nothing found / `2` error.
 
 ## Install
 
@@ -68,8 +69,8 @@ unsupported backend. `search`, `fetch`, `export`, `refs`, `citing`, `related` ar
 | `litcli search "X" [--all] [--backend B] [--type T] [--limit N] [--format table\|json\|csl]` | candidate search; field filters and sorting below |
 | `litcli refs <key>` / `citing <key>` / `related <key>` | cited works / citing works / semantic neighbours (OpenAlex graph) |
 | `litcli export <key>... [--format csljson\|bibtex\|ris\|text] [--no-cite]` | citations; `csljson` feeds `pandoc --citeproc`. arXiv keys normalise to a DOI only with `--backend openalex\|crossref` |
-| `litcli fetch fulltext <doi> [--download] [--out DIR] [--scihub]` | local store → Unpaywall → OpenAlex → Europe PMC → Zenodo → landing page |
-| `litcli fetch book "title\|ISBN" [--backend zlibrary\|doab\|openlibrary] [--download]` | book candidates → pick → full metadata → optional file |
+| `litcli fetch <doi\|arXiv id> [--out DIR] [--no-download] [--scihub]` | save the fulltext: local store → Unpaywall → OpenAlex → Europe PMC → Zenodo → landing page |
+| `litcli fetch --book "title\|ISBN" [--backend zlibrary\|doab\|openlibrary] [--pick N]` | book candidates → pick → full metadata → save the file (an ISBN takes this path automatically) |
 | `litcli backends authorize zotero` | one-off write authorization (local dialog) |
 | `litcli data add --title "..." --creator "Family, Given" [--doi ..] [--force]` / `data add --pdf|--csl <file>` | ingest metadata (dedupe gate, `--force` skips), heuristics from page 1 (y/N), or CSL JSON |
 | `litcli data get <key>` · `data tree` · `data members <coll> [--limit N]` | read one record; browse collections |

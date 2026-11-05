@@ -32,11 +32,6 @@ _DATA_COMMANDS = {
     "tree": data_cmd.cmd_data_tree, "members": data_cmd.cmd_data_members,
 }
 
-_FETCH_COMMANDS = {
-    "fulltext": fetch.cmd_fetch_fulltext,
-    "book": fetch.cmd_fetch_book,
-}
-
 
 def _apply_proxy(cfg: dict) -> None:
     """Route traffic through the configured proxy unless an env var already set one.
@@ -64,7 +59,7 @@ def main(argv=None) -> int:
         if args.cmd == "data":
             return _DATA_COMMANDS[args.data_cmd](cfg, args)
         if args.cmd == "fetch":
-            return _FETCH_COMMANDS[args.fetch_cmd](cfg, args)
+            return fetch.cmd_fetch(cfg, args)
         print(f"[error] unknown command {args.cmd}")
         return 2
     except NotSupportedError as e:

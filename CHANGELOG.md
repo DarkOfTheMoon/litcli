@@ -46,6 +46,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`search` 默认搜全部来源**（已配置后端 + 免 key 的 OA 语料），`--backend` 收窄到单个，二者互斥；
+  单个后端失败只跳过并记一行 stderr，不再让整条检索失败。`--limit` 改为总量上限，不再是每后端上限。
+- **`fetch` 收成一条命令**：`fetch <doi|arXiv id|ISBN>`，去掉 `fulltext`/`book` 两层子命令（书名用 `--book`，
+  ISBN 自动识别）。默认直接落盘，stdout 只回保存路径、诊断走 stderr；`--no-download` 只回链接。
+  arXiv id 现在会被归一（此前 `fetch fulltext arxiv/…` 一律判无全文）。
+- **退出码区分结果**：`fetch` 0 拿到 / 1 没有全文 / 2 错误，调用方不必解析英文输出。
+- `--download` 在 `fetch` 上成为默认，旧写法需改为 `--no-download`。
+
 - README 重排为用户视角：先讲能做什么、给一条不需要 Zotero 的 60 秒上手，再是安装 / 命令 / 后端授权边界 /
   限制；架构细节收进 AGENTS.md 并改为链接。修正安装只提 PEP 668、`--bump --push` 未提镜像同步、
   测试段漏记新增用例等过时描述。

@@ -1,13 +1,35 @@
-"""``fetch``: fulltext by DOI and books by title/ISBN. Read-only, nothing is stored."""
+"""``fetch``: save the fulltext behind an id, or a book by title/ISBN. Read-only, nothing is stored.
+
+One command, one target. ``fetch <doi|arxiv-id|isbn>`` walks the legitimate chain (local store →
+Unpaywall/OpenAlex → Europe PMC/Zenodo → landing page) and **saves the file by default**, printing
+exactly one line on stdout: the path. Everything else (what source answered, notes, previews) goes
+to stderr so ``f=$(litcli fetch <id>)`` stays clean. Exit codes: 0 file saved, 1 nothing found,
+2 error.
+"""
 from __future__ import annotations
 
 import os
+import re
+import sys
 
 from .. import fulltext as fulltext_mod
 from .. import pdf as pdfutil
 from .. import unpaywall
 from ..backends.base import Backend, NotSupportedError
 from ..config import get_all_backends, get_backend
+from .keys import normalize_related_key
+
+_ISBN_RE = re.compile(r"^(?:97[89][\d-]{10,17}|\d{9}[\dXx])$")
+
+
+def out(text: str) -> None:
+    """The machine-readable result line (path or link) — stdout."""
+    print(text)
+
+
+def note(text: str) -> None:
+    """Diagnostics, sources and notes — stderr, so stdout stays a single value."""
+    print(text, file=sys.stderr)
 
 #: Preview extractor per fulltext format (PDF falls through to pdftotext).
 _TEXT_EXTRACTORS = {"html": fulltext_mod.html_to_text, "xml": fulltext_mod.xml_to_text}
@@ -28,139 +50,152 @@ def _optional_backend(name: str, cfg):
         return None
 
 
-def _save(raw: bytes, out: str, lines: int, verb: str = "Downloaded",
+def _save(raw: bytes, path: str, lines: int, verb: str = "Downloaded",
           extract=pdfutil.extract_text) -> None:
-    """Write the fetched bytes to ``out`` and preview the first ``lines`` lines of text.
+    """Write the fetched bytes to ``path`` and preview its first ``lines`` lines on stderr.
 
     ``extract`` differs per format (PDF text via pdftotext, JATS XML, HTML); each takes the
     bytes and returns text.
     """
-    with open(out, "wb") as f:
+    with open(path, "wb") as f:
         f.write(raw)
-    print(f"  {verb} {len(raw)} bytes to {out}")
+    note(f"  {verb} {len(raw)} bytes to {path}")
     if raw and lines:
         text = extract(raw)
-        print(f"  --- {lines}-line preview ---\n{pdfutil.first_lines(text, lines)}")
+        note(f"  --- {lines}-line preview ---\n{pdfutil.first_lines(text, lines)}")
 
 
-def cmd_fetch_fulltext(cfg, args) -> int:
-    """Locate fulltext by DOI: local store → Unpaywall → OpenAlex → Europe PMC/Zenodo; Sci-Hub only when asked.
+def cmd_fetch(cfg, args) -> int:
+    """Fetch ``args.target``: a book when ``--book`` or the target is an ISBN, else a paper fulltext."""
+    target = (args.target or "").strip()
+    if not target:
+        note("[error] empty target")
+        return 2
+    if args.book or _ISBN_RE.match(target):
+        return _fetch_book(cfg, args, target)
+    return _fetch_fulltext(cfg, args, target)
 
-    Sci-Hub is opt-in (`--scihub`, or by configuring the ``scihub`` backend) because it serves
+
+def _fetch_fulltext(cfg, args, target: str) -> int:
+    """Walk the legitimate fulltext chain for ``target`` and save the file (or print the link).
+
+    Sci-Hub is opt-in (``--scihub``, or by configuring the ``scihub`` backend) because it serves
     copyright-evading copies; its hits are labelled as such.
     """
+    key = normalize_related_key(target)
     email = _resolve_oa_email(cfg, args)
     backends = get_all_backends(cfg)
     scihub_backend = backends.get("scihub")
-    if getattr(args, "scihub", False) and scihub_backend is None:
-        scihub_backend = get_backend("scihub", cfg)
+    if args.scihub and scihub_backend is None:
+        scihub_backend = _optional_backend("scihub", cfg)
     # The legal corpus sources are keyless: consult them even when not enabled in config.
     corpus = {name: backends.get(name) or _optional_backend(name, cfg)
               for name in ("europepmc", "zenodo")}
-    info = fulltext_mod.resolve_fulltext(args.doi, email, backends=backends,
+    info = fulltext_mod.resolve_fulltext(key, email, backends=backends,
                                          openalex_backend=backends.get("openalex"),
                                          europepmc_backend=corpus["europepmc"],
                                          zenodo_backend=corpus["zenodo"],
                                          scihub_backend=scihub_backend)
     if not info.get("has_fulltext"):
-        print(f"DOI {args.doi}  no such work in the local store or open OA sources")
+        note(f"DOI {key}  no such work in the local store or open OA sources")
         if not scihub_backend:
-            print("  Add --scihub to also try Sci-Hub, or use institutional access / interlibrary loan / a proxy.")
+            note("  add --scihub to also try Sci-Hub, or use institutional access / interlibrary loan")
         else:
-            print("  Use institutional access / interlibrary loan / a proxy.")
-        if info.get("errors"):
-            print(f"  [resolution skipped: {len(info['errors'])} steps]")
-        return 0
+            note("  use institutional access / interlibrary loan / a proxy")
+        return 1
 
-    title = info.get("title") or ""
     kind = info["kind"]
-    print(f"DOI {args.doi}  fulltext available (source={kind})")
     if kind == "scihub":
-        print("  note: Sci-Hub copy (copyright-evading), not an open-access licence")
+        note("  note: Sci-Hub copy (copyright-evading), not an open-access licence")
     if info.get("format") == "xml":
-        print("  note: open-access JATS XML (text without a PDF; not a rendered article)")
-    if title:
-        print(f"  title: {title[:70]}")
+        note("  note: open-access JATS XML (text without a PDF; not a rendered article)")
+    if info.get("title"):
+        note(f"  title: {info['title'][:70]}")
+    if info.get("status"):
+        note(f"  oa_status: {info['status']}")
 
-    if kind == "local":  # Local-store hit: attachment already in hand, just write it out
-        key = info.get("key") or ""
-        src = info.get("source") or "zotero"
-        print(f"  local store [{src}] attachment matched (key={key})")
-        out = args.out or f"{args.doi.replace('/', '_')}.pdf"
-        _save(info["data"], out, args.lines, verb="Saved")
+    if kind == "local":  # local-store hit: the attachment is already in hand
+        note(f"  local store [{info.get('source') or 'zotero'}] attachment matched (key={info.get('key')})")
+        path = args.out or f"{key.replace('/', '_')}.pdf"
+        _save(info["data"], path, args.lines, verb="Saved")
+        out(path)
         return 0
 
-    # OA sources: give the direct link by default, download only with --download
-    if info.get("status"):
-        print(f"  oa_status: {info['status']}")
     fmt = info.get("format") or "pdf"
-    print(f"  {'PDF' if fmt == 'pdf' else fmt.upper()}: {info['url']}")
+    note(f"  source={kind}  {'PDF' if fmt == 'pdf' else fmt.upper()}: {info['url']}")
     if fmt == "html":
-        print("  note: landing page, not a file — open it in a browser")
-    if args.download:
-        out = args.out or f"{args.doi.replace('/', '_')}.{fmt}"
-        _save(pdfutil.download(info["url"]), out, args.lines,
-              extract=_TEXT_EXTRACTORS.get(fmt, pdfutil.extract_text))
+        note("  note: landing page, not a file — open it in a browser")
+    if args.no_download or fmt == "html":
+        out(info["url"])
+        return 0
+
+    path = args.out or f"{key.replace('/', '_')}.{fmt}"
+    _save(pdfutil.download(info["url"]), path, args.lines,
+          extract=_TEXT_EXTRACTORS.get(fmt, pdfutil.extract_text))
+    out(path)
     return 0
 
 
-def cmd_fetch_book(cfg, args) -> int:
-    """Find a book by title/ISBN on a book backend, resolve one candidate, optionally download.
+def _fetch_book(cfg, args, target: str) -> int:
+    """Resolve ``target`` on a book backend and save the file.
 
     Z-Library copies are shadow-library copies (not open-access licensed), so the hit is
     labelled as such. ``--pick`` selects among the listed candidates; the chosen record is
-    printed in full before any bytes are fetched.
+    printed before any bytes are fetched.
     """
-    backend = get_backend(args.backend, cfg)
-    candidates = backend.search(args.query, limit=max(1, args.limit))
+    backend = get_backend(args.backend or "zlibrary", cfg)
+    candidates = backend.search(target, limit=max(1, args.limit))
     if not candidates:
-        print(f"[no books] {args.query!r}")
-        return 0
+        note(f"[no books] {target!r}")
+        return 1
 
-    print(f"{len(candidates)} candidate(s) from {backend.name}:")
+    note(f"{len(candidates)} candidate(s) from {backend.name}:")
     for i, item in enumerate(candidates, 1):
         authors = ", ".join(c.get("family", "") for c in item.creators) or "Anon"
-        print(f"  {i}. {item.year or '----'}  {authors[:28]:<28} {item.title[:64]}")
+        note(f"  {i}. {item.year or '----'}  {authors[:28]:<28} {item.title[:64]}")
         if item.publisher:
-            print(f"     {item.publisher}")
+            note(f"     {item.publisher}")
 
     if not 1 <= args.pick <= len(candidates):
-        print(f"[error] --pick {args.pick} is outside 1..{len(candidates)}")
+        note(f"[error] --pick {args.pick} is outside 1..{len(candidates)}")
         return 2
     chosen = candidates[args.pick - 1]
 
     try:
         book = backend.get(chosen.key)
     except RuntimeError as e:
-        print(f"[error] {e}")
+        note(f"[error] {e}")
         if len(candidates) > 1:
-            print(f"        try another candidate: --pick 1..{len(candidates)}")
+            note(f"        try another candidate: --pick 1..{len(candidates)}")
         return 2
     if getattr(backend, "is_shadow", False):
-        note = "Z-Library copy (shadow library, not an open-access licence)"
+        label = "Z-Library copy (shadow library, not an open-access licence)"
     elif getattr(type(backend), "get_attachment", None) is not Backend.get_attachment:
-        note = f"{backend.name} record (open access)"
+        label = f"{backend.name} record (open access)"
     else:
-        note = f"{backend.name} record (metadata only, no file)"
-    print(f"\n{note}: {book.url}")
-    for label, value in (("title", book.title), ("publisher", book.publisher),
-                         ("year", book.year), ("edition", book.edition), ("isbn", book.isbn),
-                         ("pages", book.page), ("language", book.extra.get("language", "")),
-                         ("file", book.extra.get("download", ""))):
+        label = f"{backend.name} record (metadata only, no file)"
+    note(f"  {label}: {book.url}")
+    for name, value in (("title", book.title), ("publisher", book.publisher),
+                        ("year", book.year), ("edition", book.edition), ("isbn", book.isbn),
+                        ("pages", book.page)):
         if value:
-            print(f"  {label}: {value}")
+            note(f"  {name}: {value}")
     if book.creators:
-        print(f"  authors: {', '.join(c.get('family', '') for c in book.creators)}")
-    if not args.download:
-        if getattr(type(backend), "get_attachment", None) is not Backend.get_attachment:
-            print("  Add --download to fetch the file.")
+        note(f"  authors: {', '.join(c.get('family', '') for c in book.creators)}")
+
+    can_download = callable(getattr(backend, "get_attachment", None)) \
+        and getattr(type(backend), "get_attachment", None) is not Backend.get_attachment
+    if not can_download or args.no_download:
+        out(book.url)
         return 0
 
     try:
         raw = backend.get_attachment(book.key)
     except NotSupportedError:
-        print(f"  [{backend.name}] has no downloadable file; open {book.url} instead.")
-        return 0
-    out = args.out or f"{book.isbn or book.key.split('/')[-1]}.pdf"
-    _save(raw, out, args.lines)
+        note(f"  [{backend.name}] has no downloadable file; open {book.url} instead")
+        out(book.url)
+        return 1
+    path = args.out or f"{book.isbn or book.key.split('/')[-1]}.pdf"
+    _save(raw, path, args.lines)
+    out(path)
     return 0

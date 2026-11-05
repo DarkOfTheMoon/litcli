@@ -22,11 +22,13 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     # --- Top-level: search / export / diagnostics ---
-    p = sub.add_parser("search", help="cross-backend candidate search (read-only)")
+    p = sub.add_parser("search", help="search every enabled backend (read-only); --backend narrows to one")
     p.add_argument("query")
-    p.add_argument("--backend", default="zotero")
-    p.add_argument("--all", action="store_true", help="search across all backends with aggregation")
-    p.add_argument("--limit", type=int, default=10)
+    only = p.add_mutually_exclusive_group()
+    only.add_argument("--backend", default=None,
+                      help="search this backend only (default: all enabled backends + keyless OA corpora)")
+    only.add_argument("--all", action="store_true", help="explicit form of the default (all backends)")
+    p.add_argument("--limit", type=int, default=10, help="max results overall (default 10)")
     p.add_argument("--format", choices=["table", "json", "csl"], default="table")
     p.add_argument("--type", default=None, help="filter by item type (article/book/chapter/patent/...), reduce noise")
     p.add_argument("--title", default=None, help="narrow by title term (field-level filter, AND)")
@@ -120,30 +122,20 @@ def build_parser() -> argparse.ArgumentParser:
     dp.add_argument("--format", choices=["table", "json"], default="table")
     dp.add_argument("--limit", type=int, default=200, help="max items to list (0=unlimited)")
 
-    # --- fetch: get fulltext / metadata (read-only, no store) ---
-    f = sub.add_parser("fetch", help="get fulltext / metadata (read-only, no store)")
-    fsub = f.add_subparsers(dest="fetch_cmd", required=True)
-
-    fp = fsub.add_parser("fulltext",
-                         help="locate fulltext by DOI (local store → Unpaywall → OpenAlex → Europe PMC/Zenodo; "
-                              "--scihub adds a fallback)")
-    fp.add_argument("doi")
-    fp.add_argument("--email", default=None)
-    fp.add_argument("--download", action="store_true",
-                    help="download the candidate fulltext file (PDF, or XML/HTML from the OA corpus)")
-    fp.add_argument("--out", default=None, help="save path")
-    fp.add_argument("--lines", type=int, default=6, help="preview line count after download")
-    fp.add_argument("--scihub", action="store_true",
-                    help="also try Sci-Hub after the legitimate OA sources (copyright-evading mirror)")
-
-    bp = fsub.add_parser("book", help="search a book by title/ISBN on a book backend (default Z-Library) "
-                                     "and resolve one hit")
-    bp.add_argument("query", help="title, author or ISBN")
-    bp.add_argument("--backend", default="zlibrary", help="book backend (default zlibrary)")
-    bp.add_argument("--limit", type=int, default=5, help="candidate count to list")
-    bp.add_argument("--pick", type=int, default=1, help="1-based candidate to resolve (default 1)")
-    bp.add_argument("--download", action="store_true", help="download the chosen file")
-    bp.add_argument("--out", default=None, help="save path")
-    bp.add_argument("--lines", type=int, default=0, help="preview line count after download (0=off)")
+    # --- fetch: get the file behind an id (read-only, nothing is stored) ---
+    f = sub.add_parser("fetch", help="save the fulltext for a DOI / arXiv id / ISBN (read-only)")
+    f.add_argument("target", help="DOI, arXiv id (arxiv/1806.09180), or ISBN; a title with --book")
+    f.add_argument("--book", action="store_true",
+                   help="treat the target as a book title/ISBN and use a book backend")
+    f.add_argument("--backend", default=None,
+                   help="book backend (default zlibrary; ignored without --book)")
+    f.add_argument("--no-download", action="store_true", help="print the link instead of saving the file")
+    f.add_argument("--out", default=None, help="save path (default: <key>.<ext> in the current directory)")
+    f.add_argument("--lines", type=int, default=0, help="print that many leading text lines as a preview")
+    f.add_argument("--email", default=None, help="contact e-mail for the Unpaywall/OpenAlex polite pools")
+    f.add_argument("--scihub", action="store_true",
+                   help="also try Sci-Hub after the legitimate OA sources (copyright-evading mirror)")
+    f.add_argument("--limit", type=int, default=5, help="book candidates to list (with --book)")
+    f.add_argument("--pick", type=int, default=1, help="1-based book candidate to resolve (default 1)")
 
     return parser

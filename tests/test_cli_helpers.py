@@ -105,7 +105,10 @@ class PrintItemsTest(unittest.TestCase):
 
 
 class FetchBookTest(unittest.TestCase):
-    """fetch book: source labelling and the no-file backend path."""
+    """fetch --book: source labelling and the no-file backend path.
+
+    Labels and notes go to stderr (stdout carries only the result), so both streams are captured.
+    """
 
     class OpenLibrary:
         name = "openlibrary"
@@ -138,16 +141,15 @@ class FetchBookTest(unittest.TestCase):
 
         import litcli.cli as cli
 
-        buf = io.StringIO()
+        buf, err = io.StringIO(), io.StringIO()
         with mock.patch("litcli.commands.fetch.get_backend", return_value=backend), \
-             contextlib.redirect_stdout(buf):
+                contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
             rc = cli.main(argv)
-        return rc, buf.getvalue()
+        return rc, buf.getvalue() + err.getvalue()
 
     def test_download_on_a_metadata_only_backend_reports_the_page(self):
-        rc, out = self._run(["fetch", "book", "x", "--backend", "openlibrary", "--download"],
-                            self.OpenLibrary())
-        self.assertEqual(rc, 0)
+        rc, out = self._run(["fetch", "--book", "x", "--backend", "openlibrary"], self.OpenLibrary())
+        self.assertEqual(rc, 1)  # the record resolved, but no bytes exist to save
         self.assertIn("has no downloadable file", out)
 
     class MetadataOnly(Backend):
@@ -161,12 +163,12 @@ class FetchBookTest(unittest.TestCase):
                                 url="https://openlibrary.org/books/OL1M")
 
     def test_metadata_only_backend_has_no_download_hint(self):
-        _rc, out = self._run(["fetch", "book", "x", "--backend", "openlibrary"], self.MetadataOnly())
+        _rc, out = self._run(["fetch", "--book", "x", "--backend", "openlibrary"], self.MetadataOnly())
         self.assertIn("metadata only, no file", out)
         self.assertNotIn("Add --download", out)
 
     def test_shadow_label_survives_a_renamed_backend(self):
-        _rc, out = self._run(["fetch", "book", "x", "--backend", "books"], self.Shadow())
+        _rc, out = self._run(["fetch", "--book", "x", "--backend", "books"], self.Shadow())
         self.assertIn("shadow library", out)
         self.assertNotIn("record (open access)", out)
 
@@ -191,7 +193,7 @@ class MainCatchTest(unittest.TestCase):
         self.assertNotIn("Traceback", buf.getvalue())
 
     def test_search_all_skips_valueerror_backend(self):
-        # A single backend returning a non-JSON body (ValueError) must be skipped, not crash --all.
+        # A single backend returning a non-JSON body (ValueError) must be skipped, not sink the search.
         import argparse
         import contextlib
         import io
@@ -212,8 +214,8 @@ class MainCatchTest(unittest.TestCase):
             def search(self, *a, **k):
                 return [AcademicItem(source="ok", key="k", title="Good", year="2020")]
 
-        args = argparse.Namespace(all=True, query="x", limit=10, format="table",
-                                  no_cite=False, type=None, sort=None, backend="zotero",
+        args = argparse.Namespace(all=False, backend=None, query="x", limit=10, format="table",
+                                  no_cite=False, type=None, sort=None,
                                   title=None, author=None, year=None, container=None)
         out = io.StringIO()
         err = io.StringIO()

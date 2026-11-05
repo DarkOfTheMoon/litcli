@@ -175,8 +175,23 @@ def get_backend(name: str = "zotero", config: dict | None = None) -> Backend:
     raise KeyError(f"backend '{name}' is not configured; configured: {sorted(backends)}")
 
 
-def get_all_backends(config: dict | None = None) -> dict[str, Backend]:
-    return discover_backends(config)
+#: Keyless open-access corpora search consults even when they are not configured.
+CORPUS_BACKENDS = ("doaj", "europepmc", "doab", "zenodo")
+
+
+def get_all_backends(config: dict | None = None, corpora: bool = False) -> dict[str, Backend]:
+    """Enabled backends; with ``corpora`` also the keyless OA sources, configured or not."""
+    out = discover_backends(config)
+    if not corpora:
+        return out
+    for name in CORPUS_BACKENDS:
+        if name in out:
+            continue
+        try:
+            out[name] = get_backend(name, config)
+        except KeyError:
+            continue
+    return out
 
 
 # --- Write back to config.toml (for `backends authorize` to persist the key) ---

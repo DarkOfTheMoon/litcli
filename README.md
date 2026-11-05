@@ -17,13 +17,15 @@
 ```bash
 python3 -m venv .venv && . .venv/bin/activate              # 或用你已有的环境
 pip install .                                             # Debian/Ubuntu 的 PEP 668 环境改用 ./install.sh
-litcli search --backend doaj "graph neural network" --limit 5   # OA 语料，key 就是 DOI
+litcli search "graph neural network" --limit 5       # 默认搜全部来源；key 是第二列，DOI 可直接喂下一条
 litcli data get 10.1038/s41598-024-80509-9 --backend crossref --format json
 litcli export 10.1038/s41598-024-80509-9 --backend crossref --format csljson
-litcli fetch fulltext 10.1038/s41598-024-80509-9 --download
+litcli fetch 10.1038/s41598-024-80509-9            # 落到当前目录，stdout 只回路径
 ```
 
-`--format json` 是一行一条记录；空结果打印 `[]`，可直接喂 `jq`。`--download` 默认写到当前目录，`--out DIR` 另指。
+`search` 默认搜全部来源，`--backend` 收窄到单个；`--format json` 是一行一条记录，空结果打印 `[]`。
+`fetch` 默认把文件写到当前目录（`--out DIR` 另指），成功时 stdout 只有路径，失败原因走 stderr；
+退出码 `0` 拿到文件 / `1` 没有全文 / `2` 出错。
 
 ## 安装
 
@@ -66,8 +68,8 @@ cd litcli-0.1.0 && ./install.sh
 | `litcli refs <key>` / `citing <key>` / `related <key>`（均可 `--limit N`、`--sort cited`） | 参考文献（回溯奠基）／引用该文的文献（前向跟进）／语义邻居，均为 OpenAlex 图谱 |
 | `litcli data get <key> [--format table\|json\|csl]` | 单条全字段 |
 | `litcli export <key>... [--format csljson\|bibtex\|ris\|text] [--no-cite]` | 导出引文；`csljson` 可喂 `pandoc --citeproc`。arXiv key 只在 `--backend openalex\|crossref` 下归一为 DOI |
-| `litcli fetch fulltext <doi> [--download] [--out DIR] [--scihub]` | 全文定位：本地库 → Unpaywall → OpenAlex → Europe PMC → Zenodo → 落地页 |
-| `litcli fetch book "书名\|ISBN" [--backend zlibrary\|doab\|openlibrary] [--pick N] [--download]` | 图书候选 → 选定补全书目 → 可选下载 |
+| `litcli fetch <doi\|arXiv id> [--out DIR] [--no-download] [--scihub]` | 保存全文：本地库 → Unpaywall → OpenAlex → Europe PMC → Zenodo → 落地页 |
+| `litcli fetch --book "书名\|ISBN" [--backend zlibrary\|doab\|openlibrary] [--pick N]` | 图书候选 → 选定补全书目 → 保存文件（ISBN 自动走此路径） |
 
 **写库**（默认 Zotero；只读后端会报 `[skipped]` 并以退出码 2 结束）
 
