@@ -1,6 +1,7 @@
-# litcli 配置示例(复制到 ~/.config/litcli/config.toml)
-# 任一缺省时回退到内置默认:本机 Zotero + arXiv + Crossref + OpenAlex(开箱即用,无需本文件)。
-# 下列 [backends.*] 段用于显式覆盖默认 / 启用可选后端(openlibrary / uspto)。
+# litcli 配置示例(复制到 ~/.config/litcli/config.toml)。
+# 文件存在就**整体以文件为准**;只有文件不存在时才用内置默认(本机 Zotero + arXiv + Crossref + OpenAlex)。
+# 所以复制本文件 = 启用下面全部后端:openlibrary、uspto、cnki、douban、scihub、zlibrary 与四个开放
+# 获取源(doaj / europepmc / doab / zenodo);不想用的段整段删掉。
 
 [backends.zotero]
 type = "zotero_local"
@@ -12,8 +13,8 @@ base = "http://localhost:23119/api"      # 本机 Zotero 10 本地 API
 
 [backends.arxiv]
 type = "arxiv"                          # 联网,只读,无需 key
-# arXiv 开放 API 按 IP 限速,短时间连发会返回 HTTP 429 "Rate exceeded."(litcli 已按 2s/4s
-# 退避重试并给出明确提示)。填一个可联系邮箱可降低被限速概率;仅建议,无需真校验。
+# arXiv 开放 API 按 IP 限速,短时间连发会返回 HTTP 429 "Rate exceeded."(litcli 已按指数退避重试,
+# 至多 3 次,再失败给明确提示)。填一个可联系邮箱可降低被限速概率;仅建议,无需真校验。
 # mailto = "you@example.com"
 
 [backends.crossref]
@@ -21,11 +22,11 @@ type = "crossref"                       # 内置默认,无需 key
 
 [backends.openalex]
 type = "openalex"                       # 内置默认,无需 key
-# OpenAlex polite pool:库是免费城域,填一个可联系的邮箱可提升稳定/速率上限。
+# OpenAlex polite pool:库免费、限流很宽,填一个可联系的邮箱可进一步提升速率上限。
 # 开着即可(无需真校验);请求以 ~10 req/s 限速,并随每请求附 mailto 参数。
 # mailto = "you@example.com"
 
-# 可选:开放图书数据库(书籍元数据)。默认不内置;需要时取消注释启用。
+# 开放图书数据库(书籍元数据)。默认不内置,但本文件里是启用的;不想用就删掉本段。
 # 部分网络环境对 openlibrary.org / googleapis.com 无路由,若搜图书无响应请自查连通性。
 [backends.openlibrary]
 type = "openlibrary"
@@ -38,14 +39,14 @@ type = "openlibrary"
 type = "uspto"
 # api_key = "你的-uspto-api-key"
 
-# 可选:CNKI(知网)中文题录检索(需 Playwright + 可见浏览器,人工过滑块,只取公开题录不抓全文)。
-# 默认不内置;取消注释 + 在 install.sh 用 --with-cnki 装 playwright 后才可用。
+# CNKI(知网)中文题录检索(需 Playwright + 可见浏览器,人工过滑块,只取公开题录不抓全文)。
+# 默认不内置,但本文件里是启用的;另需 install.sh --with-cnki 装 playwright。
 [backends.cnki]
 type = "cnki"
 # user_data_dir = "~/.config/litcli/cnki-chrome"   # 独立浏览器 profile,会话在此持久化(首次人工登录一次)
 # headless = false                                  # 必须可见(知网对无头访问弹滑块验证码,需人工滑动)
 
-# 可选:豆瓣图书(公开书目检索,需 Playwright)。默认不内置;取消注释 + install.sh --with-douban 装 playwright 可用。
+# 豆瓣图书(公开书目检索,需 Playwright)。默认不内置,但本文件里是启用的;另需 install.sh --with-douban 装 playwright。
 # 无公开 API(api.douban.com v2 需 key),靠浏览器渲染 search 页的 window.__DATA__ 拿书卡;只取公开书目元数据
 # (书名/作者/出版社/ISBN/出版年/页数/评分),不抓受限内容、不绕过反爬。headless 默认 true(豆瓣 SSR 直接给 JSON,
 # 无滑块);仅当被风控(检测到异常流量)才在可见浏览器人工处理。

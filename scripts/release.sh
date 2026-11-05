@@ -237,8 +237,8 @@ open(path, "w", encoding="utf-8").write(re.sub(r'__version__ = ".*"', f'__versio
 PY
 fi
 
-# Harvest: [Unreleased] becomes the dated version section, above the newest existing version;
-# an empty [Unreleased] is re-opened at the tail (the file stays newest-first).
+# Harvest: [Unreleased] becomes a dated version section, with a fresh empty [Unreleased] kept above
+# it (the file stays newest-first; the oldest version ends up at the bottom).
 python3 - CHANGELOG.md "$NEW_VER" "$TODAY" <<'PY'
 import re, sys
 path, ver, today = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -253,13 +253,8 @@ rest = s[m.end():].rstrip()
 while rest.endswith("## [Unreleased]"):
     rest = rest[: -len("## [Unreleased]")].rstrip()
 tail = (rest + "\n\n") if rest else ""
-section = f"## [{ver}] - {today}\n\n{body}"
-first_ver = re.search(r"^## \[(?!Unreleased\])", header, re.M)
-if first_ver:
-    out = header[: first_ver.start()] + section + header[first_ver.start():] + tail + "## [Unreleased]\n\n"
-else:
-    out = header + section + tail + "## [Unreleased]\n\n"
-open(path, "w", encoding="utf-8").write(out)
+open(path, "w", encoding="utf-8").write(
+    header + "## [Unreleased]\n\n" + f"## [{ver}] - {today}\n\n" + body + tail)
 print(f"  CHANGELOG: harvested as [{ver}] - {today}")
 PY
 

@@ -1,0 +1,35 @@
+name: Bug report
+description: Something in the CLI, a backend, or the packaging behaves wrongly.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请尽量用中文或英文填写，两者都行。Please use Chinese or English, whichever you prefer.
+        发版在 Gitee（`simult/litcli`）；GitHub 是 CI 镜像，功能建议也欢迎。
+  - type: input
+    id: version
+    attributes:
+      label: litcli version
+      description: Output of `litcli --version`
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: OS, Python version, whether Zotero is running, which backend
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The exact command, what you expected, what you got. Paste the error, not a screenshot of it.
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Config excerpts (**redact paths/keys if private**), logs, related issues.

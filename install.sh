@@ -31,7 +31,7 @@ INSTALL_PKG=1
 SKILL_TARGETS=""
 
 usage() {
-  sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 while [ "$#" -gt 0 ]; do

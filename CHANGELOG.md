@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `README.en.md`：英文入口页（是什么 / 装什么 / 怎么跑 / 后端与授权边界），与中文 README 互加语言切换；
+  `tests/test_docs.py` 比对两份文档的命令与后端清单，防止一边加、一边忘。
+- `.github/ISSUE_TEMPLATE/bug.yml`（中英双语）与仓库 topics。
+- `tests/test_cli_surface.py`：遍历 argparse 全树逐个跑 `--help`，并断言每个子命令都有对应的分发处理，
+  防住「改了参数表没人发现」。
+- `tests/test_skill_commands.py`：`SKILL.md` 的命令表与后端名和 parser、后端注册表比对，防文档漂移。
+- `scripts/verify_release.sh <tag>`：按消费者视角验证已发布产物——下载附件、核对 `SHA256SUMS`、装进临时
+  venv、跑 `--version` 与一条真实检索；`release.sh --push` 发完自动调用，装不起来就算发布失败。
+- GitHub 镜像仓承载 CI（`master` 与 `v*` tag 触发 lint / 测试 / 入口冒烟 / 打包），`release.sh --push`
+  同步推所有 remote。
+- `scripts/release.sh --release-only`：给已存在的 tag 补建 Release（切版时没有 token 时用），不 bump、
+  不提交、不推送；`dist/` 缺失会重建。
+- 发布 token 也可放 `~/.config/litcli/gitee.token`（`chmod 600`，不入库），脚本优先读环境变量。
+
 ## [0.1.0] - 2026-11-04
 
 ### Added
@@ -28,6 +46,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- README 重排为用户视角：先讲能做什么、给一条不需要 Zotero 的 60 秒上手，再是安装 / 命令 / 后端授权边界 /
+  限制；架构细节收进 AGENTS.md 并改为链接。修正安装只提 PEP 668、`--bump --push` 未提镜像同步、
+  测试段漏记新增用例等过时描述。
+- `SKILL.md` 补「一条检索怎么走」工作流（先查用户库 → 外扩 → 收敛 → 顺藤摸瓜 → 落盘 → 落不到就明说），
+  命令面去掉写死的本机绝对路径，修掉只读后端清单漏项。
+- `config.example.toml` 头部补齐可选后端清单，修正 OpenAlex 说明的错字。
+
 - 网络层统一 `httpx`（连接池 / HTTP/2 / 代理 / 超时）、`tenacity` 退避重试、`pyrate-limiter` 站点节律、
   `lxml` 解析，取代早期手写的 urllib 传输。
 - CLI 入口按意图拆为 `litcli/commands/` 各族命令，`cli.py` 只留解析、分发与异常映射。
@@ -37,19 +62,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Zotero 收藏集合成员罗列（Zotero 忽略 `collection` 参数，改由本地 `collections` 字段归属）。
 - Crossref 裸 DOI 与 OpenAlex 完整 URL、两种 ISBN 写法统一归一，避免同一本书去重失败。
-
-## [Unreleased]
-
-### Added
-
-- `tests/test_cli_surface.py`：遍历 argparse 全树逐个跑 `--help`，并断言每个子命令都有对应的分发处理，
-  防住「改了参数表没人发现」。
-- `tests/test_skill_commands.py`：`SKILL.md` 的命令表与后端名和 parser、后端注册表比对，防文档漂移。
-- `scripts/verify_release.sh <tag>`：按消费者视角验证已发布产物——下载附件、核对 `SHA256SUMS`、装进临时
-  venv、跑 `--version` 与一条真实检索；`release.sh --push` 发完自动调用，装不起来就算发布失败。
-- GitHub 镜像仓承载 CI（`master` 与 `v*` tag 触发 lint / 测试 / 入口冒烟 / 打包），`release.sh --push`
-  同步推所有 remote。
-- `scripts/release.sh --release-only`：给已存在的 tag 补建 Release（切版时没有 token 时用），不 bump、
-  不提交、不推送；`dist/` 缺失会重建。
-- 发布 token 也可放 `~/.config/litcli/gitee.token`（`chmod 600`，不入库），脚本优先读环境变量。
-
