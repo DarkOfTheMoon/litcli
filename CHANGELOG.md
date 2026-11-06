@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-06
+
 ### Added
 
 - 二进制安装器（Linux `.run` 自解压 / Windows 安装 `.exe`）：`packaging/` 下的 PyInstaller 冻结配置 + 两个安装器脚本，`scripts/build_binary.{sh,ps1}` 构建并自验（装、跑、卸）。产物只有字节码与依赖，目标机不需要 Python，也不需要源码。CI 增加 Linux + Windows 构建作业。

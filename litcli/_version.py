@@ -4,4 +4,4 @@ pyproject.toml reads this via `[tool.setuptools.dynamic] version = {attr = "litc
 so bumping the version means editing exactly this one string.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"

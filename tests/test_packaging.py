@@ -89,6 +89,34 @@ class CiWiringTest(unittest.TestCase):
         rc = subprocess.run([BASH, "-n", RELEASE], capture_output=True, text=True)
         self.assertEqual(rc.returncode, 0, rc.stderr)
 
+    @unittest.skipUnless(BASH, "no POSIX shell")
+    def test_checksum_step_survives_the_bin_subdirectory(self):
+        # `sha256sum ./* bin/*` also gets dist/bin (a directory) and fails under pipefail.
+        import re
+        import shutil
+        import tempfile
+        helper = re.search(r"^write_sums\(\) \{.*?^\}", _read(RELEASE), re.S | re.M).group()
+        work = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, work, True)
+        os.makedirs(os.path.join(work, "dist", "bin"))
+        for rel in ("dist/litcli-1.0.tar.gz", "dist/bin/litcli-1.0.run"):
+            with open(os.path.join(work, rel), "w", encoding="utf-8") as f:
+                f.write("x")
+        script = f"set -euo pipefail; cd {work!r}\n{helper}\nwrite_sums"
+        rc = subprocess.run([BASH, "-c", script], capture_output=True, text=True)
+        self.assertEqual(rc.returncode, 0, rc.stderr)
+        sums = _read(os.path.join(work, "dist", "SHA256SUMS"))
+        self.assertIn("  litcli-1.0.tar.gz", sums)
+        self.assertNotIn("bin/", sums)  # attachments download side by side, names must be flat
+        # ...and the format must stay one `sha256sum -c` accepts, from a flat download dir
+        flat = os.path.join(work, "flat")
+        os.makedirs(flat)
+        for rel in ("dist/SHA256SUMS", "dist/litcli-1.0.tar.gz", "dist/bin/litcli-1.0.run"):
+            shutil.copy(os.path.join(work, rel), flat)
+        rc = subprocess.run([BASH, "-c", f"cd {flat!r} && sha256sum -c --quiet SHA256SUMS"],
+                            capture_output=True, text=True)
+        self.assertEqual(rc.returncode, 0, rc.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -51,6 +51,16 @@ GITEE_PROJECT="$(git remote get-url origin | sed -E 's#\.git$##; s#^.*[:/]([^/]+
 # CI mirror (the side that builds the other platform's installer); empty when not configured.
 GITHUB_PROJECT="$(git remote get-url github 2>/dev/null | sed -E 's#\.git$##; s#^.*[:/]([^/]+/[^/]+)$#\1#')" || GITHUB_PROJECT=""
 
+write_sums() {
+  # `sha256sum ./* bin/*` would also be handed the dist/bin directory, which sha256sum
+  # rejects — harmless without pipefail, fatal with it. Enumerate files instead.
+  # Normalise to `hash  name`, flat: attachments download side by side, so a `bin/` prefix
+  # would not resolve. Also strips the `./` and Git Bash's binary-mode `*`.
+  ( cd dist && find . -maxdepth 2 -type f ! -name SHA256SUMS -print0 \
+    | sort -z | xargs -0 sha256sum 2>/dev/null \
+    | sed -E 's# ([ *])\./(bin/)?#  #' > SHA256SUMS )
+}
+
 missing_installers() {
   # The platforms a --binary release must ship; prints the ones not in dist/bin yet.
   ls dist/bin/*-linux-*.run >/dev/null 2>&1 || echo linux
@@ -173,7 +183,7 @@ if [ "$RELEASE_ONLY" = 1 ]; then
     [ -z "$(missing_installers)" ] || {
       echo "  ✗ release has installers but misses: $(missing_installers | tr '\n' ' ')" >&2; exit 1; }
   fi
-  ( cd dist && { sha256sum ./* bin/* 2>/dev/null | while read -r h f; do printf '%s  %s\n' "$h" "${f##*/}"; done; } > SHA256SUMS )
+  write_sums
   publish_release "$REL_VER" || exit 1
   echo "==> done: v$REL_VER"
   exit 0
@@ -330,7 +340,7 @@ if [ "$DO_BINARY" = 1 ]; then
     echo "  ✓ added $(basename "$p")"
   done
 fi
-( cd dist && { sha256sum ./* bin/* 2>/dev/null | while read -r h f; do printf '%s  %s\n' "$h" "${f##*/}"; done; } > SHA256SUMS )
+write_sums
 echo "  ✓ dist/ built: $(cd dist && ls | tr '\n' ' ')"
 
 if [ "$DO_PUSH" = 0 ]; then
@@ -372,7 +382,7 @@ if [ "$DO_BINARY" = 1 ]; then
     exit 1
   fi
   # The fetched file is newer than the step-4 checksum list; recompute over the final set.
-  ( cd dist && { sha256sum ./* bin/* 2>/dev/null | while read -r h f; do printf '%s  %s\n' "$h" "${f##*/}"; done; } > SHA256SUMS )
+  write_sums
   echo "  ✓ both platform installers present, SHA256SUMS refreshed"
 fi
 
