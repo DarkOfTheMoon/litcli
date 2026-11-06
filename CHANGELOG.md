@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- 支持 Windows：配置与浏览器 profile 落到 `%APPDATA%\litcli`（`XDG_CONFIG_HOME` 在 POSIX 上同样被尊重）；
+  CI 增加 `windows-latest` 作业跑全量测试与入口冒烟。
+
+### Changed
+
+- `--out` 现在接受目录（已存在或以分隔符结尾），文件名仍按默认规则生成；此前只能给完整路径。
+- 仓库内 Windows 调试入口 `bin\litcli.cmd`（等价于 POSIX 的 `bin/litcli`）。
+
+### Fixed
+
+- `fetch` 的默认文件名在 Windows 上非法：老式 DOI 含 `:` `<` `>`（如
+  `10.1002/…16:15<1705::AID-SIM599>…`），此前直接拼进文件名。现统一替换非法字符、去尾部点/空格、
+  截断过长主干并避开 `CON`/`NUL` 等保留设备名。
+- `pdftotext` 的输出按 UTF-8 解码（此前跟系统代码页，Windows 下中文 PDF 会乱码）。
+- 重定向输出在 Windows 上强制 UTF-8，避免中文题录在 cp936 管道里抛 `UnicodeEncodeError`。
+
 ## [0.2.0] - 2026-11-05
 
 ### Added
@@ -24,21 +42,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `scripts/release.sh --release-only`：给已存在的 tag 补建 Release（切版时没有 token 时用），不 bump、
   不提交、不推送；`dist/` 缺失会重建。
 - 发布 token 也可放 `~/.config/litcli/gitee.token`（`chmod 600`，不入库），脚本优先读环境变量。
-- 支持 Windows：配置与浏览器 profile 落到 `%APPDATA%\litcli`（`XDG_CONFIG_HOME` 在 POSIX 上同样被尊重）；
-  CI 增加 `windows-latest` 作业跑全量测试与入口冒烟。
-
-### Changed
-
-- `--out` 现在接受目录（已存在或以分隔符结尾），文件名仍按默认规则生成；此前只能给完整路径。
-- 仓库内 Windows 调试入口 `bin\litcli.cmd`（等价于 POSIX 的 `bin/litcli`）。
-
-### Fixed
-
-- `fetch` 的默认文件名在 Windows 上非法：老式 DOI 含 `:` `<` `>`（如
-  `10.1002/…16:15<1705::AID-SIM599>…`），此前直接拼进文件名。现统一替换非法字符、去尾部点/空格、
-  截断过长主干并避开 `CON`/`NUL` 等保留设备名。
-- `pdftotext` 的输出按 UTF-8 解码（此前跟系统代码页，Windows 下中文 PDF 会乱码）。
-- 重定向输出在 Windows 上强制 UTF-8，避免中文题录在 cp936 管道里抛 `UnicodeEncodeError`。
 
 ## [0.1.0] - 2026-11-04
 
