@@ -17,6 +17,8 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 HEADER = os.path.join(ROOT, "packaging", "installer", "linux-header.sh")
 SPEC = os.path.join(ROOT, "packaging", "litcli.spec")
 RELEASE = os.path.join(ROOT, "scripts", "release.sh")
+VERIFY = os.path.join(ROOT, "scripts", "verify_release.sh")
+CI = os.path.join(ROOT, ".github", "workflows", "ci.yml")
 
 
 def _read(path):
@@ -58,6 +60,29 @@ class ReleaseWiringTest(unittest.TestCase):
         text = _read(RELEASE)
         self.assertIn("--binary) DO_BINARY=1", text)
         self.assertIn("dist/* dist/bin/*", text)  # both are uploaded
+
+    def test_a_binary_release_needs_both_platforms(self):
+        text = _read(RELEASE)
+        # one platform builds locally; the other is fetched from CI or supplied by hand
+        self.assertIn("*-linux-*.run", text)
+        self.assertIn("*-windows-*-setup.exe", text)
+        self.assertIn("--installer) DO_BINARY=1", text)
+        self.assertIn("fetch_ci_installer", text)
+
+    def test_consumer_check_requires_the_windows_installer(self):
+        text = _read(VERIFY)
+        self.assertIn("-windows-", text)
+        self.assertIn("SHA256SUMS", text)
+
+
+class CiWiringTest(unittest.TestCase):
+    def test_the_frozen_build_downloads_and_launches_chromium(self):
+        text = _read(CI)
+        self.assertIn("backends install-browser", text)
+        self.assertIn("chromium", text)
+        self.assertIn("install-browser --check", text)
+        self.assertIn("--with-deps", text)
+        self.assertIn("windows-latest", text)  # the browser path is exercised on both platforms
 
     @unittest.skipUnless(BASH, "no POSIX shell")
     def test_release_script_parses(self):

@@ -14,6 +14,10 @@
 #   4) build dist/ artifacts + SHA256SUMS ([--binary] also builds this platform's installer)
 #   5) only with --push: push master + tag to every remote, and create the Gitee Release with the
 #      artifacts attached when a token is configured (otherwise print the manual steps)
+#      --binary releases need a Linux *and* a Windows installer. The local build covers one
+#      platform; the other is fetched from the GitHub CI artifact of the pushed commit (or
+#      supplied with --installer from a Windows machine). Publishing stops if either is absent,
+#      because a one-platform release is worse than none: the installer list would silently lie.
 #   6) consumer check: download the published assets back and install them in a throwaway venv
 #      (scripts/verify_release.sh) — skipped when no Release was created
 #
@@ -24,7 +28,7 @@
 #   scripts/release.sh --check                                  gates only, change nothing
 #   scripts/release.sh --dry-run                                gates + show what would happen
 #   scripts/release.sh [--bump patch|minor|major|none] [--notes <file.md>] [--push] [--no-release]
-#                      [--binary]
+#                      [--binary [--installer <path>]...]
 #   scripts/release.sh --release-only [vX.Y.Z]                  (re)create the Release of that tag
 #                                                               (default: the tag on HEAD); nothing is
 #                                                               bumped, committed or pushed
@@ -44,6 +48,34 @@ BRANCH_REQUIRED="master"
 GITEE_API="https://gitee.com/api/v5"
 # owner/repo from git@gitee.com:owner/repo.git (strip .git first; a lazy regex swallows it)
 GITEE_PROJECT="$(git remote get-url origin | sed -E 's#\.git$##; s#^.*[:/]([^/]+/[^/]+)$#\1#')"
+# CI mirror (the side that builds the other platform's installer); empty when not configured.
+GITHUB_PROJECT="$(git remote get-url github 2>/dev/null | sed -E 's#\.git$##; s#^.*[:/]([^/]+/[^/]+)$#\1#')" || GITHUB_PROJECT=""
+
+missing_installers() {
+  # The platforms a --binary release must ship; prints the ones not in dist/bin yet.
+  ls dist/bin/*-linux-*.run >/dev/null 2>&1 || echo linux
+  ls dist/bin/*-windows-*-setup.exe >/dev/null 2>&1 || echo windows
+}
+
+fetch_ci_installer() {
+  # The Windows installer can only be built on Windows; take it from the CI run of HEAD.
+  local sha="$1" id attempt
+  echo "==> [5b/7] waiting for CI to build the Windows installer"
+  for attempt in $(seq 1 60); do
+    id="$(gh run list --repo "$GITHUB_PROJECT" --commit "$sha" --limit 1 \
+          --json databaseId --jq '.[0].databaseId // empty' 2>/dev/null || true)"
+    [ -n "$id" ] && break
+    sleep 10
+  done
+  if [ -z "${id:-}" ]; then
+    echo "  ✗ CI did not pick up $sha; is the workflow enabled on $GITHUB_PROJECT?" >&2
+    return 1
+  fi
+  echo "  run: https://github.com/$GITHUB_PROJECT/actions/runs/$id"
+  gh run watch "$id" --repo "$GITHUB_PROJECT" --exit-status >/dev/null \
+    || { echo "  ✗ CI run $id failed; see the link above" >&2; return 1; }
+  gh run download "$id" --repo "$GITHUB_PROJECT" --name installer-windows-latest --dir dist/bin
+}
 
 publish_release() {
   local ver="$1" notes
@@ -89,6 +121,7 @@ NOTES_FILE=""
 DO_PUSH=0
 DO_RELEASE=1
 DO_BINARY=0
+EXTRA_INSTALLERS=()
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -101,7 +134,8 @@ while [ $# -gt 0 ]; do
     --push) DO_PUSH=1 ;;
     --no-release) DO_RELEASE=0 ;;
     --binary) DO_BINARY=1 ;;
-    -h|--help) sed -n '2,36p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --installer) DO_BINARY=1; EXTRA_INSTALLERS+=("${2:?--installer needs a path}"); shift ;;
+    -h|--help) sed -n '2,39p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
@@ -129,9 +163,17 @@ if [ "$RELEASE_ONLY" = 1 ]; then
   if [ ! -d dist ] || [ -z "$(ls -A dist 2>/dev/null)" ]; then
     echo "  - dist/ missing, rebuilding ..."
     python3 -m build --no-isolation --outdir dist >/dev/null
-    ( cd dist && sha256sum ./* > SHA256SUMS )
-    echo "  ✓ dist/ rebuilt"
+    echo "  ✓ dist/ rebuilt (installers are only attached if already in dist/bin/)"
   fi
+  # A Release that lists installers must list both platforms; top up from CI before publishing.
+  if ls dist/bin/*-* >/dev/null 2>&1; then
+    if [ -n "$(missing_installers)" ] && [ -n "$GITHUB_PROJECT" ] && command -v gh >/dev/null 2>&1; then
+      fetch_ci_installer "$(git rev-parse "v$REL_VER^{commit}")" || exit 1
+    fi
+    [ -z "$(missing_installers)" ] || {
+      echo "  ✗ release has installers but misses: $(missing_installers | tr '\n' ' ')" >&2; exit 1; }
+  fi
+  ( cd dist && { sha256sum ./* bin/* 2>/dev/null | while read -r h f; do printf '%s  %s\n' "$h" "${f##*/}"; done; } > SHA256SUMS )
   publish_release "$REL_VER" || exit 1
   echo "==> done: v$REL_VER"
   exit 0
@@ -276,12 +318,17 @@ echo "==> [4/6] build dist/ artifacts"
 rm -rf dist
 python3 -m build --no-isolation --outdir dist >/dev/null
 if [ "$DO_BINARY" = 1 ]; then
-  # Only this platform's installer is built here; a Windows installer is produced by CI (or a
-  # local Windows run) and can be dropped into dist/bin/ before releasing.
+  # Only this platform's installer can be built here. The other one comes from --installer or,
+  # failing that, from the CI run of this very commit (fetched after the push, step 5b).
+  mkdir -p dist/bin
   case "$(uname -s)" in
     Linux) sh scripts/build_binary.sh ;;
-    *) echo "  ! binary build not supported on $(uname -s); skipping the installer" ;;
+    *) echo "  ! no local binary build on $(uname -s); both installers must be supplied or fetched" ;;
   esac
+  for p in ${EXTRA_INSTALLERS[@]+"${EXTRA_INSTALLERS[@]}"}; do
+    cp "$p" dist/bin/ || { echo "  ✗ cannot copy --installer $p" >&2; exit 1; }
+    echo "  ✓ added $(basename "$p")"
+  done
 fi
 ( cd dist && { sha256sum ./* bin/* 2>/dev/null | while read -r h f; do printf '%s  %s\n' "$h" "${f##*/}"; done; } > SHA256SUMS )
 echo "  ✓ dist/ built: $(cd dist && ls | tr '\n' ' ')"
@@ -290,6 +337,10 @@ if [ "$DO_PUSH" = 0 ]; then
   echo "==> [5/6] push skipped (no --push); tag is local"
   echo "    later: git push origin $BRANCH_REQUIRED && git push origin v$NEW_VER"
   echo "    note: re-running after tagging trips gate ⑦; push by hand instead."
+  if [ "$DO_BINARY" = 1 ] && [ -n "$(missing_installers)" ]; then
+    echo "    note: installers still missing ($(missing_installers | tr '\n' ' ')) — they are fetched"
+    echo "          from CI at publish time when you run --release-only after pushing"
+  fi
   echo "==> [6/6] release skipped"
   exit 0
 fi
@@ -304,6 +355,26 @@ for r in $REMOTES; do
     echo "  ✗ push to $r failed (tag is local/partial; re-run once fixed)" >&2; exit 1; }
   echo "  ✓ pushed to $r"
 done
+
+if [ "$DO_BINARY" = 1 ]; then
+  missing="$(missing_installers)"
+  if [ -n "$missing" ]; then
+    echo "  installers still missing: $(echo $missing)"
+    if [ -n "$GITHUB_PROJECT" ] && command -v gh >/dev/null 2>&1; then
+      fetch_ci_installer "$(git rev-parse HEAD)" || exit 1
+    fi
+  fi
+  missing="$(missing_installers)"
+  if [ -n "$missing" ]; then
+    echo "  ✗ a --binary release ships both platforms; still missing: $(echo $missing)" >&2
+    echo "    build it on a Windows box and re-run with --installer <setup.exe>," >&2
+    echo "    or configure the github remote and gh so CI can supply it" >&2
+    exit 1
+  fi
+  # The fetched file is newer than the step-4 checksum list; recompute over the final set.
+  ( cd dist && { sha256sum ./* bin/* 2>/dev/null | while read -r h f; do printf '%s  %s\n' "$h" "${f##*/}"; done; } > SHA256SUMS )
+  echo "  ✓ both platform installers present, SHA256SUMS refreshed"
+fi
 
 if [ "$DO_RELEASE" = 0 ]; then
   echo "==> [6/6] release skipped (--no-release)"; exit 0

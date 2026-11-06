@@ -80,6 +80,24 @@ jobs:
           name: installer-${{ matrix.os }}
           path: dist/bin/*
           if-no-files-found: error
+      # The frozen build must be able to fetch and launch the browser too: the CNKI/Douban
+      # path only exists there, and its bundled Playwright driver resolves differently on
+      # each platform. `install` is a no-op when the cached browser is already downloaded.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/AppData/Local/ms-playwright
+          key: ms-playwright-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
+      - name: Chromium downloads and launches from the frozen build
+        shell: bash
+        run: |
+          exe=build/stage/litcli/litcli
+          [ -x "$exe" ] || exe="$exe.exe"
+          extra=""
+          if [ "${{ runner.os }}" = "Linux" ]; then extra=--with-deps; fi
+          "$exe" backends install-browser $extra chromium
+          "$exe" backends install-browser --check
 
   package:
     runs-on: ubuntu-latest

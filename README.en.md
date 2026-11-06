@@ -53,6 +53,7 @@ Douban, from the wizard or later:
 
 ```bash
 litcli backends install-browser
+litcli backends install-browser --check   # self-test: launch it headless and report the version
 ```
 
 Browsers live in Playwright's own cache (`~/.cache/ms-playwright` /

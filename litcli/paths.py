@@ -74,6 +74,31 @@ def safe_filename(stem: str, ext: str) -> str:
     return f"{name}.{ext.lstrip('.')}"
 
 
+def browser_cache_dir() -> Path:
+    """Where downloaded browsers live (Playwright's own per-user cache).
+
+    A frozen Playwright forces ``PLAYWRIGHT_BROWSERS_PATH=0`` on the driver it starts, i.e.
+    browsers *inside* the bundle — a tree the installer wipes on upgrade and uninstall. Point
+    the download and the launch at the shared per-user cache instead, so a browser survives
+    both.
+    """
+    if _IS_WINDOWS:
+        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        return Path(base) / "ms-playwright"
+    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    return Path(base) / "ms-playwright"
+
+
+def apply_browser_cache() -> Path:
+    """Make Playwright resolve browsers from :func:`browser_cache_dir` and return it.
+
+    ``setdefault`` on purpose: an explicit ``PLAYWRIGHT_BROWSERS_PATH`` (``0`` included) wins.
+    """
+    cache = browser_cache_dir()
+    os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(cache))
+    return cache
+
+
 def target_path(out: str | None, stem: str, ext: str) -> str:
     """Resolve ``--out`` plus a default file name.
 

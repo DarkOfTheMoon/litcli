@@ -72,6 +72,12 @@ def build_parser() -> argparse.ArgumentParser:
                          help="download the Chromium that cnki/douban drive (needs the playwright package)")
     bi.add_argument("browser", nargs="?", default="chromium", choices=["chromium", "firefox", "webkit"],
                     help="browser to download (default chromium)")
+    bi.add_argument("--check", action="store_true",
+                    help="don't download; launch the browser headless and report its version")
+    bi.add_argument("--dry-run", action="store_true",
+                    help="show what would be downloaded (passes --dry-run to the driver)")
+    bi.add_argument("--with-deps", action="store_true",
+                    help="also apt-install the OS libraries the browser needs (Debian/Ubuntu)")
 
     # --- data: local store CRUD (write · requires decision) ---
     d = sub.add_parser("data", help="local store operations (CRUD; read-only backends are reported)")

@@ -45,6 +45,7 @@ Windows 下载 `litcli-<版本>-windows-x86_64-setup.exe` 双击安装（按用�
 
 ```bash
 litcli backends install-browser        # 安装后再跑，或在安装器里勾选
+litcli backends install-browser --check  # 自检：无头启动一次并报版本
 ```
 
 浏览器落在 Playwright 自己的缓存（`~/.cache/ms-playwright` / `%LOCALAPPDATA%\ms-playwright`），

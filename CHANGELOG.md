@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 二进制安装器（Linux `.run` 自解压 / Windows 安装 `.exe`）：`packaging/` 下的 PyInstaller 冻结配置 + 两个安装器脚本，`scripts/build_binary.{sh,ps1}` 构建并自验（装、跑、卸）。产物只有字节码与依赖，目标机不需要 Python，也不需要源码。CI 增加 Linux + Windows 构建作业。
 - `litcli backends install-browser [chromium|firefox|webkit]`：经随包的 Playwright 驱动下载浏览器，落在 Playwright 自己的缓存里，升级复用、卸载保留。Chromium 不塞进安装包。
 - `release.sh --binary`：切版时构建本平台安装器并连同 wheel/sdist 一起上传；`verify_release.sh` 在产物含 Linux 安装器时按消费者视角装一遍、跑一遍、卸一遍。
+- `backends install-browser --check`：无头启动一次浏览器并报版本（`--dry-run` 只列出下载目标）；CI 在冻结包上真下载 Chromium 后必跑，Linux 与 Windows 都覆盖。
+- 冻结包显式把浏览器钉在用户缓存（`~/.cache/ms-playwright` / `%LOCALAPPDATA%\ms-playwright`）：Playwright 在 PyInstaller 环境下默认 `PLAYWRIGHT_BROWSERS_PATH=0`，浏览器会落进升级即被覆盖的包内目录，此前冻结包的下载位置与启动查找位置不一致。
+- `--binary` 发版要求 Linux 与 Windows 安装器齐全：另一个平台由 CI 产物或 `--installer <path>` 提供，缺任一平台即拒绝发布，`--release-only` 也会补取；`verify_release.sh` 同步要求 Windows 安装器在产物与 `SHA256SUMS` 里。
 
 ## [0.3.0] - 2026-11-06
 

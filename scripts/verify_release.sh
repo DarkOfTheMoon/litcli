@@ -97,6 +97,13 @@ ok
 
 INSTALLER="$(ls "$WORK"/*-linux-*.run 2>/dev/null | head -1 || true)"
 if [ -n "$INSTALLER" ]; then
+  step "the windows installer is published and checksummed too"
+  ls "$WORK"/*-windows-*-setup.exe >/dev/null 2>&1 || {
+    bad; echo "linux installer published but no windows installer" >&2; exit 1; }
+  grep -q -- "-windows-.*-setup\.exe$" "$WORK/SHA256SUMS" || {
+    bad; echo "the windows installer is not in SHA256SUMS" >&2; exit 1; }
+  ok
+
   step "linux installer installs, runs and uninstalls"
   PFX="$WORK/prefix"
   sh "$INSTALLER" --prefix "$PFX" --yes >/dev/null || { bad; exit 1; }

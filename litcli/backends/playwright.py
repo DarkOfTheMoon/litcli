@@ -15,7 +15,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from pathlib import Path
 
-from ..paths import config_dir, is_frozen
+from ..paths import apply_browser_cache, config_dir, is_frozen
 from .base import Backend
 
 # Install hint used when Playwright is missing (generic; subclasses tailor it with the
@@ -69,6 +69,7 @@ class PlaywrightBackend(Backend):
         first page, and always tear down the context + engine. Resource ownership lives
         here, not in each caller."""
         sync_playwright = self._playwright()
+        apply_browser_cache()  # frozen builds would otherwise resolve inside the bundle
         pw = sync_playwright().start()
         context = None
         try:

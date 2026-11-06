@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+import os
 import subprocess
 import sys
 
@@ -9,6 +10,7 @@ from .. import config as config_mod
 from ..completions import build_spec
 from ..completions import render as render_completion
 from ..config import get_all_backends, get_backend, write_backend_key
+from ..paths import apply_browser_cache
 from .parser import build_parser
 
 
@@ -92,13 +94,45 @@ def cmd_backends_authorize(cfg, args) -> int:
     return 0
 
 
+def _browser_launch_check() -> int:
+    """Launch Chromium headless and report its version.
+
+    Playwright's cache can hold a half-extracted or wrong-versioned tree that ``install``
+    happily accepts; only an actual launch proves the download is usable (this is what the
+    binary CI job asserts after installing).
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        print("[error] this build has no playwright; install the wheel/source build, or "
+              "`pip install playwright` into the same interpreter")
+        return 2
+    apply_browser_cache()  # a frozen driver would otherwise look inside the bundle
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            try:
+                version = browser.version
+            finally:
+                browser.close()
+    except Exception as e:  # missing browser, broken tree, no display
+        print(f"[error] chromium does not launch: {e}")
+        print("        run `litcli backends install-browser` first")
+        return 2
+    print(f"[ok] chromium {version} launches")
+    return 0
+
+
 def cmd_backends_install_browser(cfg, args) -> int:
     """Download the browser the cnki/douban backends drive, via the bundled Playwright driver.
 
     Kept out of the installer's hard payload on purpose: the browser is ~150 MB and only two
     backends need it. The browser lands in Playwright's own cache (``~/.cache/ms-playwright``
     or ``%LOCALAPPDATA%\\ms-playwright``), so installing a new litcli build keeps it.
+    ``--check`` skips the download and launches the browser instead.
     """
+    if getattr(args, "check", False):
+        return _browser_launch_check()
     browser = getattr(args, "browser", "chromium") or "chromium"
     try:
         from playwright._impl._driver import compute_driver_executable
@@ -109,8 +143,16 @@ def cmd_backends_install_browser(cfg, args) -> int:
     driver = compute_driver_executable()
     # Playwright >= 1.40 returns (node, cli.js); older ones a single runnable path.
     cmd = [str(part) for part in driver] if isinstance(driver, tuple) else ["node", str(driver)]
+    download = [*cmd, "install"]
+    if getattr(args, "with_deps", False):
+        download.append("--with-deps")
+    if getattr(args, "dry_run", False):
+        download.append("--dry-run")
+    # The driver is a separate process: give it the same cache the launch path uses (frozen
+    # Playwright defaults the driver it starts to "0", browsers inside the wiped bundle).
+    env = {**os.environ, "PLAYWRIGHT_BROWSERS_PATH": str(apply_browser_cache())}
     print(f"downloading {browser}; this can take a few minutes and ~150 MB …")
-    rc = subprocess.call([*cmd, "install", browser])
+    rc = subprocess.call([*download, browser], env=env)
     if rc != 0:
         print(f"[error] browser download failed (playwright exit {rc})")
         return 2

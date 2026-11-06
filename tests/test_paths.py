@@ -87,5 +87,32 @@ class ConfigDirTest(unittest.TestCase):
             self.assertEqual(config_dir(), __import__("pathlib").Path.home() / ".config" / "litcli")
 
 
+class BrowserCacheTest(unittest.TestCase):
+    """A frozen Playwright would otherwise put browsers inside the wiped bundle."""
+
+    def test_windows_uses_localappdata(self):
+        env = {"LOCALAPPDATA": r"C:\Users\me\AppData\Local"}
+        with mock.patch.object(paths, "_IS_WINDOWS", True), mock.patch.dict(os.environ, env):
+            self.assertEqual(paths.browser_cache_dir(),
+                             paths.Path(env["LOCALAPPDATA"]) / "ms-playwright")
+
+    def test_posix_honours_xdg_cache_home(self):
+        env = {"XDG_CACHE_HOME": "/tmp/cache"}
+        with mock.patch.object(paths, "_IS_WINDOWS", False), mock.patch.dict(os.environ, env):
+            self.assertEqual(paths.browser_cache_dir(), paths.Path("/tmp/cache/ms-playwright"))
+
+    def test_apply_does_not_override_an_explicit_setting(self):
+        env = {"PLAYWRIGHT_BROWSERS_PATH": "/elsewhere"}
+        with mock.patch.dict(os.environ, env):
+            paths.apply_browser_cache()
+            self.assertEqual(os.environ["PLAYWRIGHT_BROWSERS_PATH"], "/elsewhere")
+
+    def test_apply_sets_the_cache_when_unset(self):
+        env = {k: v for k, v in os.environ.items() if k != "PLAYWRIGHT_BROWSERS_PATH"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            paths.apply_browser_cache()
+            self.assertTrue(os.environ["PLAYWRIGHT_BROWSERS_PATH"].endswith("ms-playwright"))
+
+
 if __name__ == "__main__":
     unittest.main()
