@@ -31,7 +31,7 @@ ruff check litcli tests
 scripts/verify_release.sh vX.Y.Z
 ```
 
-**发布**：走 `scripts/release.sh`，不手工改版本号/打 tag。流程是门禁（在 master 且与 origin 齐平、工作区干净、测试绿、ruff 干净、能出包、`CHANGELOG.md` 的 `[Unreleased]` 非空、目标 tag 未占用）→ 改 `litcli/_version.py` + 把 `[Unreleased]` 收成带日期的版本段 → 提交 `chore(release): vX.Y.Z` → 打 tag → 构建 `dist/`（sdist + wheel）与 `SHA256SUMS`。`--check`/`--dry-run` 只跑门禁与预演，`--push` 才外发（推 master + tag 到**所有** remote；设了 `GITEE_TOKEN` 或 `~/.config/litcli/gitee.token` 才建 Gitee Release 并挂产物；切版时没 token，事后用 `--release-only` 给已推的 tag 补建，不改提交）。发布后自动跑 `scripts/verify_release.sh` 做消费者验证，不过就算发布失败。`github` 是 CI 镜像仓，新增 remote 后 `release.sh` 会自动同步推送，别让它落后于已发布的 tag。日常改动本身**不**往 CHANGELOG 里随手加，收版时统一补 `[Unreleased]`。
+**发布**：只在用户明确要求时切版——日常改动提交、推送、CI 绿即止，不顺手发版。发版走 `scripts/release.sh`，不手工改版本号/打 tag。流程是门禁（在 master 且与 origin 齐平、工作区干净、测试绿、ruff 干净、能出包、`CHANGELOG.md` 的 `[Unreleased]` 非空、目标 tag 未占用）→ 改 `litcli/_version.py` + 把 `[Unreleased]` 收成带日期的版本段 → 提交 `chore(release): vX.Y.Z` → 打 tag → 构建 `dist/`（sdist + wheel）与 `SHA256SUMS`。`--check`/`--dry-run` 只跑门禁与预演，`--push` 才外发（推 master + tag 到**所有** remote；设了 `GITEE_TOKEN` 或 `~/.config/litcli/gitee.token` 才建 Gitee Release 并挂产物；切版时没 token，事后用 `--release-only` 给已推的 tag 补建，不改提交）。发布后自动跑 `scripts/verify_release.sh` 做消费者验证，不过就算发布失败。`github` 是 CI 镜像仓，新增 remote 后 `release.sh` 会自动同步推送，别让它落后于已发布的 tag。日常改动本身**不**往 CHANGELOG 里随手加，收版时统一补 `[Unreleased]`。
 
 CLI 帮助用 `./bin/litcli --help`。常用面：
 
