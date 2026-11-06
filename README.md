@@ -29,36 +29,44 @@ litcli fetch 10.1038/s41598-024-80509-9            # 落到当前目录，stdout
 
 ## 安装
 
+**推荐：装二进制，不需要 Python，也不需要下载源码。** 发布页提供安装器（附 `SHA256SUMS`）：
+
 ```bash
-# 方式一：装进当前环境（venv / 任意 Python 3.11+）
-pip install .
-
-# 方式二：生产快照（Debian/Ubuntu 的 PEP 668 环境）
-./install.sh                 # = pip install --break-system-packages --user .，复制快照到 ~/.local，不动系统包
-litcli backends              # 自测：列出已配置后端及能力（PATH 里没有 ~/.local/bin 时见末尾提示）
-
-# 方式三：从发布版本装（发布页附 SHA256SUMS）
-git clone --branch v0.1.0 --depth 1 https://gitee.com/simult/litcli.git litcli-0.1.0
-cd litcli-0.1.0 && ./install.sh
+# Linux：自解压安装器，装到 ~/.local/opt/litcli-<版本>，链接到 ~/.local/bin/litcli
+sh litcli-<版本>-linux-x86_64.run            # 加 --with-browser 顺带下载知网/豆瓣用的 Chromium
+sh litcli-<版本>-linux-x86_64.run --uninstall
 ```
 
-**Windows**：`install.sh` 与补全脚本是 POSIX 的，Windows 上直接用 pip（Python 3.11+）：
+Windows 下载 `litcli-<版本>-windows-x86_64-setup.exe` 双击安装（按用户装到
+`%LOCALAPPDATA%\Programs\litcli`，无需管理员）；安装向导里的"下载 Chromium"是勾选项。
 
-```powershell
-py -m venv .venv; .\.venv\Scripts\Activate.ps1
-pip install .
-litcli backends
+安装器里只有冻结后的字节码与依赖，**没有 `.py` 源码**，目标机不需要装 Python。Chromium 不随包
+（单引擎约 150 MB），用到知网 / 豆瓣时再装：
+
+```bash
+litcli backends install-browser        # 安装后再跑，或在安装器里勾选
 ```
 
-配置按平台落位（Windows 是 `%APPDATA%\litcli\config.toml`，其余是 `~/.config/litcli/`）；仓库内调试用
-`bin\litcli.cmd` 代替 `./bin/litcli`。PDF 文本预览需要把 poppler 的 `pdftotext.exe` 放进 PATH。shell 补全
-只提供 bash/zsh/fish——PowerShell 下可在 Git Bash 里生成，或直接依赖 `--help`。
+浏览器落在 Playwright 自己的缓存（`~/.cache/ms-playwright` / `%LOCALAPPDATA%\ms-playwright`），
+升级装新版会继续复用，卸载也不删。
+
+**从源码装**（要改代码、或要跑测试时）：
+
+```bash
+pip install .                        # 装进当前环境（venv / 任意 Python 3.11+）
+./install.sh                         # Debian/Ubuntu 的 PEP 668 环境：--user 快照到 ~/.local，不动系统包
+litcli backends                      # 自测：列出已配置后端及能力
+```
 
 `install.sh` 装的是**源码副本快照**：生产期间改仓库不波及已装版本，发新版本重跑即可。开发时在仓库内直接用
 `./bin/litcli`，与已装版本互不影响。PDF 文本抽取依赖系统 `pdftotext`（poppler-utils）；缺失时返回空文本，
 其余功能不受影响。CNKI / 豆瓣另需 `./install.sh --with-cnki`（或 `--with-douban`）装浏览器依赖。
 
 升级就是重跑 `./install.sh`（覆盖快照）；卸载用 `pip uninstall litcli` 并删 `~/.config/litcli` 与 `~/.local/share/litcli`。
+
+**Windows（源码）**：`install.sh` 与补全脚本是 POSIX 的，改用 `py -m venv .venv` 后 `.\\.venv\\Scripts\\Activate.ps1`
+与 `pip install .`；仓库内调试用 `bin\\litcli.cmd`。PDF 文本预览需要把 poppler 的 `pdftotext.exe` 放进 PATH；
+shell 补全只有 bash/zsh/fish（PowerShell 下可在 Git Bash 里生成）。配置在 `%APPDATA%\\litcli\\config.toml`。
 
 数据都留在本机：引文写进你自己的 Zotero 库，配置在 `~/.config/litcli/config.toml`，其余只有对外 API 请求。
 `install.sh` 还会把 `skills/litcli/SKILL.md` 分发给探测到的 agent（Claude Code / Codex / Cursor / Gemini，
@@ -153,6 +161,7 @@ base = "http://localhost:23119/api"     # 写库 key 由 `litcli backends author
 - 专利检索要有 USPTO 免费 key：免 key 的公开源里专利记录趋近于 0。
 - Europe PMC 的 OA 全文是**文本（JATS XML）不是排版 PDF**；Unpaywall 只给落地页时会退到链末，输出 `HTML` 提示浏览器打开。
 - Sci-Hub 只按 DOI 解析，不能关键词检索；Z-Library 匿名下载有每日配额，可在配置里填 `email`/`password` 登录放宽。
+- 二进制安装器不含 Chromium：知网 / 豆瓣要先 `litcli backends install-browser`，否则报错并给出该命令。
 - 配置里的 `api_key` 与 zlibrary 凭据是明文：`backends authorize` 会把配置 chmod 0600，手填凭据不会；
   Windows 上 chmod 只等于只读位，真正的隔离来自 `%APPDATA%` 的用户目录 ACL。
 - arXiv 在受限沙箱里可能返回 406；`--all` 会跳过失败的后端继续。

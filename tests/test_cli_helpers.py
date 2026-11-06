@@ -70,6 +70,7 @@ class BackendsParserTest(unittest.TestCase):
         self.assertIsNone(a.backends_cmd)
         a = p.parse_args(["backends", "authorize"])
         self.assertEqual(a.backends_cmd, "authorize")
+        self.assertEqual(p.parse_args(["backends", "install-browser"]).browser, "chromium")
 
     def test_search_accepts_type_filter(self):
         a = build_parser().parse_args(["search", "q", "--type", "article"])

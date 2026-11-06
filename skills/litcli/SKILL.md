@@ -40,6 +40,7 @@ description: 用 litcli 与用户的学术资料互操作——检索、读取�
 | 罗列集合树 | `litcli data tree` 层级显示全部集合 | 只读 |
 | 罗列某集合条目 | `litcli data members <集合key> [--no-recursive]` 默认递归全部子集合 | 只读 |
 | 列后端 | `litcli backends list`（能力）· `litcli backends status`（授权/可达） | 只读 |
+| 装浏览器 | `litcli backends install-browser`（二进制安装包不带 Chromium；知网/豆瓣首次使用前跑一次） | 下载 |
 | 中文题录检索 | `litcli search --backend cnki "关键词"` 知网公开题录（需 Playwright + 可见浏览器；只取题录不抓全文） | 只读 |
 | 豆瓣图书检索 | `litcli search --backend douban "书词"` 候选书单，`litcli data get --backend douban <subject-id>` 补全 ISBN/出版社/版次/页数（需 `install.sh --with-douban`；默认无头，只取公开书目元数据） | 只读 |
 | 开放获取检索 | `litcli search --backend doaj\|europepmc\|doab\|zenodo "词"` 只搜开放授权语料（OA 期刊 / 生物医学+OA 全文 / OA 图书 / 开放数据集与软件）；免 key | 只读 |

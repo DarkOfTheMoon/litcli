@@ -95,4 +95,20 @@ SDIST="$WORK/$(basename "$(ls "$WORK"/litcli-"$VER"*.tar.gz | head -1)")"
 "$VENV/bin/pip" install -q --force-reinstall "$SDIST" || { bad; exit 1; }
 ok
 
+INSTALLER="$(ls "$WORK"/*-linux-*.run 2>/dev/null | head -1 || true)"
+if [ -n "$INSTALLER" ]; then
+  step "linux installer installs, runs and uninstalls"
+  PFX="$WORK/prefix"
+  sh "$INSTALLER" --prefix "$PFX" --yes >/dev/null || { bad; exit 1; }
+  out="$("$PFX/bin/litcli" --version)" || { bad; exit 1; }
+  [ "$out" = "litcli $VER" ] || { bad; echo "unexpected --version output: $out" >&2; exit 1; }
+  "$PFX/bin/litcli" search --backend crossref "deep learning" --limit 3 --format json >/dev/null \
+    || { bad; exit 1; }
+  sh "$INSTALLER" --prefix "$PFX" --uninstall >/dev/null || { bad; exit 1; }
+  [ ! -e "$PFX/opt" ] || { bad; echo "uninstall left files behind" >&2; exit 1; }
+  ok
+else
+  step "no linux installer published, skipped"
+fi
+
 echo "==> v$VER is consumable"

@@ -35,9 +35,34 @@ on stdout and its reasons on stderr; exit codes `0` file saved / `1` nothing fou
 
 ## Install
 
+**Preferred: the binary installer — no Python, no source checkout.** Releases ship an
+installer with a `SHA256SUMS` next to it.
+
+```bash
+# Linux: self-extracting, installs under ~/.local/opt/litcli-<version>, links ~/.local/bin/litcli
+sh litcli-<version>-linux-x86_64.run        # --with-browser also downloads Chromium for CNKI/Douban
+sh litcli-<version>-linux-x86_64.run --uninstall
+```
+
+On Windows run `litcli-<version>-windows-x86_64-setup.exe` (per-user install under
+`%LOCALAPPDATA%\Programs\litcli`, no admin); the Chromium download is an optional wizard checkbox.
+
+The installer holds frozen bytecode and shared objects — **no `.py` sources** — and needs no Python
+on the target machine. Chromium is not bundled (~150 MB per engine); install it when using CNKI or
+Douban, from the wizard or later:
+
+```bash
+litcli backends install-browser
+```
+
+Browsers live in Playwright's own cache (`~/.cache/ms-playwright` /
+`%LOCALAPPDATA%\ms-playwright`), survive upgrades and are kept on uninstall.
+
+**From source** (to change code or run the tests):
+
 ```bash
 pip install .                 # into the current environment (venv, Python 3.11+)
-./install.sh                  # or: a frozen source snapshot via pip --user (Debian/Ubuntu PEP 668)
+./install.sh                  # Debian/Ubuntu PEP 668: --user snapshot into ~/.local
 litcli backends               # self-test: configured backends and their capabilities
 ```
 
@@ -46,20 +71,13 @@ upgrade. Development uses `./bin/litcli` in the repo. PDF text extraction needs 
 (poppler-utils) and degrades to empty text without it. CNKI and Douban additionally need
 `./install.sh --with-cnki` / `--with-douban` (Playwright).
 
-**Windows**: `install.sh` and the completion scripts are POSIX-only; install with pip instead
-(Python 3.11+):
-
-```powershell
-py -m venv .venv; .\.venv\Scripts\Activate.ps1
-pip install .
-litcli backends
-```
+**Windows, from source**: `install.sh` and the completion scripts are POSIX-only; use
+`py -m venv .venv`, `.\\.venv\\Scripts\\Activate.ps1` and `pip install .`, or `bin\\litcli.cmd`
+inside the checkout. In-repo development on Linux uses `./bin/litcli`. PDF previews need
+`pdftotext.exe` from poppler on `PATH`; completion covers bash/zsh/fish only.
 
 Config lands per platform (`%APPDATA%\litcli\config.toml` on Windows, `~/.config/litcli/`
-elsewhere), in-repo development uses `bin\litcli.cmd`, and PDF previews need `pdftotext.exe`
-from poppler on `PATH`. Shell completion covers bash/zsh/fish only.
-
-Upgrading means rerunning `./install.sh` (it overwrites the snapshot); uninstall with `pip uninstall litcli` and
+elsewhere). Upgrading means rerunning `./install.sh` (it overwrites the snapshot); uninstall with `pip uninstall litcli` and
 remove `~/.config/litcli` and `~/.local/share/litcli`.
 
 Everything stays local: citations go into your own Zotero library, config into
@@ -142,6 +160,7 @@ base = "http://localhost:23119/api"     # the write key is written by `litcli ba
 - arXiv may answer 406 in constrained sandboxes; `--all` skips failing backends and continues.
 - Sci-Hub resolves DOIs only (no keyword search); Z-Library has an anonymous daily download quota, relaxed by
   setting `email`/`password`.
+- The binary installer ships no Chromium: CNKI/Douban need `litcli backends install-browser` first.
 - `api_key` and Z-Library credentials are stored in plain text; `backends authorize` chmods the config, hand-edited
   credentials are not covered. On Windows chmod only clears the read-only attribute — the `%APPDATA%`
   profile ACL is what isolates the file.

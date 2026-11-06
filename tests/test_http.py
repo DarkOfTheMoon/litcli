@@ -122,8 +122,10 @@ class TransportTest(unittest.TestCase):
         start = time.monotonic()
         with ThreadPoolExecutor(4) as ex:
             list(ex.map(lambda _: be._throttle(), range(4)))
-        # Three gaps of 20 ms between four callers, whatever the thread interleaving.
-        self.assertGreaterEqual(time.monotonic() - start, 0.05)
+        # Three gaps of 20 ms between four callers, whatever the thread interleaving. Windows'
+        # ~15.6 ms timer granularity shortens each sleep, so a third of the window is slack;
+        # a throttle that doesn't serialise finishes in well under 20 ms.
+        self.assertGreaterEqual(time.monotonic() - start, 0.04)
 
     def test_recorder_records_urls(self):
         be = _Backend()

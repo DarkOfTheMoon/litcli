@@ -7,7 +7,6 @@ covered without a live shell.
 """
 import os
 import pathlib
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -17,6 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from litcli.commands.parser import build_parser
 from litcli.completions import BACKENDS, SHELL_CHOICES, TYPES, build_spec, render
+from tests.shell import BASH
 
 
 def _spec():
@@ -95,23 +95,6 @@ class RenderTest(unittest.TestCase):
                       "zlibrary doaj europepmc doab zenodo'", out)
 
 
-def _bash() -> str | None:
-    """A bash that actually executes here.
-
-    On Windows ``bash`` on PATH is the WSL stub (``C:\\Windows\\System32\\bash.exe``), which
-    exits 1 with a UTF-16 "no installed distributions" notice when no distro is set up; Git
-    Bash ships with the runner and with Git for Windows and runs the script.
-    """
-    if os.name == "nt":
-        for candidate in (r"C:\Program Files\Git\bin\bash.exe",
-                          r"C:\Program Files\Git\usr\bin\bash.exe"):
-            if os.path.exists(candidate):
-                return candidate
-        return None
-    return shutil.which("bash")
-
-
-BASH = _bash()
 
 
 @unittest.skipUnless(BASH, "no usable bash on this host")

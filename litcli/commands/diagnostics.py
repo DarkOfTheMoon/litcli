@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+import subprocess
 import sys
 
 from .. import config as config_mod
@@ -91,7 +92,34 @@ def cmd_backends_authorize(cfg, args) -> int:
     return 0
 
 
-_SUBCOMMANDS = {"status": cmd_backends_status, "authorize": cmd_backends_authorize}
+def cmd_backends_install_browser(cfg, args) -> int:
+    """Download the browser the cnki/douban backends drive, via the bundled Playwright driver.
+
+    Kept out of the installer's hard payload on purpose: the browser is ~150 MB and only two
+    backends need it. The browser lands in Playwright's own cache (``~/.cache/ms-playwright``
+    or ``%LOCALAPPDATA%\\ms-playwright``), so installing a new litcli build keeps it.
+    """
+    browser = getattr(args, "browser", "chromium") or "chromium"
+    try:
+        from playwright._impl._driver import compute_driver_executable
+    except ImportError:
+        print("[error] this build has no playwright; install the wheel/source build, or "
+              "`pip install playwright` into the same interpreter")
+        return 2
+    driver = compute_driver_executable()
+    # Playwright >= 1.40 returns (node, cli.js); older ones a single runnable path.
+    cmd = [str(part) for part in driver] if isinstance(driver, tuple) else ["node", str(driver)]
+    print(f"downloading {browser}; this can take a few minutes and ~150 MB …")
+    rc = subprocess.call([*cmd, "install", browser])
+    if rc != 0:
+        print(f"[error] browser download failed (playwright exit {rc})")
+        return 2
+    print(f"{browser} installed; cnki/douban can run now")
+    return 0
+
+
+_SUBCOMMANDS = {"status": cmd_backends_status, "authorize": cmd_backends_authorize,
+                "install-browser": cmd_backends_install_browser}
 
 
 def cmd_backends(cfg, args) -> int:

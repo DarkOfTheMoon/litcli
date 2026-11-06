@@ -31,6 +31,8 @@ ruff check litcli tests
 scripts/verify_release.sh vX.Y.Z
 ```
 
+**二进制安装器**：`packaging/` 是冻结构建的全部输入——`entry.py`（PyInstaller 入口）、`litcli.spec`（onedir，`collect_all` 收 playwright/jieba）、`installer/linux-header.sh`（自解压安装器前言，构建时把 tar.gz 追加到 `__PAYLOAD__` 之后）、`installer/litcli.iss`（Inno Setup，按用户装到 `%LOCALAPPDATA%\Programs\litcli`）。构建：`scripts/build_binary.sh`（Linux）/ `scripts/build_binary.ps1`（Windows），二者都自己装、自己跑、自己卸来做验收。Chromium 不随包，由 `litcli backends install-browser` 或安装器的可选项下载，落在 Playwright 缓存里。发版带二进制用 `release.sh --binary`（只构建本平台，另一平台由 CI 产物或 Windows 机器补进 `dist/bin/`，脚本会上传它）。
+
 **发布**：只在用户明确要求时切版——日常改动提交、推送、CI 绿即止，不顺手发版。发版走 `scripts/release.sh`，不手工改版本号/打 tag。流程是门禁（在 master 且与 origin 齐平、工作区干净、测试绿、ruff 干净、能出包、`CHANGELOG.md` 的 `[Unreleased]` 非空、目标 tag 未占用）→ 改 `litcli/_version.py` + 把 `[Unreleased]` 收成带日期的版本段 → 提交 `chore(release): vX.Y.Z` → 打 tag → 构建 `dist/`（sdist + wheel）与 `SHA256SUMS`。`--check`/`--dry-run` 只跑门禁与预演，`--push` 才外发（推 master + tag 到**所有** remote；设了 `GITEE_TOKEN` 或 `~/.config/litcli/gitee.token` 才建 Gitee Release 并挂产物；切版时没 token，事后用 `--release-only` 给已推的 tag 补建，不改提交）。发布后自动跑 `scripts/verify_release.sh` 做消费者验证，不过就算发布失败。`github` 是 CI 镜像仓，新增 remote 后 `release.sh` 会自动同步推送，别让它落后于已发布的 tag。日常改动本身**不**往 CHANGELOG 里随手加，收版时统一补 `[Unreleased]`。
 
 CLI 帮助用 `./bin/litcli --help`。常用面：

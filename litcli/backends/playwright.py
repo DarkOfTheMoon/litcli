@@ -15,7 +15,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from pathlib import Path
 
-from ..paths import config_dir
+from ..paths import config_dir, is_frozen
 from .base import Backend
 
 # Install hint used when Playwright is missing (generic; subclasses tailor it with the
@@ -57,9 +57,10 @@ class PlaywrightBackend(Backend):
             from playwright.sync_api import sync_playwright
             return sync_playwright
         except ImportError as e:
+            # A binary build ships the package and downloads the browser separately.
+            hint = "litcli backends install-browser" if is_frozen() else self.INSTALL_HINT
             raise RuntimeError(
-                f"[{self.name}] Playwright is not installed. Install it with "
-                f"`{self.INSTALL_HINT}`, then retry."
+                f"[{self.name}] Playwright is not installed. Install it with `{hint}`, then retry."
             ) from e
 
     @contextmanager
@@ -71,10 +72,15 @@ class PlaywrightBackend(Backend):
         pw = sync_playwright().start()
         context = None
         try:
-            context = pw.chromium.launch_persistent_context(
-                str(self._profile), headless=self._headless,
-                viewport={"width": 1360, "height": 900},
-            )
+            try:
+                context = pw.chromium.launch_persistent_context(
+                    str(self._profile), headless=self._headless,
+                    viewport={"width": 1360, "height": 900},
+                )
+            except Exception as e:  # the browser was never downloaded
+                hint = ("litcli backends install-browser" if is_frozen()
+                        else "playwright install chromium")
+                raise RuntimeError(f"[{self.name}] browser missing — run `{hint}` first: {e}") from e
             page = context.pages[0] if context.pages else context.new_page()
             yield page
         finally:

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from pathlib import Path
 
 APP_DIR = "litcli"
@@ -31,6 +32,15 @@ _MAX_STEM = 120
 #: Resolved once: patching ``os.name`` at test time would also make :mod:`pathlib` hand out
 #: ``WindowsPath`` objects, which cannot be built on POSIX.
 _IS_WINDOWS = os.name == "nt"
+
+
+def is_frozen() -> bool:
+    """True in a PyInstaller build (the binary installers), False from source or a wheel.
+
+    Browser backends load ``playwright`` at runtime; in a frozen build it ships alongside, but
+    the browser itself is downloaded separately, so the hint differs.
+    """
+    return bool(getattr(sys, "frozen", False))
 
 
 def config_dir() -> Path:

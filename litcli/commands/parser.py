@@ -68,6 +68,10 @@ def build_parser() -> argparse.ArgumentParser:
     bp = bsub.add_parser("authorize", help="actively authorize against local Zotero and write back to config.toml")
     bp.add_argument("backend", nargs="?", default="zotero",
                     help="backend name (default zotero; only zotero supports local authorization currently)")
+    bi = bsub.add_parser("install-browser",
+                         help="download the Chromium that cnki/douban drive (needs the playwright package)")
+    bi.add_argument("browser", nargs="?", default="chromium", choices=["chromium", "firefox", "webkit"],
+                    help="browser to download (default chromium)")
 
     # --- data: local store CRUD (write · requires decision) ---
     d = sub.add_parser("data", help="local store operations (CRUD; read-only backends are reported)")

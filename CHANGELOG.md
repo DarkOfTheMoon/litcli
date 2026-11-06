@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- 二进制安装器（Linux `.run` 自解压 / Windows 安装 `.exe`）：`packaging/` 下的 PyInstaller 冻结配置 + 两个安装器脚本，`scripts/build_binary.{sh,ps1}` 构建并自验（装、跑、卸）。产物只有字节码与依赖，目标机不需要 Python，也不需要源码。CI 增加 Linux + Windows 构建作业。
+- `litcli backends install-browser [chromium|firefox|webkit]`：经随包的 Playwright 驱动下载浏览器，落在 Playwright 自己的缓存里，升级复用、卸载保留。Chromium 不塞进安装包。
+- `release.sh --binary`：切版时构建本平台安装器并连同 wheel/sdist 一起上传；`verify_release.sh` 在产物含 Linux 安装器时按消费者视角装一遍、跑一遍、卸一遍。
+
 ## [0.3.0] - 2026-11-06
 
 ### Added

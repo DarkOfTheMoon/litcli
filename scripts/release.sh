@@ -11,7 +11,7 @@
 #   2) bump `litcli/_version.py` (--bump major|minor|patch, default patch; `none` releases the
 #      current __version__ in place) and harvest CHANGELOG [Unreleased] into a dated section
 #   3) commit `chore(release): vX.Y.Z` + tag vX.Y.Z
-#   4) build dist/ artifacts + SHA256SUMS
+#   4) build dist/ artifacts + SHA256SUMS ([--binary] also builds this platform's installer)
 #   5) only with --push: push master + tag to every remote, and create the Gitee Release with the
 #      artifacts attached when a token is configured (otherwise print the manual steps)
 #   6) consumer check: download the published assets back and install them in a throwaway venv
@@ -24,6 +24,7 @@
 #   scripts/release.sh --check                                  gates only, change nothing
 #   scripts/release.sh --dry-run                                gates + show what would happen
 #   scripts/release.sh [--bump patch|minor|major|none] [--notes <file.md>] [--push] [--no-release]
+#                      [--binary]
 #   scripts/release.sh --release-only [vX.Y.Z]                  (re)create the Release of that tag
 #                                                               (default: the tag on HEAD); nothing is
 #                                                               bumped, committed or pushed
@@ -52,7 +53,7 @@ publish_release() {
   if [ -z "${GITEE_TOKEN:-}" ]; then
     echo "  (no GITEE_TOKEN / ~/.config/litcli/gitee.token: create the Release by hand at"
     echo "   https://gitee.com/$GITEE_PROJECT/releases, paste the CHANGELOG [$ver] section,"
-    echo "   attach dist/* and dist/SHA256SUMS)"
+    echo "   attach dist/*, dist/bin/* (binary installers) and dist/SHA256SUMS)"
     return 0
   fi
 
@@ -72,7 +73,8 @@ PAYLOAD
       return 1; }
   id="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['id'])" "$resp")"
   echo "  ✓ Release v$ver created (id $id)"
-  for f in dist/*; do
+  for f in dist/* dist/bin/*; do
+    [ -f "$f" ] || continue
     curl -sS -f -X POST "$GITEE_API/repos/$GITEE_PROJECT/releases/$id/attach_files" \
       -H "Authorization: token $GITEE_TOKEN" -F "file=@$f" >/dev/null \
       && echo "  ✓ attached $(basename "$f")" || echo "  ✗ attach failed: $(basename "$f")" >&2
@@ -86,6 +88,7 @@ BUMP="patch"
 NOTES_FILE=""
 DO_PUSH=0
 DO_RELEASE=1
+DO_BINARY=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -97,7 +100,8 @@ while [ $# -gt 0 ]; do
     --notes) NOTES_FILE="${2:?--notes needs a path}"; shift ;;
     --push) DO_PUSH=1 ;;
     --no-release) DO_RELEASE=0 ;;
-    -h|--help) sed -n '2,35p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --binary) DO_BINARY=1 ;;
+    -h|--help) sed -n '2,36p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
@@ -271,7 +275,15 @@ echo "  ✓ commit + tag v$NEW_VER (local)"
 echo "==> [4/6] build dist/ artifacts"
 rm -rf dist
 python3 -m build --no-isolation --outdir dist >/dev/null
-( cd dist && sha256sum ./* > SHA256SUMS )
+if [ "$DO_BINARY" = 1 ]; then
+  # Only this platform's installer is built here; a Windows installer is produced by CI (or a
+  # local Windows run) and can be dropped into dist/bin/ before releasing.
+  case "$(uname -s)" in
+    Linux) sh scripts/build_binary.sh ;;
+    *) echo "  ! binary build not supported on $(uname -s); skipping the installer" ;;
+  esac
+fi
+( cd dist && { sha256sum ./* bin/* 2>/dev/null | while read -r h f; do printf '%s  %s\n' "$h" "${f##*/}"; done; } > SHA256SUMS )
 echo "  ✓ dist/ built: $(cd dist && ls | tr '\n' ' ')"
 
 if [ "$DO_PUSH" = 0 ]; then

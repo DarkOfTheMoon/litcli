@@ -48,6 +48,39 @@ jobs:
           litcli --version
           litcli fetch --help
 
+  binary:
+    # The installer users actually download: a frozen tree (bytecode + shared objects, no .py)
+    # wrapped in a self-extracting file. Both builds verify themselves in place — freeze,
+    # install silently, run --version and a real search, uninstall, assert the tree is gone.
+    needs: test
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Inno Setup (Windows installer compiler)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+      - name: Build the installer
+        if: runner.os == 'Linux'
+        run: sh scripts/build_binary.sh
+      - name: Build the installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/build_binary.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.os }}
+          path: dist/bin/*
+          if-no-files-found: error
+
   package:
     runs-on: ubuntu-latest
     steps:
