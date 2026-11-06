@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-06
+
 ### Added
 
 - 支持 Windows：配置与浏览器 profile 落到 `%APPDATA%\litcli`（`XDG_CONFIG_HOME` 在 POSIX 上同样被尊重）；
