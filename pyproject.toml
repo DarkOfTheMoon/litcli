@@ -23,6 +23,9 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "License :: OSI Approved :: MIT License",
   "Environment :: Console",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS",
   "Intended Audience :: Science/Research",
   "Topic :: Scientific/Engineering",
 ]

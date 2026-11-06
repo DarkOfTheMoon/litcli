@@ -25,10 +25,10 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
 from urllib.parse import urlencode
 
 from ..models import AcademicItem, extract_year, normalize_author_name
+from ..paths import config_dir
 from .playwright import _PLAYWRIGHT_HINT, PlaywrightBackend
 
 # Product version, used only by the pure parsers for the AcademicItem.extra provenance.
@@ -40,7 +40,7 @@ _SUBJECT_URL = "https://book.douban.com/subject"
 
 # Default persistent browser profile (isolated from the user's main Chrome). Douban needs
 # no login, but keeping a profile lets a one-time login / cookie survive if a page asks.
-_DEFAULT_PROFILE = Path.home() / ".config" / "litcli" / "douban-chrome"
+_DEFAULT_PROFILE = config_dir() / "douban-chrome"
 
 # A book-card link selector, used as the positive-signal wait signal on the search page.
 _CARD_SELECTOR = "a[href*='/subject/']"

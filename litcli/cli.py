@@ -8,6 +8,7 @@ reported here as ``[skipped]``.
 from __future__ import annotations
 
 import os
+import sys
 
 from .backends.base import NotSupportedError
 from .commands import data as data_cmd
@@ -47,7 +48,25 @@ def _apply_proxy(cfg: dict) -> None:
     set_proxy(prog)
 
 
+def _utf8_redirected_streams() -> None:
+    """Force UTF-8 on redirected stdout/stderr under Windows.
+
+    A Windows console handles Unicode itself, but a pipe or file is encoded with the active
+    code page (cp936, cp1252), so a Chinese title in JSON output raises ``UnicodeEncodeError``.
+    Undecodable console bytes become ``?`` instead of failing the command.
+    """
+    if os.name != "nt":
+        return
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if not stream.isatty():
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass  # replaced streams (tests, wrappers) need no help
+
+
 def main(argv=None) -> int:
+    _utf8_redirected_streams()
     args = build_parser().parse_args(argv)
     try:
         cfg = load_config()

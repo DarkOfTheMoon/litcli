@@ -42,6 +42,18 @@ git clone --branch v0.1.0 --depth 1 https://gitee.com/simult/litcli.git litcli-0
 cd litcli-0.1.0 && ./install.sh
 ```
 
+**Windows**：`install.sh` 与补全脚本是 POSIX 的，Windows 上直接用 pip（Python 3.11+）：
+
+```powershell
+py -m venv .venv; .\.venv\Scripts\Activate.ps1
+pip install .
+litcli backends
+```
+
+配置按平台落位（Windows 是 `%APPDATA%\litcli\config.toml`，其余是 `~/.config/litcli/`）；仓库内调试用
+`bin\litcli.cmd` 代替 `./bin/litcli`。PDF 文本预览需要把 poppler 的 `pdftotext.exe` 放进 PATH。shell 补全
+只提供 bash/zsh/fish——PowerShell 下可在 Git Bash 里生成，或直接依赖 `--help`。
+
 `install.sh` 装的是**源码副本快照**：生产期间改仓库不波及已装版本，发新版本重跑即可。开发时在仓库内直接用
 `./bin/litcli`，与已装版本互不影响。PDF 文本抽取依赖系统 `pdftotext`（poppler-utils）；缺失时返回空文本，
 其余功能不受影响。CNKI / 豆瓣另需 `./install.sh --with-cnki`（或 `--with-douban`）装浏览器依赖。
@@ -122,7 +134,8 @@ litcli 在本地做题后复用 cookie，不改写、不绕过。知网与豆瓣
 
 ## 配置
 
-`~/.config/litcli/config.toml`（或 `$LITCLI_CONFIG`）；没有配置时用内置默认（Zotero + arXiv + Crossref + OpenAlex）。
+`~/.config/litcli/config.toml`（Windows 为 `%APPDATA%\litcli\config.toml`；`$LITCLI_CONFIG` 可另指）；
+没有配置时用内置默认（Zotero + arXiv + Crossref + OpenAlex）。
 完整字段见 [`config.example.toml`](config.example.toml)。
 
 ```toml
@@ -140,7 +153,8 @@ base = "http://localhost:23119/api"     # 写库 key 由 `litcli backends author
 - 专利检索要有 USPTO 免费 key：免 key 的公开源里专利记录趋近于 0。
 - Europe PMC 的 OA 全文是**文本（JATS XML）不是排版 PDF**；Unpaywall 只给落地页时会退到链末，输出 `HTML` 提示浏览器打开。
 - Sci-Hub 只按 DOI 解析，不能关键词检索；Z-Library 匿名下载有每日配额，可在配置里填 `email`/`password` 登录放宽。
-- 配置里的 `api_key` 与 zlibrary 凭据是明文：`backends authorize` 会把配置 chmod 0600，手填凭据不会。
+- 配置里的 `api_key` 与 zlibrary 凭据是明文：`backends authorize` 会把配置 chmod 0600，手填凭据不会；
+  Windows 上 chmod 只等于只读位，真正的隔离来自 `%APPDATA%` 的用户目录 ACL。
 - arXiv 在受限沙箱里可能返回 406；`--all` 会跳过失败的后端继续。
 
 ## 架构

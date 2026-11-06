@@ -46,6 +46,19 @@ upgrade. Development uses `./bin/litcli` in the repo. PDF text extraction needs 
 (poppler-utils) and degrades to empty text without it. CNKI and Douban additionally need
 `./install.sh --with-cnki` / `--with-douban` (Playwright).
 
+**Windows**: `install.sh` and the completion scripts are POSIX-only; install with pip instead
+(Python 3.11+):
+
+```powershell
+py -m venv .venv; .\.venv\Scripts\Activate.ps1
+pip install .
+litcli backends
+```
+
+Config lands per platform (`%APPDATA%\litcli\config.toml` on Windows, `~/.config/litcli/`
+elsewhere), in-repo development uses `bin\litcli.cmd`, and PDF previews need `pdftotext.exe`
+from poppler on `PATH`. Shell completion covers bash/zsh/fish only.
+
 Upgrading means rerunning `./install.sh` (it overwrites the snapshot); uninstall with `pip uninstall litcli` and
 remove `~/.config/litcli` and `~/.local/share/litcli`.
 
@@ -108,8 +121,9 @@ two around the wall; DOAJ has no wall at all.
 
 ## Configuration
 
-`~/.config/litcli/config.toml` (or `$LITCLI_CONFIG`); with no file, a built-in default of Zotero +
-arXiv + Crossref + OpenAlex applies. Every field is documented in `config.example.toml`.
+`~/.config/litcli/config.toml` (`%APPDATA%\litcli\config.toml` on Windows; `$LITCLI_CONFIG`
+overrides); with no file, a built-in default of Zotero + arXiv + Crossref + OpenAlex applies.
+Every field is documented in `config.example.toml`.
 
 ```toml
 [backends.zotero]
@@ -129,7 +143,8 @@ base = "http://localhost:23119/api"     # the write key is written by `litcli ba
 - Sci-Hub resolves DOIs only (no keyword search); Z-Library has an anonymous daily download quota, relaxed by
   setting `email`/`password`.
 - `api_key` and Z-Library credentials are stored in plain text; `backends authorize` chmods the config, hand-edited
-  credentials are not covered.
+  credentials are not covered. On Windows chmod only clears the read-only attribute — the `%APPDATA%`
+  profile ACL is what isolates the file.
 
 ## Development
 

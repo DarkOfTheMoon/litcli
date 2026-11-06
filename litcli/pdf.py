@@ -52,7 +52,10 @@ def extract_text(pdf: str | bytes, max_chars: int | None = None, first_page: boo
         if first_page:
             cmd += ["-f", "1", "-l", "1"]
         cmd += [path, "-"]
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        # pdftotext emits UTF-8; decode it explicitly, or a Windows console code page (cp936,
+        # cp1252) mangles non-ASCII text.
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=60)
         text = proc.stdout if proc.returncode == 0 else ""
     except (subprocess.SubprocessError, FileNotFoundError):
         text = ""

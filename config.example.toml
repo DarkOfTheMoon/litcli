@@ -1,4 +1,4 @@
-# litcli 配置示例(复制到 ~/.config/litcli/config.toml)。
+# litcli 配置示例(复制到 ~/.config/litcli/config.toml;Windows 为 %APPDATA%\litcli\config.toml)。
 # 文件存在就**整体以文件为准**;只有文件不存在时才用内置默认(本机 Zotero + arXiv + Crossref + OpenAlex)。
 # 所以复制本文件 = 启用下面全部后端:openlibrary、uspto、cnki、douban、scihub、zlibrary 与四个开放
 # 获取源(doaj / europepmc / doab / zenodo);不想用的段整段删掉。
@@ -43,7 +43,7 @@ type = "uspto"
 # 默认不内置,但本文件里是启用的;另需 install.sh --with-cnki 装 playwright。
 [backends.cnki]
 type = "cnki"
-# user_data_dir = "~/.config/litcli/cnki-chrome"   # 独立浏览器 profile,会话在此持久化(首次人工登录一次)
+# user_data_dir = "~/.config/litcli/cnki-chrome"   # 独立浏览器 profile,会话在此持久化(首次人工登录一次);Windows 默认在 %APPDATA%\litcli\cnki-chrome
 # headless = false                                  # 必须可见(知网对无头访问弹滑块验证码,需人工滑动)
 
 # 豆瓣图书(公开书目检索,需 Playwright)。默认不内置,但本文件里是启用的;另需 install.sh --with-douban 装 playwright。
@@ -52,7 +52,7 @@ type = "cnki"
 # 无滑块);仅当被风控(检测到异常流量)才在可见浏览器人工处理。
 [backends.douban]
 type = "douban"
-# user_data_dir = "~/.config/litcli/douban-chrome"  # 独立浏览器 profile(默认仅用于偶发登录/cookie 持久化)
+# user_data_dir = "~/.config/litcli/douban-chrome"  # 独立浏览器 profile(默认仅用于偶发登录/cookie 持久化);Windows 默认在 %APPDATA%\litcli\douban-chrome
 # headless = true                                   # 默认无头;豆瓣无需人工滑验证码,仅风控时降级
 
 # 可选:Sci-Hub 全文兜底(盗版镜像,只按 DOI 解析 PDF,无关键词检索)。

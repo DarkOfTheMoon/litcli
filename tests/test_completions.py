@@ -6,6 +6,8 @@ its completion engine, so the most important behavior (the emitted script actual
 covered without a live shell.
 """
 import os
+import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -93,14 +95,35 @@ class RenderTest(unittest.TestCase):
                       "zlibrary doaj europepmc doab zenodo'", out)
 
 
+def _bash() -> str | None:
+    """A bash that actually executes here.
+
+    On Windows ``bash`` on PATH is the WSL stub (``C:\\Windows\\System32\\bash.exe``), which
+    exits 1 with a UTF-16 "no installed distributions" notice when no distro is set up; Git
+    Bash ships with the runner and with Git for Windows and runs the script.
+    """
+    if os.name == "nt":
+        for candidate in (r"C:\Program Files\Git\bin\bash.exe",
+                          r"C:\Program Files\Git\usr\bin\bash.exe"):
+            if os.path.exists(candidate):
+                return candidate
+        return None
+    return shutil.which("bash")
+
+
+BASH = _bash()
+
+
+@unittest.skipUnless(BASH, "no usable bash on this host")
 class BashEngineTest(unittest.TestCase):
     def test_engine_resolves_candidates(self):
         """Source the generated bash script and check it resolves several tab contexts."""
         spec = build_spec(build_parser())
         script = render("bash", spec)
-        with tempfile.NamedTemporaryFile("w", suffix=".bash", delete=False) as f:
+        with tempfile.NamedTemporaryFile("w", suffix=".bash", newline="\n", delete=False) as f:
             f.write(script)
-            path = f.name
+            # Git Bash on Windows cannot read a ``C:\...`` argument (backslashes are escapes).
+            path = pathlib.Path(f.name).as_posix()
         try:
             probe = r'''
 source "$1"
@@ -110,8 +133,9 @@ run litcli completions ""
 run litcli search --backend ""
 run litcli data add --p
 '''
-            out = subprocess.run(["bash", "-c", probe, "_", path],
-                                 capture_output=True, text=True, check=True).stdout.splitlines()
+            proc = subprocess.run([BASH, "-c", probe, "_", path], capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)  # keep the reason in the message
+            out = proc.stdout.splitlines()
             self.assertEqual(out[0].strip(), "completions")
             self.assertEqual(set(out[1].split()), set(SHELL_CHOICES))
             self.assertIn("openalex", out[2].split())

@@ -1,4 +1,5 @@
 """Config backend-discovery unit tests: pass a dict directly, no disk write, no network."""
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -107,9 +108,9 @@ class TestConfig(unittest.TestCase):
         config.write_backend_key("zotero", 'a"b\\c', path=cfg)
         self.assertIn("api_key = \"a\\\"b\\\\c\"", cfg.read_text())
 
+    @unittest.skipIf(os.name == "nt", "chmod only clears the read-only bit on Windows")
     def test_write_backend_key_restricts_permissions(self):
         # The file holds a credential; it must be owner-only regardless of the umask.
-        import os
         d = Path(tempfile.mkdtemp())
         cfg = d / "config.toml"
         cfg.write_text("[backends.zotero]\n", encoding="utf-8")

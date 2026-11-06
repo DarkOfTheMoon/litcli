@@ -30,6 +30,24 @@ jobs:
       - name: Smoke-test console entry point
         run: litcli --version
 
+  windows:
+    # Pins the Windows-specific behaviour: %APPDATA% config, save names free of <>:"/\|?*,
+    # and UTF-8 on redirected streams.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install package
+        run: pip install . jieba
+      - name: Run offline unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Smoke-test the console entry point and save names
+        run: |
+          litcli --version
+          litcli fetch --help
+
   package:
     runs-on: ubuntu-latest
     steps:

@@ -12,6 +12,7 @@ from functools import cache
 from pathlib import Path
 
 from .backends.base import Backend
+from .paths import config_dir
 
 # Key: built-in default backends when nothing is configured (local Zotero read/write + arXiv read-only,
 # works out of the box)
@@ -23,12 +24,12 @@ _INBUILT_DEFAULT = {"backends": {
 }}
 
 CONFIG_ENV = "LITCLI_CONFIG"
-DEFAULT_CONFIG = Path.home() / ".config" / "litcli" / "config.toml"
+DEFAULT_CONFIG = config_dir() / "config.toml"
 
 
 def load_config(path: str | Path | None = None) -> dict:
-    """Load config; precedence: explicit path > env var LITCLI_CONFIG > default
-    ~/.config/litcli/config.toml > built-in default."""
+    """Load config; precedence: explicit path > env var LITCLI_CONFIG > the per-user default
+    (``%APPDATA%\\litcli`` on Windows, ``~/.config/litcli`` elsewhere) > built-in default."""
     for candidate in (path, Path(os.environ[CONFIG_ENV]) if CONFIG_ENV in os.environ else None, DEFAULT_CONFIG):
         if candidate and Path(candidate).exists():
             with open(candidate, "rb") as f:
@@ -242,7 +243,9 @@ def write_backend_key(name: str, key: str, path: str | Path | None = None) -> Pa
     text = _upsert_key(text, f"backends.{name}", "api_key", _toml_string(key))
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
-    # The file now holds a credential (api_key); keep it readable only by the owner.
+    # The file now holds a credential (api_key); keep it readable only by the owner. On Windows
+    # this only clears the read-only attribute — there the containing %APPDATA% profile ACL is
+    # what actually restricts access.
     os.chmod(path, 0o600)
     return path
 

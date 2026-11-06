@@ -15,6 +15,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from pathlib import Path
 
+from ..paths import config_dir
 from .base import Backend
 
 # Install hint used when Playwright is missing (generic; subclasses tailor it with the
@@ -32,7 +33,7 @@ class PlaywrightBackend(Backend):
     Playwright dependency.
     """
 
-    DEFAULT_PROFILE: Path = Path.home() / ".config" / "litcli" / "playwright-chrome"
+    DEFAULT_PROFILE: Path = config_dir() / "playwright-chrome"
     INSTALL_HINT: str = _PLAYWRIGHT_HINT
 
     def __init__(self, name: str = "playwright", user_data_dir=None, headless: bool = False,

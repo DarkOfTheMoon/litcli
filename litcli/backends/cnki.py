@@ -26,10 +26,10 @@ from __future__ import annotations
 
 import logging
 import re
-from pathlib import Path
 from urllib.parse import urlencode, urljoin
 
 from ..models import AcademicItem, extract_year, normalize_author_name
+from ..paths import config_dir
 from .playwright import _PLAYWRIGHT_HINT, PlaywrightBackend
 
 # Product version, used only by the pure parser for the AcademicItem.extra provenance.
@@ -42,7 +42,7 @@ _SITE_ORIGIN = "https://kns.cnki.net"
 _SEARCH_URL = "https://kns.cnki.net/kns8s/defaultresult/index"
 
 # Default persistent browser profile directory (isolated from the user's main Chrome).
-_DEFAULT_PROFILE = Path.home() / ".config" / "litcli" / "cnki-chrome"
+_DEFAULT_PROFILE = config_dir() / "cnki-chrome"
 
 # Result row cell selectors, per field. Kept as one table so a CNKI markup change (e.g.
 # ``td.author`` -> ``td.authors``) is a one-line edit here, not a hunt across methods.

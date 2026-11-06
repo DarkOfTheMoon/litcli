@@ -17,6 +17,7 @@ from .. import pdf as pdfutil
 from .. import unpaywall
 from ..backends.base import Backend, NotSupportedError
 from ..config import get_all_backends, get_backend
+from ..paths import target_path
 from .keys import normalize_related_key
 
 _ISBN_RE = re.compile(r"^(?:97[89][\d-]{10,17}|\d{9}[\dXx])$")
@@ -116,7 +117,7 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
 
     if kind == "local":  # local-store hit: the attachment is already in hand
         note(f"  local store [{info.get('source') or 'zotero'}] attachment matched (key={info.get('key')})")
-        path = args.out or f"{key.replace('/', '_')}.pdf"
+        path = target_path(args.out, key, "pdf")
         _save(info["data"], path, args.lines, verb="Saved")
         out(path)
         return 0
@@ -129,7 +130,7 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
         out(info["url"])
         return 0
 
-    path = args.out or f"{key.replace('/', '_')}.{fmt}"
+    path = target_path(args.out, key, fmt)
     _save(pdfutil.download(info["url"]), path, args.lines,
           extract=_TEXT_EXTRACTORS.get(fmt, pdfutil.extract_text))
     out(path)
@@ -195,7 +196,7 @@ def _fetch_book(cfg, args, target: str) -> int:
         note(f"  [{backend.name}] has no downloadable file; open {book.url} instead")
         out(book.url)
         return 1
-    path = args.out or f"{book.isbn or book.key.split('/')[-1]}.pdf"
+    path = target_path(args.out, book.isbn or book.key.split("/")[-1], "pdf")
     _save(raw, path, args.lines)
     out(path)
     return 0

@@ -1,6 +1,7 @@
 """Diagnostics: shell completions and the ``backends`` subcommands."""
 from __future__ import annotations
 
+import contextlib
 import sys
 
 from .. import config as config_mod
@@ -15,8 +16,14 @@ def cmd_completions(cfg, args) -> int:
 
     Introspects the live parser (so the spec tracks the current CLI surface) and prints the
     rendered script to stdout; the user sources it via ``eval "$(litcli completions bash)"``.
+
+    Newlines are pinned to ``\\n``: a Windows text stream would otherwise write CRLF, and the
+    ``bash``/``zsh`` engines fail on the stray carriage returns.
     """
-    sys.stdout.write(render_completion(args.shell, build_spec(build_parser())))
+    script = render_completion(args.shell, build_spec(build_parser()))
+    with contextlib.suppress(AttributeError, ValueError):
+        sys.stdout.reconfigure(newline="\n")  # captured streams take the text as-is
+    sys.stdout.write(script)
     return 0
 
 

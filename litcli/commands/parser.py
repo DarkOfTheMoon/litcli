@@ -130,7 +130,8 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--backend", default=None,
                    help="book backend (default zlibrary; ignored without --book)")
     f.add_argument("--no-download", action="store_true", help="print the link instead of saving the file")
-    f.add_argument("--out", default=None, help="save path (default: <key>.<ext> in the current directory)")
+    f.add_argument("--out", default=None,
+                   help="save path or directory (default: <key>.<ext> in the current directory)")
     f.add_argument("--lines", type=int, default=0, help="print that many leading text lines as a preview")
     f.add_argument("--email", default=None, help="contact e-mail for the Unpaywall/OpenAlex polite pools")
     f.add_argument("--scihub", action="store_true",
