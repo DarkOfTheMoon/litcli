@@ -8,6 +8,7 @@ import httpx
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from litcli.backends.arxiv import ArxivBackend, _short_id
+from litcli.errors import Unavailable
 from tests.http_stub import error, speed_up, stub
 
 ATOM = b'''<?xml version="1.0" encoding="UTF-8"?>
@@ -72,13 +73,13 @@ class ArxivStubTest(unittest.TestCase):
 
     def test_http_error_wrapped(self):
         stub(self.be, (406, "Not Acceptable"))
-        with self.assertRaises(RuntimeError) as ctx:
+        with self.assertRaises(Unavailable) as ctx:
             self.be.search("x")
         self.assertIn("406", str(ctx.exception))
 
     def test_transport_error_wrapped(self):
         self.be._transport = error(httpx.ConnectError("boom"))
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(Unavailable):
             self.be.search("x")
 
     def test_429_retries_then_succeeds(self):
@@ -90,7 +91,7 @@ class ArxivStubTest(unittest.TestCase):
 
     def test_429_exhausted_raises_clear_message(self):
         rec = stub(self.be, (429, "Rate exceeded."))
-        with self.assertRaises(RuntimeError) as ctx:
+        with self.assertRaises(Unavailable) as ctx:
             self.be.search("x")
         self.assertIn("arXiv rate-limited", str(ctx.exception))
         self.assertEqual(len(rec.requests), 3)  # all retry attempts used

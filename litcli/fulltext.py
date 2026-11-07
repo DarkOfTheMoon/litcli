@@ -26,6 +26,7 @@ from lxml import etree as ET
 
 from . import unpaywall
 from .aggregate import norm_doi
+from .errors import LitcliError
 from .models import AcademicItem
 
 # A resolver: takes a doi, returns a candidate dict or None.
@@ -55,12 +56,12 @@ def _from_local(doi: str, backends: dict | None = None) -> dict | None:
                     continue
                 try:
                     data = b.get_attachment(item.key)
-                except (RuntimeError, NotImplementedError, OSError):
+                except (LitcliError, RuntimeError, OSError):
                     continue
                 if data:
                     return {"kind": "local", "data": data, "title": item.title,
                             "key": item.key, "source": name}
-        except (RuntimeError, OSError, NotImplementedError):
+        except (LitcliError, RuntimeError, OSError):
             continue
     return None
 
@@ -73,7 +74,7 @@ def _from_unpaywall(doi: str, email: str, fetch=None) -> dict | None:
     """
     try:
         info = (fetch or (lambda d: unpaywall.resolve_oa(d, email)))(doi)
-    except (RuntimeError, OSError):
+    except (LitcliError, RuntimeError, OSError):
         return None
     if not info:
         return None
@@ -88,7 +89,7 @@ def _from_unpaywall_landing(doi: str, email: str, fetch=None) -> dict | None:
     """Unpaywall's landing page: no bytes, but the last legal resort when no PDF source hits."""
     try:
         info = (fetch or (lambda d: unpaywall.resolve_oa(d, email)))(doi)
-    except (RuntimeError, OSError):
+    except (LitcliError, RuntimeError, OSError):
         return None
     if not info:
         return None
@@ -105,7 +106,7 @@ def _from_openalex(doi: str, backend) -> dict | None:
         return None
     try:
         item: AcademicItem = backend.get(doi)
-    except (RuntimeError, OSError, KeyError):
+    except (LitcliError, RuntimeError, OSError, KeyError):
         return None
     if item.attachments:
         return {"kind": "openalex", "url": item.attachments[0],
@@ -119,7 +120,7 @@ def _from_europepmc(doi: str, backend) -> dict | None:
         return None
     try:
         item: AcademicItem = backend.get(doi)
-    except (RuntimeError, OSError, KeyError):
+    except (LitcliError, RuntimeError, OSError, KeyError):
         return None
     if not item.attachments:
         return None
@@ -133,7 +134,7 @@ def _from_zenodo(doi: str, backend) -> dict | None:
         return None
     try:
         item: AcademicItem = backend.get(doi)
-    except (RuntimeError, OSError, KeyError):
+    except (LitcliError, RuntimeError, OSError, KeyError):
         return None
     if not item.attachments:
         return None
@@ -147,7 +148,7 @@ def _from_scihub(doi: str, backend) -> dict | None:
         return None
     try:
         item: AcademicItem = backend.get(doi)
-    except (RuntimeError, OSError, KeyError):
+    except (LitcliError, RuntimeError, OSError, KeyError):
         return None
     if not item.attachments:
         return None
@@ -164,7 +165,7 @@ def _default_resolvers(email: str, backends: dict | None = None,
         if doi not in cache:
             try:
                 cache[doi] = unpaywall.resolve_oa(doi, email)
-            except (RuntimeError, OSError):
+            except (LitcliError, RuntimeError, OSError):
                 cache[doi] = None
         return cache[doi]
 

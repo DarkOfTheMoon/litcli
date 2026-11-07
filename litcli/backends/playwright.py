@@ -15,6 +15,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from pathlib import Path
 
+from ..errors import External
 from ..paths import apply_browser_cache, config_dir, is_frozen
 from .base import Backend
 
@@ -59,7 +60,7 @@ class PlaywrightBackend(Backend):
         except ImportError as e:
             # A binary build ships the package and downloads the browser separately.
             hint = "litcli backends install-browser" if is_frozen() else self.INSTALL_HINT
-            raise RuntimeError(
+            raise External(
                 f"[{self.name}] Playwright is not installed. Install it with `{hint}`, then retry."
             ) from e
 
@@ -81,7 +82,8 @@ class PlaywrightBackend(Backend):
             except Exception as e:  # the browser was never downloaded
                 hint = ("litcli backends install-browser" if is_frozen()
                         else "playwright install chromium")
-                raise RuntimeError(f"[{self.name}] browser missing — run `{hint}` first: {e}") from e
+                raise External(f"[{self.name}] browser missing — run `{hint}` first: {e}",
+                                hint=hint) from e
             page = context.pages[0] if context.pages else context.new_page()
             yield page
         finally:

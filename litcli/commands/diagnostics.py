@@ -10,6 +10,7 @@ from .. import config as config_mod
 from ..completions import build_spec
 from ..completions import render as render_completion
 from ..config import get_all_backends, get_backend, write_backend_key
+from ..errors import LitcliError
 from ..paths import apply_browser_cache
 from .parser import build_parser
 
@@ -82,7 +83,7 @@ def cmd_backends_authorize(cfg, args) -> int:
         return 2
     try:
         key = b.authorize()
-    except RuntimeError as e:
+    except (LitcliError, RuntimeError) as e:
         print(f"[error] {e}")
         return 2
     if not key:

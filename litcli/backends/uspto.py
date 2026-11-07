@@ -11,11 +11,12 @@ Endpoint: ``POST https://api.uspto.gov/api/v1/patent/search``
 
 Note: field names follow the official USPTO docs; if the real response field names differ, adjust
 ``_pat_to_item`` — this module is a "key-gated + locally adjustable field" patent entry, not a
-dependency on a fixed schema. When no key is configured ``search``/``get`` raises RuntimeError and
-the CLI degrades gracefully.
+dependency on a fixed schema. When no key is configured ``search``/``get`` raises
+:class:`~litcli.errors.AuthRequired` and the CLI degrades gracefully.
 """
 from __future__ import annotations
 
+from ..errors import AuthRequired, Unsupported
 from ..models import AcademicItem
 from .http import HttpBackend, HttpError
 
@@ -83,7 +84,7 @@ class UsptoBackend(HttpBackend):
 
     def _require_key(self) -> None:
         if not self._api_key:
-            raise RuntimeError(
+            raise AuthRequired(
                 f"[{self.name}] api_key not configured: USPTO patent search needs a key from free "
                 "registration, please generate one at https://developer.uspto.gov and write it into "
                 "the config's api_key")
@@ -93,7 +94,7 @@ class UsptoBackend(HttpBackend):
             return self.request("POST", url, json=body).json()
         except HttpError as e:
             if e.status in (401, 403):
-                raise RuntimeError(f"{e} check api_key (401/403 usually means an invalid or "
+                raise AuthRequired(f"{e} check api_key (401/403 usually means an invalid or "
                                    "unauthorized key)") from e
             raise
 
@@ -129,5 +130,5 @@ class UsptoBackend(HttpBackend):
     def get_attachment(self, key: str) -> bytes:
         # USPTO official full-text PDFs need the key via the print/download endpoint; this does not
         # promise automatic full-text PDF fetching.
-        raise RuntimeError(f"[{self.name}] automatic full-text PDF download not yet supported for {key} "
+        raise Unsupported(f"[{self.name}] automatic full-text PDF download not yet supported for {key} "
                            "(USPTO requires separate authorization)")

@@ -10,11 +10,11 @@ from __future__ import annotations
 import os
 import sys
 
-from .backends.base import NotSupportedError
 from .commands import data as data_cmd
 from .commands import diagnostics, export, fetch, graph, search
 from .commands.parser import build_parser
 from .config import load_config
+from .errors import LitcliError
 from .transport import set_proxy
 
 #: Top-level commands that take only ``(cfg, args)``; the graph edges and the two subcommand
@@ -81,9 +81,13 @@ def main(argv=None) -> int:
             return fetch.cmd_fetch(cfg, args)
         print(f"[error] unknown command {args.cmd}")
         return 2
-    except NotSupportedError as e:
-        print(f"[skipped] {e}")
-        return 2
+    except LitcliError as e:
+        # Every expected failure carries a kind and an exit code; the kind only drives the
+        # label here, the policy that led to the raise lives in the caller.
+        print(f"{'[skipped]' if e.kind == 'unsupported' else '[error]'} {e}")
+        if e.hint:
+            print(f"[hint] {e.hint}")
+        return e.exit_code
     except KeyError as e:
         print(f"[error] {e}")
         return 2

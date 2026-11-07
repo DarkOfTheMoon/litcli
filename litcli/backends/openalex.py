@@ -14,6 +14,7 @@ import urllib.parse
 from typing import ClassVar
 
 from ..aggregate import cited_key
+from ..errors import LitcliError, NotFound
 from ..models import AcademicItem
 from .http import HttpBackend
 
@@ -220,7 +221,7 @@ class OpenAlexBackend(HttpBackend):
                 i = futures[fut]
                 try:
                     results[i] = _work_to_item(fut.result(), self.name)
-                except (RuntimeError, http.client.HTTPException, OSError, ValueError):
+                except (LitcliError, RuntimeError, http.client.HTTPException, OSError, ValueError):
                     # Skip per-id failures (HTTP 404/5xx, non-JSON body, truncated/timeout).
                     continue
         return [results[i] for i in ids if i in results]
@@ -284,7 +285,7 @@ class OpenAlexBackend(HttpBackend):
             rec = self._work(key)
             wid = _wid(rec.get("id") or "")
         if not wid:
-            raise RuntimeError(f"[{self.name}] unable to resolve an internal OpenAlex id for {key}")
+            raise NotFound(f"[{self.name}] unable to resolve an internal OpenAlex id for {key}")
         data = self.fetch_json(self._with_mailto(
             f"{self._base}?filter=cites:{wid}&per_page={per_page}&sort=cited_by_count:desc"))
         return [_work_to_item(w, self.name) for w in (data.get("results") or [])][:limit]
@@ -296,6 +297,6 @@ class OpenAlexBackend(HttpBackend):
         """Download a legal OA PDF link (best_oa_location's pdf_url)."""
         item = self.get(key)
         if not item.attachments:
-            raise RuntimeError(f"[{self.name}] no OA PDF link for {key}")
+            raise NotFound(f"[{self.name}] no OA PDF link for {key}")
         from .. import pdf as pdfutil
         return pdfutil.download(item.attachments[0])

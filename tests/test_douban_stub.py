@@ -20,6 +20,7 @@ from litcli.backends.douban import (
     _subject_to_item,
     window_data_to_items,
 )
+from litcli.errors import External
 
 # --- pure parsers (browser-free) ---
 
@@ -156,7 +157,7 @@ class DoubanAdapterTest(unittest.TestCase):
     def test_missing_playwright_raises_clear_message(self):
         db = DoubanBackend()
         with mock.patch.dict(sys.modules, {"playwright.sync_api": None}), \
-                self.assertRaises(RuntimeError) as ctx:
+                self.assertRaises(External) as ctx:
             db._playwright()
         self.assertIn("Playwright is not installed", str(ctx.exception))
         self.assertIn("--with-douban", str(ctx.exception))

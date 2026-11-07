@@ -12,6 +12,7 @@ import httpx
 from tenacity import wait_none
 
 from litcli.backends.http import HttpBackend, HttpError
+from litcli.errors import Unavailable
 from litcli.transport import set_proxy
 from tests.http_stub import Recorder, error, stub
 
@@ -82,7 +83,7 @@ class TransportTest(unittest.TestCase):
     def test_transport_error_retries_then_raises_runtime_error(self):
         be = _Backend()
         be._transport = error(httpx.ConnectError("down"))
-        with self.assertRaises(RuntimeError) as cm:
+        with self.assertRaises(Unavailable) as cm:
             be.fetch("https://x/api")
         self.assertIn("unreachable", str(cm.exception))
 

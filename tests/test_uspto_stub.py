@@ -7,6 +7,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from litcli.backends.uspto import UsptoBackend, _pat_to_item
+from litcli.errors import AuthRequired
 from tests.http_stub import stub
 
 REC = {
@@ -47,14 +48,14 @@ class UsptoStubTest(unittest.TestCase):
 
     def test_no_key_raises_clear(self):
         b = UsptoBackend(api_key="")
-        with self.assertRaises(RuntimeError) as ctx:
+        with self.assertRaises(AuthRequired) as ctx:
             b.search("battery")
         self.assertIn("api_key", str(ctx.exception))
 
     def test_403_wrapped_with_hint(self):
         b = UsptoBackend(api_key="BAD")
         stub(b, (403, "Forbidden"))
-        with self.assertRaises(RuntimeError) as ctx:
+        with self.assertRaises(AuthRequired) as ctx:
             b.search("battery")
         self.assertIn("403", str(ctx.exception))
         self.assertIn("api_key", str(ctx.exception))

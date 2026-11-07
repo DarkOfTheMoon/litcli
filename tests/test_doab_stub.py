@@ -8,6 +8,8 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from litcli.backends.doab import DoabBackend, feed_to_items, page_to_item, solve_challenge
+from litcli.errors import NotFound
+from litcli.transport import HttpError
 from tests.http_stub import speed_up, stub
 
 COOKIE = {"Set-Cookie": "techaro.lol-anubis-auth=v; Domain=.doabooks.org; Path=/"}
@@ -101,7 +103,7 @@ class DoabStubTest(unittest.TestCase):
     def test_missing_handle_reports_not_found(self):
         be = self._backend()
         stub(be, (403, _challenge()), (200, "", COOKIE), (404, "gone"))
-        with self.assertRaises(RuntimeError) as cm:
+        with self.assertRaises(NotFound) as cm:
             be.get("20.500.1")
         self.assertIn("not found", str(cm.exception))
 
@@ -110,7 +112,7 @@ class DoabStubTest(unittest.TestCase):
         # not be reported as a failed bot check.
         be = self._backend()
         stub(be, (403, _challenge()), (404, "redirect target", COOKIE), (404, "gone"))
-        with self.assertRaises(RuntimeError) as cm:
+        with self.assertRaises(NotFound) as cm:
             be.get("20.500.1")
         self.assertIn("not found", str(cm.exception))
 
@@ -119,14 +121,15 @@ class DoabStubTest(unittest.TestCase):
         # refusing: the error must be the HTTP status, not the generic bot-check message.
         be = self._backend()
         stub(be, (403, _challenge()), (200, "", COOKIE), (403, _challenge()), (200, "", COOKIE))
-        with self.assertRaises(RuntimeError) as cm:
+        with self.assertRaises(HttpError) as cm:
             be.get("20.500.1")
+        self.assertEqual(cm.exception.kind, "bot-wall")
         self.assertIn("HTTP 403", str(cm.exception))
 
     def test_get_rejects_a_publisher_handle(self):
         be = self._backend()
         stub(be, (200, PUBLISHER_PAGE))
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(NotFound):
             be.get("20.500.12854/169562")
 
     def test_page_item_records_the_dc_type(self):
@@ -199,7 +202,7 @@ class DoabStubTest(unittest.TestCase):
         stub(be, (200, PAGE), (200, "%PDF-1.7 bytes"))
         self.assertTrue(be.get_attachment("x/20.500.1").startswith(b"%PDF"))
         stub(be, (200, PAGE), (200, "<html>login</html>"))
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(NotFound):
             be.get_attachment("x/20.500.1")
 
     def test_get_attachment_falls_through_a_landing_link_to_the_pdf(self):

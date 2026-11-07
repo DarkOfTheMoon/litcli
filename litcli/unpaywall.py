@@ -10,6 +10,7 @@ import urllib.parse
 
 import httpx
 
+from .errors import Unavailable, for_status
 from .transport import client
 
 _API = "https://api.unpaywall.org/v2"
@@ -36,11 +37,11 @@ def resolve_oa(doi: str, email: str = DEFAULT_EMAIL, timeout: int = 25,
         with client(timeout, ua="litcli/0.1 (oa resolver)", transport=transport) as http:
             response = http.get(url, headers={"Accept": "application/json"})
     except httpx.HTTPError as e:
-        raise RuntimeError(f"[unpaywall] cannot access: {e}") from e
+        raise Unavailable(f"[unpaywall] cannot access: {e}") from e
     if response.status_code >= 400:
         hint = (" the email param may be the 422 cause (provide a valid email)"
                 if response.status_code == 422 else "")
-        raise RuntimeError(f"[unpaywall] HTTP {response.status_code}: "
+        raise for_status(response.status_code, f"[unpaywall] HTTP {response.status_code}: "
                            f"{response.reason_phrase}{hint}")
     data = response.json()
 

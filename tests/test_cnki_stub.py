@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from litcli import config
 from litcli.backends.cnki import CnkiBackend, kw_expression, rows_to_items, split_terms
+from litcli.errors import External
 from litcli.models import extract_year, normalize_author_name
 
 # --- pure parser / author normalisation ---
@@ -254,7 +255,7 @@ class CnkiAdapterTest(unittest.TestCase):
     def test_missing_playwright_raises_clear_message(self):
         cnki = CnkiBackend()
         with mock.patch.dict(sys.modules, {"playwright.sync_api": None}), \
-                self.assertRaises(RuntimeError) as ctx:
+                self.assertRaises(External) as ctx:
             cnki._playwright()
         self.assertIn("Playwright is not installed", str(ctx.exception))
         self.assertIn("--with-cnki", str(ctx.exception))

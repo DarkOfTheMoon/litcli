@@ -5,7 +5,7 @@ backend needs and a one-off request does not: a pooled lazily built client, retr
 ``tenacity`` and a per-site rate through ``pyrate-limiter``. Backends keep only their URLs,
 their parsers and their key normalization.
 
-Failures surface as ``RuntimeError`` with a ``[backend]`` prefix, because the CLI turns those
+Failures surface as typed :class:`~litcli.errors.LitcliError` subclasses with a ``[backend]`` prefix;
 into a ``[skipped]`` backend instead of a stack trace.
 """
 from __future__ import annotations
@@ -18,6 +18,7 @@ import httpx
 from pyrate_limiter import Duration, Limiter, Rate
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
+from ..errors import Unavailable
 from ..transport import UA as DEFAULT_UA
 from ..transport import HttpError, Session
 from .base import Backend
@@ -131,7 +132,7 @@ class HttpBackend(Session, Backend):
             raise HttpError(self.name, e.response.status_code, e.response.reason_phrase,
                             e.response.text) from e
         except httpx.HTTPError as e:  # transport, timeout, decode
-            raise RuntimeError(f"[{self.name}] unreachable: {e}") from e
+            raise Unavailable(f"[{self.name}] unreachable: {e}") from e
 
     # ``Backend.get`` is already the "one item by key" method, so the verbs are fetch_*.
 
@@ -154,4 +155,4 @@ class HttpBackend(Session, Backend):
             with self.http.stream("GET", url, **kw) as response:
                 return response.status_code
         except httpx.HTTPError as e:
-            raise RuntimeError(f"[{self.name}] unreachable: {e}") from e
+            raise Unavailable(f"[{self.name}] unreachable: {e}") from e

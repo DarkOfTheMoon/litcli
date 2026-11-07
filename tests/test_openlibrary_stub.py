@@ -6,6 +6,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from litcli.backends.openlibrary import OpenLibraryBackend
+from litcli.transport import HttpError
 from tests.http_stub import stub
 
 DOC = {"key": "/works/OL123W", "title": "Fluid Dynamics",
@@ -39,8 +40,9 @@ class OpenLibraryStubTest(unittest.TestCase):
 
     def test_404_wrapped(self):
         stub(self.be, (404, "Not Found"))
-        with self.assertRaises(RuntimeError) as ctx:
+        with self.assertRaises(HttpError) as ctx:
             self.be.get("/works/OL999W")
+        self.assertEqual(ctx.exception.kind, "not-found")
         self.assertIn("404", str(ctx.exception))
 
 

@@ -7,6 +7,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from litcli.backends.crossref import CrossrefBackend
+from litcli.transport import HttpError
 from tests.http_stub import speed_up, stub
 
 REC = {"title": ["Deep learning"],
@@ -97,8 +98,9 @@ class CrossrefStubTest(unittest.TestCase):
 
     def test_404_wrapped(self):
         stub(self.be, (404, "Not Found"))
-        with self.assertRaises(RuntimeError) as ctx:
+        with self.assertRaises(HttpError) as ctx:
             self.be.get("10.1/nope")
+        self.assertEqual(ctx.exception.kind, "not-found")
         self.assertIn("404", str(ctx.exception))
 
 

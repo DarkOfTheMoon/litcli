@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from litcli import config
 from litcli import fulltext as ft
 from litcli.backends import scihub
+from litcli.errors import BotWall, Unavailable
 
 _PAGE = ('<html><head><meta name="citation_title" content="A Paper">'
          '<meta name="citation_author" content="Smith, John">'
@@ -48,9 +49,9 @@ class ScihubParseTest(unittest.TestCase):
             scihub.solve_altcha(_challenge(algorithm="SHA-384")))))
 
     def test_solve_altcha_malformed(self):
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(BotWall):
             scihub.solve_altcha({"algorithm": "SHA-256"})
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(BotWall):
             scihub.solve_altcha({"algorithm": "MD5", "salt": "s", "challenge": "c"})
 
     def test_captcha_id_from_page(self):
@@ -144,7 +145,7 @@ class ScihubResolveTest(unittest.TestCase):
 
     def test_resolve_all_mirrors_fail_raises_runtime(self):
         http = _FakeHttp(fail={"https://sci-hub.ru/10.1103/X", "https://sci-hub.st/10.1103/X"})
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(Unavailable):
             scihub.resolve("10.1103/X", mirrors=["sci-hub.ru", "sci-hub.st"], http=http)
 
     def test_resolve_rejects_non_doi(self):
@@ -210,10 +211,12 @@ class ScihubChainTest(unittest.TestCase):
         self.assertIsNone(ft._from_scihub("10.1/x", None))
 
     def test_from_scihub_swallows_lookup_errors(self):
-        class Broken:
-            def get(self, doi):
-                raise RuntimeError("down")
-        self.assertIsNone(ft._from_scihub("10.1/x", Broken()))
+        # A typed failure and a stray RuntimeError from a third party both mean "move on".
+        for exc in (Unavailable("down"), RuntimeError("down")):
+            class Broken:
+                def get(self, doi, _exc=exc):
+                    raise _exc
+            self.assertIsNone(ft._from_scihub("10.1/x", Broken()))
 
     def test_oa_still_beats_scihub(self):
         out = ft.resolve_fulltext("10.1/x", scihub_backend=object(), resolvers=[

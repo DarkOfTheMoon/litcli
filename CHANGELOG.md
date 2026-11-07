@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- 后端失败改为带分类的异常（`litcli/errors.py`）：`bad-input` / `not-found` / `paywalled` / `auth` /
+  `bot-wall` / `unavailable` / `unsupported` / `external`。调用方（`--all` 聚合、全文链、CLI 出口）
+  按分类决定策略与退出标签，不再靠字符串匹配或笼统的 `RuntimeError`；HTTP 状态经 `http_kind()`
+  统一归入同一套分类，各后端只在站点含义不同处就地上报。
+- 出错时可附一行 `[hint]`（如缺浏览器时的 `litcli backends install-browser`），与错误正文分开呈现。
+
 ## [0.3.1] - 2026-11-06
 
 ### Added

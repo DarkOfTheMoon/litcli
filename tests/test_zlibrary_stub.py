@@ -22,6 +22,7 @@ from litcli.backends.zlibrary import (
     parse_book_page,
     parse_cards,
 )
+from litcli.errors import External, Unavailable
 
 # A challenge page whose constant starts with 'F', so the marker sits at digest byte 15
 # (the position is the first hex digit — a solver hardcoding byte 0 fails this one).
@@ -259,7 +260,7 @@ class BackendTest(unittest.TestCase):
     def test_unavailable_page_204_reports_actionable_error(self):
         backend, _ = _backend(empty={_BOOK_URL})
         with mock.patch.object(ZlibraryBackend, "_resolve_base", return_value="https://zl.test"), \
-                self.assertRaises(RuntimeError) as ctx:
+                self.assertRaises(Unavailable) as ctx:
             backend.get("book/BEmQB5d5EN/x.html")
         self.assertIn("HTTP 204", str(ctx.exception))
         self.assertIn("another candidate", str(ctx.exception))
@@ -267,14 +268,14 @@ class BackendTest(unittest.TestCase):
     def test_get_attachment_204_reports_limit(self):
         backend, _ = _backend(empty={_DL_URL}, **{_BOOK_URL: _BOOK})
         with mock.patch.object(ZlibraryBackend, "_resolve_base", return_value="https://zl.test"), \
-                self.assertRaises(RuntimeError) as ctx:
+                self.assertRaises(Unavailable) as ctx:
             backend.get_attachment("book/BEmQB5d5EN/x.html")
         self.assertIn("daily download limit", str(ctx.exception))
 
     def test_get_attachment_rejects_non_pdf(self):
         backend, _ = _backend(**{_BOOK_URL: _BOOK, _DL_URL: b"<html>login</html>"})
         with mock.patch.object(ZlibraryBackend, "_resolve_base", return_value="https://zl.test"), \
-                self.assertRaises(RuntimeError):
+                self.assertRaises(External):
             backend.get_attachment("book/BEmQB5d5EN/x.html")
 
 
@@ -289,7 +290,7 @@ class BaseDiscoveryTest(unittest.TestCase):
 
     def test_unreachable_mirrors_raise(self):
         backend = ZlibraryBackend(mirrors=["a.test", "b.test"])
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(Unavailable):
             backend._resolve_base(_FakeHttp(fail={"https://a.test/", "https://b.test/"}))
 
     def test_configured_base_skips_discovery(self):

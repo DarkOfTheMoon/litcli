@@ -37,6 +37,7 @@ import urllib.parse
 
 import httpx
 
+from ..errors import External, LitcliError, Unavailable, for_status
 from ..models import AcademicItem, extract_year, normalize_author_name
 from .base import Backend
 from .scihub import _UA
@@ -267,7 +268,7 @@ class _Http(_ScihubHttp):
         try:
             r = self.client.request(method, url, content=data, headers=headers)
         except httpx.HTTPError as e:
-            raise RuntimeError(f"unreachable: {e}") from e
+            raise Unavailable(f"unreachable: {e}") from e
         finally:
             self._last = time.monotonic()
         return str(r.url), r.status_code, r.content
@@ -312,7 +313,7 @@ def _entry_url(mirror: str) -> str:
     """Normalize a mirror to an ``https://host/`` entry URL."""
     m = (mirror or "").strip().rstrip("/")
     if not m:
-        raise RuntimeError("empty zlibrary mirror")
+        raise Unavailable("empty zlibrary mirror")
     return m if m.startswith(("http://", "https://")) else f"https://{m}"
 
 
@@ -354,7 +355,7 @@ class ZlibraryBackend(Backend):
                 try:
                     if not http.login(self._resolve_base(http), self._email, self._password):
                         self._login_failed = True
-                except RuntimeError:
+                except (LitcliError, RuntimeError):
                     self._login_failed = True  # anonymous access still works; do not retry per call
             self._session = http
         return self._session
@@ -367,19 +368,19 @@ class ZlibraryBackend(Backend):
         for mirror in self._mirrors:
             try:
                 url = _entry_url(mirror)
-            except RuntimeError as e:
+            except (LitcliError, RuntimeError) as e:
                 errors.append(str(e))
                 continue
             try:
                 final, status, _ = http.fetch(url)
-            except RuntimeError as e:
+            except (LitcliError, RuntimeError) as e:
                 errors.append(f"{mirror}: {e}")
                 continue
             if status == 200:
                 self._base = _base_of(final)
                 return self._base
             errors.append(f"{mirror}: HTTP {status}")
-        raise RuntimeError(f"[{self.name}] no reachable mirror ({'; '.join(errors)})")
+        raise Unavailable(f"[{self.name}] no reachable mirror ({'; '.join(errors)})")
 
     def _get_page(self, http: _Http, path: str) -> tuple[str, str]:
         """GET a site path, returning ``(final_url, html)``; "" html means not found."""
@@ -389,11 +390,11 @@ class ZlibraryBackend(Backend):
         if status == 404 or _CHALLENGE_MARK in text:
             return final, ""
         if status == 204:
-            raise RuntimeError(
+            raise Unavailable(
                 f"[{self.name}] HTTP 204 (no content) — the page is unavailable or the "
                 "anonymous daily limit is reached; try another candidate or retry later")
         if status != 200:
-            raise RuntimeError(f"[{self.name}] HTTP {status}")
+            raise for_status(status, f"[{self.name}] HTTP {status}")
         return final, text
 
     # --- Backend API ---
@@ -461,9 +462,9 @@ class ZlibraryBackend(Backend):
             return body
         page = body.decode("utf-8", "replace")
         if status == 204 or _LIMIT_RE.search(page):
-            raise RuntimeError(
+            raise Unavailable(
                 f"[{self.name}] anonymous daily download limit reached — add "
                 "email/password to [backends.zlibrary], or retry later")
         if status != 200 or not body:
-            raise RuntimeError(f"[{self.name}] download failed (HTTP {status})")
-        raise RuntimeError(f"[{self.name}] the download is not a PDF (HTTP {status})")
+            raise for_status(status, f"[{self.name}] download failed (HTTP {status})")
+        raise External(f"[{self.name}] the download is not a PDF (HTTP {status})")

@@ -17,6 +17,7 @@ from .. import pdf as pdfutil
 from .. import unpaywall
 from ..backends.base import Backend, NotSupportedError
 from ..config import get_all_backends, get_backend
+from ..errors import LitcliError
 from ..paths import target_path
 from .keys import normalize_related_key
 
@@ -164,7 +165,7 @@ def _fetch_book(cfg, args, target: str) -> int:
 
     try:
         book = backend.get(chosen.key)
-    except RuntimeError as e:
+    except (LitcliError, RuntimeError) as e:
         note(f"[error] {e}")
         if len(candidates) > 1:
             note(f"        try another candidate: --pick 1..{len(candidates)}")

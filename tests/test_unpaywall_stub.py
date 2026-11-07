@@ -9,6 +9,7 @@ import httpx
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from litcli import unpaywall
+from litcli.errors import BadInput, Unavailable
 from litcli.transport import set_proxy
 from tests.http_stub import Recorder, client_spy, error
 
@@ -37,7 +38,7 @@ class UnpaywallStubTest(unittest.TestCase):
         self.assertEqual(info["best_pdf"], "")
 
     def test_422_wrapped(self):
-        with self.assertRaises(RuntimeError) as ctx:
+        with self.assertRaises(BadInput) as ctx:
             unpaywall.resolve_oa("10.1/x", "bad", transport=Recorder((422, "Unprocessable")))
         self.assertIn("422", str(ctx.exception))
 
@@ -52,7 +53,7 @@ class UnpaywallStubTest(unittest.TestCase):
         self.assertEqual(seen["proxy"], "http://proxy:8080")
 
     def test_transport_error_wrapped(self):
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(Unavailable):
             unpaywall.resolve_oa("10.1/x", "t@e.com", transport=error(httpx.ConnectError("boom")))
 
 

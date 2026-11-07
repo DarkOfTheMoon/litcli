@@ -12,6 +12,7 @@ import urllib.parse
 
 import httpx
 
+from .errors import for_status
 from .transport import client
 
 # Only http(s) sources may be downloaded; anything else (e.g. file://) could read local files
@@ -28,7 +29,8 @@ def download(url: str, timeout: int = 30,
     with client(timeout, transport=transport) as http:
         response = http.get(url)
         if response.status_code >= 400:
-            raise RuntimeError(f"download failed: HTTP {response.status_code}: {response.reason_phrase}")
+            raise for_status(response.status_code,
+                             f"download failed: HTTP {response.status_code}: {response.reason_phrase}")
         return response.content
 
 

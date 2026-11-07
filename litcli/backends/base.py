@@ -9,11 +9,16 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
+from ..errors import Unsupported
 from ..models import AcademicItem
 
 
-class NotSupportedError(NotImplementedError):
-    """Raised when an unsupported operation is attempted on a given backend."""
+class NotSupportedError(Unsupported, NotImplementedError):
+    """Raised when an unsupported operation is attempted on a given backend.
+
+    Dual-derived so existing ``except NotImplementedError`` sites keep working while the CLI
+    and fall-back policy see ``kind = "unsupported"``.
+    """
 
     def __init__(self, op: str, backend: Backend):
         super().__init__(f"[{backend.name}] does not support operation {op} "

@@ -11,6 +11,7 @@ import urllib.parse
 from lxml import etree as ET
 
 from .. import pdf as pdfutil
+from ..errors import Unavailable
 from ..models import AcademicItem
 from .http import HttpBackend, HttpError
 
@@ -89,7 +90,7 @@ class ArxivBackend(HttpBackend):
                              headers={"Accept": "application/atom+xml"}).content
         except HttpError as e:
             if e.status == 429:  # throttled: say so instead of the bare status
-                raise RuntimeError(
+                raise Unavailable(
                     f"[{self.name}] arXiv rate-limited (HTTP 429): the API is throttling this "
                     f"network; wait a moment and retry, or set a mailto in [backends.arxiv] to "
                     f"join the polite pool") from e

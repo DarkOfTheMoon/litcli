@@ -5,6 +5,7 @@ import sys
 
 from ..aggregate import cited_key, merge_items
 from ..config import get_all_backends, get_backend
+from ..errors import LitcliError
 from ..models import AcademicItem
 from .render import print_items
 
@@ -35,11 +36,17 @@ def cmd_search(cfg, args) -> int:
         for name, b in backends.items():
             try:
                 items.extend(b.search(args.query, limit=args.limit, filters=filters))
-            except NotImplementedError:
+            except LitcliError as e:
+                # Policy by kind, never by message: an unsupported operation is this backend's
+                # normal state and stays silent; anything else gets one line, with the hint when
+                # the failure has a fix the caller can act on.
+                if e.kind != "unsupported":
+                    print(f"[skipped] backend {name}: {e}"
+                          + (f" ({e.hint})" if e.hint else ""), file=sys.stderr)
                 continue
-            except (RuntimeError, OSError, ValueError, SyntaxError) as e:
-                # A single backend failure (not connected / HTTP error / timeout / non-JSON body /
-                # malformed XML) must not bring down the whole aggregation; skip and continue.
+            except (NotImplementedError, RuntimeError, OSError, ValueError, SyntaxError) as e:
+                # A single backend failure (not connected / timeout / non-JSON body / malformed
+                # XML) must not bring down the whole aggregation; skip and continue.
                 print(f"[skipped] backend {name}: {e}", file=sys.stderr)
                 continue
     else:

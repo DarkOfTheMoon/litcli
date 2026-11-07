@@ -33,6 +33,7 @@ from urllib.parse import urljoin
 import httpx
 
 from .. import pdf as pdfutil
+from ..errors import BotWall, LitcliError, Unavailable, for_status
 from ..models import AcademicItem, extract_year, normalize_author_name
 from ..transport import Session
 from .base import Backend
@@ -100,7 +101,7 @@ def solve_altcha(challenge: dict) -> str:
     target = challenge.get("challenge") or ""
     hashlib_name = _ALGORITHMS.get(algorithm.upper())
     if not hashlib_name or not salt or not target:
-        raise RuntimeError("malformed captcha challenge")
+        raise BotWall("malformed captcha challenge")
     max_number = min(int(challenge.get("maxNumber") or _MAX_TRIES), _MAX_TRIES)
     for number in range(max_number + 1):
         if hashlib.new(hashlib_name, (salt + str(number)).encode()).hexdigest() == target:
@@ -108,7 +109,7 @@ def solve_altcha(challenge: dict) -> str:
                        "salt": salt, "signature": challenge.get("signature", "")}
             return base64.b64encode(
                 json.dumps(payload, separators=(",", ":")).encode()).decode()
-    raise RuntimeError(f"captcha unsolved within {max_number} tries")
+    raise BotWall(f"captcha unsolved within {max_number} tries")
 
 
 def _metas(html: str) -> dict[str, list[str]]:
@@ -158,7 +159,7 @@ def _mirror_base(mirror: str) -> str:
     """Normalize a mirror to an ``https://host`` base (a scheme may be given explicitly)."""
     m = (mirror or "").strip().rstrip("/")
     if not m:
-        raise RuntimeError("empty mirror")
+        raise Unavailable("empty mirror")
     return m if m.startswith(("http://", "https://")) else f"https://{m}"
 
 
@@ -181,11 +182,11 @@ class _Http(Session):
         try:
             r = self.client.request("GET" if data is None else "POST", url, **kw)
         except httpx.HTTPError as e:
-            raise RuntimeError(f"unreachable: {e}") from e
+            raise Unavailable(f"unreachable: {e}") from e
         if r.status_code == 404:  # "article not found" is a page state, not a transport failure
             return str(r.url), ""
         if r.status_code >= 400:
-            raise RuntimeError(f"HTTP {r.status_code}: {r.reason_phrase}")
+            raise for_status(r.status_code, f"HTTP {r.status_code}: {r.reason_phrase}")
         return str(r.url), r.text
 
     def get_text(self, url: str) -> tuple[str, str]:
@@ -196,7 +197,7 @@ class _Http(Session):
         try:
             return json.loads(body)
         except ValueError as e:
-            raise RuntimeError("captcha challenge was not JSON") from e
+            raise BotWall("captcha challenge was not JSON") from e
 
     def post_json(self, url: str, payload: dict) -> dict:
         _, body = self._request(
@@ -205,21 +206,21 @@ class _Http(Session):
         try:
             return json.loads(body)
         except ValueError as e:
-            raise RuntimeError("captcha response was not JSON") from e
+            raise BotWall("captcha response was not JSON") from e
 
 
 def _pass_captcha(http: _Http, base: str, page_url: str, html: str) -> tuple[str, str]:
     """Solve the page's PoW, POST the solution, reload, and return the unlocked page."""
     cid = captcha_id(html)
     if not cid:
-        raise RuntimeError("captcha page has no challenge id")
+        raise BotWall("captcha page has no challenge id")
     payload = solve_altcha(http.get_json(f"{base}/captcha/challenge/{cid}"))
     result = http.post_json(f"{base}/captcha/solution/{cid}", {"captcha": payload})
     if not result.get("success"):
-        raise RuntimeError("captcha solution rejected")
+        raise BotWall("captcha solution rejected")
     page_url, html = http.get_text(page_url)
     if captcha_id(html):
-        raise RuntimeError("captcha still required after solving")
+        raise BotWall("captcha still required after solving")
     return page_url, html
 
 
@@ -227,7 +228,7 @@ def resolve(doi: str, mirrors=None, timeout: int = 30, http: _Http | None = None
     """Resolve a DOI to a PDF link, trying each mirror in order.
 
     Returns ``{"doi", "mirror", "page_url", "pdf_url", "meta"}``. Raises ``KeyError`` when every
-    reachable mirror says the DOI is not in the library, ``RuntimeError`` when all mirrors fail
+    reachable mirror says the DOI is not in the library, :class:`~litcli.errors.Unavailable` when all mirrors fail
     for transport / captcha reasons.
     """
     clean = doi_from(doi)
@@ -253,11 +254,11 @@ def resolve(doi: str, mirrors=None, timeout: int = 30, http: _Http | None = None
                     continue
                 return {"doi": clean, "mirror": mirror, "page_url": page_url,
                         "pdf_url": pdf_url, "meta": parse_citation_meta(html)}
-            except RuntimeError as e:
+            except (LitcliError, RuntimeError) as e:
                 errors.append(f"{mirror}: {e}")
         if not_found:
             raise KeyError(f"[scihub] {clean} is not in the library")
-        raise RuntimeError(f"[scihub] all mirrors failed ({'; '.join(errors)})")
+        raise Unavailable(f"[scihub] all mirrors failed ({'; '.join(errors)})")
     finally:
         if own:
             http.close()

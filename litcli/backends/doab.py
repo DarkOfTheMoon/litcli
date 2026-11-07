@@ -25,6 +25,7 @@ import urllib.parse
 
 from lxml import etree as ET
 
+from ..errors import LitcliError, NotFound, Unavailable
 from ..models import AcademicItem, extract_year, normalize_author_name
 from .http import HttpBackend, HttpError
 
@@ -76,7 +77,7 @@ def solve_challenge(body: str) -> dict | None:
     return None  # pragma: no cover - the cap is far above the expected work
 
 
-class DoabError(RuntimeError):
+class DoabError(Unavailable):
     """Raised when the feed answers with something that is not an Atom document."""
 
 
@@ -241,7 +242,7 @@ class DoabBackend(HttpBackend):
         url = (f"{self._site_root}/.within.website/x/cmd/anubis/api/pass-challenge?"
                f"{urllib.parse.urlencode(params)}")
         # Only the status and the Set-Cookie header matter here.
-        with contextlib.suppress(RuntimeError):
+        with contextlib.suppress(LitcliError, RuntimeError):
             self.fetch_status(url)
         # pass-challenge redirects to the target, so a missing record answers 404 even though
         # the cookie was set: judge by the cookie, not by the redirect target's status.
@@ -253,7 +254,7 @@ class DoabBackend(HttpBackend):
             return self.fetch_text(url)
         except HttpError as e:
             if e.status == 404:
-                raise RuntimeError(f"[{self.name}] not found: {path}") from e
+                raise NotFound(f"[{self.name}] not found: {path}") from e
             raise
 
     def _get_page(self, path: str) -> str:
@@ -307,7 +308,7 @@ class DoabBackend(HttpBackend):
         body = self._get_page(f"/handle/{k}")
         item = page_to_item(body, k, self.name)
         if (item.extra.get("dc_type") or "").lower() == "publisher":
-            raise RuntimeError(f"[{self.name}] publisher/imprint record, not a book: {key}")
+            raise NotFound(f"[{self.name}] publisher/imprint record, not a book: {key}")
         if not item.title and not item.isbn:
             raise KeyError(f"[{self.name}] not found: {key}")
         return item
@@ -320,15 +321,15 @@ class DoabBackend(HttpBackend):
         """
         item = self.get(key)
         if not item.attachments:
-            raise RuntimeError(f"[{self.name}] no download link on the record: {key}")
+            raise NotFound(f"[{self.name}] no download link on the record: {key}")
         errors: list[str] = []
         for url in item.attachments:
             try:
                 data = self.fetch_bytes(url)
-            except RuntimeError as e:
+            except (LitcliError, RuntimeError) as e:
                 errors.append(f"{url}: {e}")
                 continue
             if data.startswith(b"%PDF"):
                 return data
             errors.append(f"{url}: not a PDF")
-        raise RuntimeError(f"[{self.name}] no download link returned a PDF ({'; '.join(errors)})")
+        raise NotFound(f"[{self.name}] no download link returned a PDF ({'; '.join(errors)})")

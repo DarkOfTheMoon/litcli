@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import httpx
 
+from .errors import LitcliError, Unavailable, http_kind
+
 UA = "litcli/0.1 (+https://gitee.com/simult/litcli)"
 
 # Proxy from ``[network].proxy``. ``httpx`` otherwise only reads HTTP(S)_PROXY from the
@@ -36,18 +38,20 @@ def client(timeout: float = 30.0, ua: str = UA,
                         follow_redirects=True, proxy=proxy() or None, transport=transport)
 
 
-class HttpError(RuntimeError):
-    """A non-retryable HTTP failure.
+class HttpError(Unavailable):
+    """A non-retryable HTTP failure, classified by status into a :class:`LitcliError` kind.
 
     ``status`` lets callers add diagnostics for specific codes and ``body`` keeps the response
-    text (bot-check pages need it to be answered).
+    text (bot-check pages need it to be answered). ``kind`` is what fall-back policy reads;
+    a backend whose site means something else by a code reclassifies at its own call site.
     """
 
     def __init__(self, backend: str, status: int, reason: str, body: str = ""):
         self.status = status
         self.reason = reason
         self.body = body
-        super().__init__(f"[{backend}] HTTP {status}: {reason}")
+        self.kind = http_kind(status).kind
+        LitcliError.__init__(self, f"[{backend}] HTTP {status}: {reason}")
 
 
 class Session:
