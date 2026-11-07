@@ -14,6 +14,8 @@ from .commands import data as data_cmd
 from .commands import diagnostics, export, fetch, graph, search
 from .commands.parser import build_parser
 from .config import load_config
+from .debug import enabled as debug_enabled
+from .debug import log, set_enabled
 from .errors import LitcliError
 from .transport import set_proxy
 
@@ -67,7 +69,14 @@ def _utf8_redirected_streams() -> None:
 
 def main(argv=None) -> int:
     _utf8_redirected_streams()
-    args = build_parser().parse_args(argv)
+    # ``--debug`` is accepted anywhere (before or after the subcommand): strip it first, then let
+    # argparse see the rest. It is registered on the root parser so it shows up in --help.
+    raw = list(sys.argv[1:] if argv is None else argv)
+    trailing_debug = "--debug" in raw
+    args = build_parser().parse_args([a for a in raw if a != "--debug"] if trailing_debug else raw)
+    if trailing_debug or getattr(args, "debug", False):
+        set_enabled()
+        log(f"litcli {raw}")
     try:
         cfg = load_config()
         _apply_proxy(cfg)
@@ -98,7 +107,10 @@ def main(argv=None) -> int:
         #  TOMLDecodeError -> ValueError, URLError -> OSError.)
         print(f"[error] {e}")
         return 2
+    except Exception:
+        if debug_enabled():
+            import traceback
+            traceback.print_exc()
+        raise
 
-
-if __name__ == "__main__":
     raise SystemExit(main())

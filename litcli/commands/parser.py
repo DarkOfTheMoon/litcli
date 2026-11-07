@@ -19,6 +19,8 @@ def add_common_backend(p: argparse.ArgumentParser, default: str = "zotero") -> N
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="litcli", description="General academic CLI (pluggable multi-backend)")
     parser.add_argument("--version", action="version", version=f"litcli {__version__}")
+    parser.add_argument("--debug", action="store_true",
+                        help="trace requests, pacing and retries to stderr (also LITCLI_DEBUG=1)")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     # --- Top-level: search / export / diagnostics ---

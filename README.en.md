@@ -107,6 +107,7 @@ unsupported backend. `search`, `fetch`, `export`, `refs`, `citing`, `related` ar
 | `litcli data add --title "..." --creator "Family, Given" [--doi ..] [--force]` / `data add --pdf|--csl <file>` | ingest metadata (dedupe gate, `--force` skips), heuristics from page 1 (y/N), or CSL JSON |
 | `litcli data get <key>` · `data tree` · `data members <coll> [--limit N]` | read one record; browse collections |
 | `litcli backends list/status` · `litcli completions <bash\|zsh\|fish>` | diagnostics, shell completion |
+| `litcli --debug <command>` | one line per request, status, duration, pacing wait and retry on stderr (`LITCLI_DEBUG=1` does the same); unexpected exceptions also print the stack. stdout is untouched |
 
 **Writes** (Zotero only; read-only backends answer `[skipped]` and exit 2)
 

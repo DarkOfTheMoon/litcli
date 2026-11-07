@@ -18,6 +18,8 @@ import httpx
 from pyrate_limiter import Duration, Limiter, Rate
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
+from .. import debug
+from ..debug import log
 from ..errors import Unavailable
 from ..transport import UA as DEFAULT_UA
 from ..transport import HttpError, Session
@@ -26,6 +28,12 @@ from .base import Backend
 # Transient by nature: rate limiting (429) and the 5xx family, including Cloudflare's own
 # 52x codes, which are what these sources answer under load.
 RETRY_CODES = frozenset({429, 500, 502, 503, 504, 507, 508, 510, 520, 521, 522, 524})
+
+
+def _log_retry(state) -> None:
+    """Trace a retry decision (tenacity calls this before sleeping)."""
+    error = debug.prefix(str(state.outcome.exception())) if state.outcome else ""
+    log(f"retry {state.attempt_number} in {state.next_action.sleep:.1f}s: {error}")
 
 
 def _retryable(exc: BaseException, codes: frozenset[int]) -> bool:
@@ -94,6 +102,7 @@ class HttpBackend(Session, Backend):
             if self.min_interval > 0:
                 wait = self.min_interval - (time.monotonic() - self._last)
                 if wait > 0:
+                    log(f"pacing {self.name}: sleeping {wait:.2f}s")
                     time.sleep(wait)
                 self._last = time.monotonic()
             self._limiter.try_acquire(self._bucket, blocking=True)
@@ -107,6 +116,7 @@ class HttpBackend(Session, Backend):
                 stop=stop_after_attempt(self.retries),
                 wait=self.retry_wait,
                 reraise=True,
+                before_sleep=_log_retry,
             )
             def send(method: str, url: str, *,
                      raise_for_status: bool = True, **kw) -> httpx.Response:

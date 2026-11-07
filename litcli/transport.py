@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import httpx
 
+from .debug import hooks
 from .errors import LitcliError, Unavailable, http_kind
 
 UA = "litcli/0.1 (+https://gitee.com/simult/litcli)"
@@ -35,7 +36,8 @@ def client(timeout: float = 30.0, ua: str = UA,
            transport: httpx.BaseTransport | None = None) -> httpx.Client:
     """A short-lived client with the house defaults (redirects and proxy applied)."""
     return httpx.Client(headers={"User-Agent": ua}, timeout=httpx.Timeout(timeout),
-                        follow_redirects=True, proxy=proxy() or None, transport=transport)
+                        follow_redirects=True, proxy=proxy() or None, transport=transport,
+                        event_hooks=hooks())
 
 
 class HttpError(Unavailable):
@@ -79,7 +81,8 @@ class Session:
             self._client = httpx.Client(
                 headers={"User-Agent": self.UA, **self.headers},
                 timeout=httpx.Timeout(self.timeout), follow_redirects=self.follow_redirects,
-                http2=self.http2, proxy=proxy() or None, transport=self._transport)
+                http2=self.http2, proxy=proxy() or None, transport=self._transport,
+                event_hooks=hooks())
         return self._client
 
     def has_cookie(self, suffix: str) -> bool:

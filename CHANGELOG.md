@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `--debug`（或环境变量 `LITCLI_DEBUG=1`）：把每个请求、状态码、耗时、限速等待与重试逐行打到
+  stderr，query 里的 key / email 打码；意外异常额外打印调用栈。该开关在子命令前后都接受，
+  stdout 不受影响，不开启时只有一次布尔判断的开销。
+
 ### Changed
 
 - 后端失败改为带分类的异常（`litcli/errors.py`）：`bad-input` / `not-found` / `paywalled` / `auth` /

@@ -84,7 +84,7 @@ class HttpKindTest(unittest.TestCase):
 class CliPolicyTest(unittest.TestCase):
     def _run(self, exc):
         parser = mock.Mock()
-        parser.parse_args.return_value = mock.Mock(cmd="search", data_cmd=None)
+        parser.parse_args.return_value = mock.Mock(cmd="search", data_cmd=None, debug=False)
         with mock.patch.object(cli, "build_parser", return_value=parser), \
                 mock.patch.object(cli, "load_config", return_value={}), \
                 mock.patch.object(cli, "_apply_proxy"), \

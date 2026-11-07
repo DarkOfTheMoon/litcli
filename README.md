@@ -107,6 +107,7 @@ shell 补全只有 bash/zsh/fish（PowerShell 下可在 Git Bash 里生成）。
 |---|---|
 | `litcli backends list` · `backends status` | 已配置后端与能力 / 授权与可达状态 |
 | `litcli completions <bash\|zsh\|fish>` | 打印自包含补全脚本；`eval "$(...)"` 后按 TAB 补全 |
+| `litcli --debug <命令>` | 把请求、状态、耗时、限速等待与重试逐行写到 stderr（`LITCLI_DEBUG=1` 同样生效）；意外异常额外打印调用栈。stdout 不受影响 |
 
 `data tree` / `data members <集合key>` 罗列集合；`--year` 等过滤在各后端的映射见下节。
 
