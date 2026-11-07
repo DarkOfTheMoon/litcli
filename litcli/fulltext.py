@@ -60,7 +60,7 @@ def _from_local(doi: str, backends: dict | None = None) -> dict | None:
                     continue
                 if data:
                     return {"kind": "local", "data": data, "title": item.title,
-                            "key": item.key, "source": name}
+                            "key": item.key, "source": name, "access": "local"}
         except (LitcliError, RuntimeError, OSError):
             continue
     return None
@@ -82,7 +82,7 @@ def _from_unpaywall(doi: str, email: str, fetch=None) -> dict | None:
     if not url:
         return None
     return {"kind": "unpaywall", "url": url, "title": info.get("title", ""),
-            "status": info.get("oa_status", "")}
+            "status": info.get("oa_status", ""), "access": "oa"}
 
 
 def _from_unpaywall_landing(doi: str, email: str, fetch=None) -> dict | None:
@@ -97,7 +97,7 @@ def _from_unpaywall_landing(doi: str, email: str, fetch=None) -> dict | None:
     if not url:
         return None
     return {"kind": "unpaywall", "url": url, "title": info.get("title", ""),
-            "status": info.get("oa_status", ""), "format": "html"}
+            "status": info.get("oa_status", ""), "format": "html", "access": "oa"}
 
 
 def _from_openalex(doi: str, backend) -> dict | None:
@@ -110,7 +110,7 @@ def _from_openalex(doi: str, backend) -> dict | None:
         return None
     if item.attachments:
         return {"kind": "openalex", "url": item.attachments[0],
-                "title": item.title, "status": ""}
+                "title": item.title, "status": "", "access": "oa"}
     return None
 
 
@@ -125,7 +125,7 @@ def _from_europepmc(doi: str, backend) -> dict | None:
     if not item.attachments:
         return None
     return {"kind": "europepmc", "url": item.attachments[0], "title": item.title,
-            "status": "open access (JATS XML)", "format": "xml"}
+            "status": "open access (JATS XML)", "format": "xml", "access": "oa"}
 
 
 def _from_zenodo(doi: str, backend) -> dict | None:
@@ -139,7 +139,7 @@ def _from_zenodo(doi: str, backend) -> dict | None:
     if not item.attachments:
         return None
     return {"kind": "zenodo", "url": item.attachments[0], "title": item.title,
-            "status": "open access"}
+            "status": "open access", "access": "oa"}
 
 
 def _from_scihub(doi: str, backend) -> dict | None:
@@ -152,7 +152,8 @@ def _from_scihub(doi: str, backend) -> dict | None:
         return None
     if not item.attachments:
         return None
-    return {"kind": "scihub", "url": item.attachments[0], "title": item.title, "status": ""}
+    return {"kind": "scihub", "url": item.attachments[0], "title": item.title,
+            "status": "", "access": "public"}
 
 
 def _default_resolvers(email: str, backends: dict | None = None,

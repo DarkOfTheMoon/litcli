@@ -217,6 +217,8 @@ def feed_to_items(data: bytes, source: str = "doab") -> list[AcademicItem]:
 class DoabBackend(HttpBackend):
     """Read-only open-access book search (feed) and record lookup (Anubis-walled pages)."""
 
+    access = "oa"
+
     def __init__(self, name: str = "doab", base: str = _SEARCH, timeout: int = 30, delay: float = 1.0):
         super().__init__(name=name, timeout=timeout, rate=1, min_interval=delay)
         self._base = base

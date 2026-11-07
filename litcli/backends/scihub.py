@@ -267,6 +267,8 @@ def resolve(doi: str, mirrors=None, timeout: int = 30, http: _Http | None = None
 class ScihubBackend(Backend):
     """Sci-Hub DOI -> PDF fallback (read-only; opt-in, last in the fulltext chain)."""
 
+    access = "public"
+
     name = "scihub"
 
     @property

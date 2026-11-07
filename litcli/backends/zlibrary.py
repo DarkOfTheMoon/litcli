@@ -23,7 +23,7 @@ one book per call, at human pace.
 Markup is split into pure functions (:func:`parse_cards`, :func:`parse_book_page`,
 :func:`challenge_token`, :func:`book_path`) so a site change touches only the thin adapter.
 
-Compliance: Z-Library is a shadow library, so its copies are not open-access licensed. The
+Compliance: copies are public copies, not open-access licensed. The
 backend reads only public book metadata (title / author / publisher / ISBN / edition /
 pages / language / rating) and never logs in.
 """
@@ -325,9 +325,9 @@ class ZlibraryBackend(Backend):
     one. ``get_attachment`` is still implemented for ``fetch book --download``.
     """
 
+    access = "public"  # public copies, not open-access licensed; the CLI labels hits by this.
+
     name = "zlibrary"
-    #: Copies are shadow-library scans, not open-access licensed (the CLI labels hits by this).
-    is_shadow = True
 
     @property
     def capabilities(self) -> set[str]:

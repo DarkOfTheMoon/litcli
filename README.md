@@ -10,7 +10,7 @@
 - **不需要 zotero.org 账号**：走 Zotero 10 的本地 API（`localhost:23119`），写库一次授权即可。
 - **没有 Zotero 也能用**：`--backend crossref` 等公网源单独就能检索、取全文、导引文。
 - **不绕过验证码**：需要人机验证的站点（知网滑块、Sci-Hub、Z-Library、DOAB）由本地 `hashlib` 做题或交你手点，
-  命中盗版源时输出会明确标注“非 OA 授权”。
+  命中公开副本时输出会明确标注“公开副本（非 OA 授权）”。
 
 ## 60 秒上手（不需要 Zotero）
 
@@ -24,6 +24,8 @@ litcli fetch 10.1038/s41598-024-80509-9            # 落到当前目录，stdout
 ```
 
 `search` 默认搜全部来源，`--backend` 收窄到单个；`--format json` 是一行一条记录，空结果打印 `[]`。
+表格在 key 后标注来源性质：`[oa]` 开放获取授权、`[public]` 公开副本（非 OA 授权）、`[local]` 你自己的库；
+JSON 里是对应的 `access` 字段。
 `fetch` 默认把文件写到当前目录（`--out DIR` 另指），成功时 stdout 只有路径，失败原因走 stderr；
 退出码 `0` 拿到文件 / `1` 没有全文 / `2` 出错。
 
@@ -135,8 +137,8 @@ shell 补全只有 bash/zsh/fish（PowerShell 下可在 Git Bash 里生成）。
 | `openlibrary` · `uspto` | 读 | 开放（uspto 需免费 key） | 图书题录 / 专利全文；默认不内置 |
 | `cnki` | 读 | 知网网页 | 公开**题录**，不抓付费墙全文；需可见浏览器、人工过滑块 |
 | `douban` | 读 | 豆瓣网页 | 公开**书目**（书名/作者/ISBN/版次/页数），默认无头 |
-| `scihub` | 读 | 盗版镜像（非 OA），只按 DOI | PDF；`--scihub` 才兜底 |
-| `zlibrary` | 读 | 影子图书馆（非 OA） | 书目 + PDF；匿名每日有下载配额 |
+| `scihub` | 读 | 公开副本（非 OA 授权），只按 DOI | PDF；`--scihub` 才兜底 |
+| `zlibrary` | 读 | 公开副本（非 OA 授权） | 书目 + PDF；匿名每日有下载配额 |
 
 反爬说明：被 403 不等于你的 IP 被封。`europepmc.org` 的网页在 Cloudflare challenge 后面，所以走 EBI 的 REST；
 DOAB 的 `/rest` 拒绝无 JS 客户端，所以走它的 Atom feed；DOAB 详情页、Sci-Hub、Z-Library 用可解的工作量证明，

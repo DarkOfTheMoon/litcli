@@ -12,12 +12,13 @@ from .. import metadata
 from ..citation import render_intext
 from ..config import get_backend
 from ..models import AcademicItem
+from ..provenance import stamp
 from .render import present
 
 
 def cmd_data_get(cfg, args) -> int:
     backend = get_backend(args.backend, cfg)
-    item = backend.get(args.key)
+    item = stamp([backend.get(args.key)], backend)[0]
     print(present(item, args.format, no_cite=True))
     if args.format == "table" and item.abstract:
         print(f"\n  {item.abstract[:260]}")

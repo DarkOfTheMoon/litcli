@@ -101,6 +101,8 @@ def result_to_item(result: dict, source: str = "europepmc") -> AcademicItem:
 class EuropePmcBackend(HttpBackend):
     """Read-only biomedical search with an open-access JATS XML fulltext hook."""
 
+    access = "oa"
+
     headers: ClassVar[dict] = {"Accept": "application/json"}
 
     def __init__(self, name: str = "europepmc", base: str = _SEARCH,

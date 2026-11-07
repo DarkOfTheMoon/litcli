@@ -29,6 +29,8 @@ class Backend(ABC):
     """Abstract base class for all academic backends."""
 
     name: str = ""
+    #: What kind of copy this backend serves (see :mod:`litcli.provenance`); "" for metadata only.
+    access: str = ""
 
     @property
     def capabilities(self) -> set[str]:

@@ -7,6 +7,7 @@ from ..aggregate import cited_key, merge_items
 from ..config import get_all_backends, get_backend
 from ..errors import LitcliError
 from ..models import AcademicItem
+from ..provenance import stamp
 from .render import print_items
 
 
@@ -35,7 +36,7 @@ def cmd_search(cfg, args) -> int:
         items: list[AcademicItem] = []
         for name, b in backends.items():
             try:
-                items.extend(b.search(args.query, limit=args.limit, filters=filters))
+                items.extend(stamp(b.search(args.query, limit=args.limit, filters=filters), b))
             except LitcliError as e:
                 # Policy by kind, never by message: an unsupported operation is this backend's
                 # normal state and stays silent; anything else gets one line, with the hint when
@@ -51,7 +52,7 @@ def cmd_search(cfg, args) -> int:
                 continue
     else:
         backend = get_backend(args.backend, cfg)
-        items = backend.search(args.query, limit=args.limit, filters=filters)
+        items = stamp(backend.search(args.query, limit=args.limit, filters=filters), backend)
 
     # Aggregation: dedup / merge / sort and mark sources only when several items came back.
     if args.backend is None and items and len(items) > 1:

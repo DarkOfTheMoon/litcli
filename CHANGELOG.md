@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 来源性质标注：每个后端声明自己给的是什么副本（`oa` 开放获取授权 / `public` 公开副本、非 OA 授权 /
+  `local` 你的库），表格行内标 `[oa]`/`[public]`/`[local]`，JSON 给同名的 `access` 字段，`fetch` 的
+  命中与候选列表也一并说明。标签跟着记录走，后端改名或换实现不影响。
 - `--debug`（或环境变量 `LITCLI_DEBUG=1`）：把每个请求、状态码、耗时、限速等待与重试逐行打到
   stderr，query 里的 key / email 打码；意外异常额外打印调用栈。该开关在子命令前后都接受，
   stdout 不受影响，不开启时只有一次布尔判断的开销。

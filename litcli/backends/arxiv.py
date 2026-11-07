@@ -64,6 +64,7 @@ def _entry_to_item(e: ET.Element) -> AcademicItem:
 
 
 class ArxivBackend(HttpBackend):
+    access = "oa"
     timeout = 25.0
     rate = 1
     min_interval = 3.0       # arXiv asks for ~1 request / 3 s

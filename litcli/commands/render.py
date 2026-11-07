@@ -5,6 +5,7 @@ import json
 
 from ..citation import render_intext
 from ..models import AcademicItem
+from ..provenance import tag
 
 
 def present(item: AcademicItem, fmt: str = "table", no_cite: bool = False) -> str:
@@ -14,7 +15,8 @@ def present(item: AcademicItem, fmt: str = "table", no_cite: bool = False) -> st
         return json.dumps(item.to_csl(), ensure_ascii=False)
     authors = ", ".join(i.get("family", "") for i in item.creators) or "Anon"
     first = f"{item.source}/{item.key}"
-    line = f"{first:<22} {authors:<24} {item.year:<5} {item.title[:60]}"
+    source = f"{first:<22}{tag(item.access):<9}"
+    line = f"{source} {authors:<24} {item.year:<5} {item.title[:60]}"
     if item.cited_by_count:
         line += f"   [cited {item.cited_by_count}]"
     if not no_cite:

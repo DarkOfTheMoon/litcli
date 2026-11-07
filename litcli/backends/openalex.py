@@ -133,6 +133,7 @@ def _work_to_item(rec: dict, source: str = "openalex") -> AcademicItem:
 
 
 class OpenAlexBackend(HttpBackend):
+    access = "oa"
     headers: ClassVar[dict] = {"Accept": "application/json"}
     http2 = True
 

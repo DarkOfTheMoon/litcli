@@ -14,7 +14,7 @@ import sys
 
 from .. import fulltext as fulltext_mod
 from .. import pdf as pdfutil
-from .. import unpaywall
+from .. import provenance, unpaywall
 from ..backends.base import Backend, NotSupportedError
 from ..config import get_all_backends, get_backend
 from ..errors import LitcliError
@@ -81,8 +81,8 @@ def cmd_fetch(cfg, args) -> int:
 def _fetch_fulltext(cfg, args, target: str) -> int:
     """Walk the legitimate fulltext chain for ``target`` and save the file (or print the link).
 
-    Sci-Hub is opt-in (``--scihub``, or by configuring the ``scihub`` backend) because it serves
-    copyright-evading copies; its hits are labelled as such.
+    Sci-Hub is opt-in (``--scihub``, or by configuring the ``scihub`` backend) and stays last:
+    it is a public copy without an open licence, so its hits say so.
     """
     key = normalize_related_key(target)
     email = _resolve_oa_email(cfg, args)
@@ -107,8 +107,9 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
         return 1
 
     kind = info["kind"]
-    if kind == "scihub":
-        note("  note: Sci-Hub copy (copyright-evading), not an open-access licence")
+    access = info.get("access", "")
+    if access == provenance.PUBLIC:
+        note(f"  note: {kind} copy — public copy, not an open-access licence")
     if info.get("format") == "xml":
         note("  note: open-access JATS XML (text without a PDF; not a rendered article)")
     if info.get("title"):
@@ -141,9 +142,8 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
 def _fetch_book(cfg, args, target: str) -> int:
     """Resolve ``target`` on a book backend and save the file.
 
-    Z-Library copies are shadow-library copies (not open-access licensed), so the hit is
-    labelled as such. ``--pick`` selects among the listed candidates; the chosen record is
-    printed before any bytes are fetched.
+    ``--pick`` selects among the listed candidates; the chosen record is printed, with what
+    kind of copy the backend serves, before any bytes are fetched.
     """
     backend = get_backend(args.backend or "zlibrary", cfg)
     candidates = backend.search(target, limit=max(1, args.limit))
@@ -151,7 +151,8 @@ def _fetch_book(cfg, args, target: str) -> int:
         note(f"[no books] {target!r}")
         return 1
 
-    note(f"{len(candidates)} candidate(s) from {backend.name}:")
+    note(f"{len(candidates)} candidate(s) from {backend.name}"
+         f"{provenance.tag(getattr(backend, 'access', ''))}:")
     for i, item in enumerate(candidates, 1):
         authors = ", ".join(c.get("family", "") for c in item.creators) or "Anon"
         note(f"  {i}. {item.year or '----'}  {authors[:28]:<28} {item.title[:64]}")
@@ -170,10 +171,11 @@ def _fetch_book(cfg, args, target: str) -> int:
         if len(candidates) > 1:
             note(f"        try another candidate: --pick 1..{len(candidates)}")
         return 2
-    if getattr(backend, "is_shadow", False):
-        label = "Z-Library copy (shadow library, not an open-access licence)"
-    elif getattr(type(backend), "get_attachment", None) is not Backend.get_attachment:
-        label = f"{backend.name} record (open access)"
+    access = getattr(backend, "access", "")
+    if access == provenance.PUBLIC:
+        label = f"{backend.name} copy — public copy, not an open-access licence"
+    elif access and getattr(type(backend), "get_attachment", None) is not Backend.get_attachment:
+        label = f"{backend.name} record ({provenance.label(access)})"
     else:
         label = f"{backend.name} record (metadata only, no file)"
     note(f"  {label}: {book.url}")

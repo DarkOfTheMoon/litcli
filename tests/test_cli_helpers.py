@@ -125,9 +125,9 @@ class FetchBookTest(unittest.TestCase):
         def get_attachment(self, key):
             raise NotSupportedError("get_attachment", self)
 
-    class Shadow:
+    class PublicCopy:
         name = "books"  # a zlibrary backend configured under a non-default name
-        is_shadow = True
+        access = "public"
 
         def search(self, q, limit=10, filters=None):
             return [AcademicItem(source="books", key="book/abc", title="T", item_type="book")]
@@ -168,9 +168,9 @@ class FetchBookTest(unittest.TestCase):
         self.assertIn("metadata only, no file", out)
         self.assertNotIn("Add --download", out)
 
-    def test_shadow_label_survives_a_renamed_backend(self):
-        _rc, out = self._run(["fetch", "--book", "x", "--backend", "books"], self.Shadow())
-        self.assertIn("shadow library", out)
+    def test_a_public_copy_is_labelled_even_under_a_renamed_backend(self):
+        _rc, out = self._run(["fetch", "--book", "x", "--backend", "books"], self.PublicCopy())
+        self.assertIn("public copy, not an open-access licence", out)
         self.assertNotIn("record (open access)", out)
 
 

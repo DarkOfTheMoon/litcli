@@ -16,7 +16,7 @@ own library.
 - **No zotero.org account** — writes go through Zotero 10's local API; one runtime authorization.
 - **Works without Zotero** — the public backends alone can search, fetch and export.
 - **No captcha bypassing** — proof-of-work walls are solved locally with `hashlib`, human sliders are
-  handed back to you, and results from shadow libraries are labelled as non-OA.
+  handed back to you, and results that are public copies without an open licence are labelled as such.
 
 ## Quick start (no Zotero required)
 
@@ -30,7 +30,9 @@ litcli fetch 10.1038/s41598-024-80509-9            # saved to the current direct
 ```
 
 `search` covers every source by default; `--backend` narrows it. `--format json` prints one record per line and an
-empty result prints `[]`. `fetch` writes into the current directory (`--out DIR` overrides), prints only the path
+empty result prints `[]`. The table marks what kind of copy a row is right after the key — `[oa]` openly
+licensed, `[public]` a public copy without an open licence, `[local]` your own library; JSON has the same in `access`.
+`fetch` writes into the current directory (`--out DIR` overrides), prints only the path
 on stdout and its reasons on stderr; exit codes `0` file saved / `1` nothing found / `2` error.
 
 ## Install
@@ -130,8 +132,8 @@ without any config; you only add it to `config.toml` to include it in `--all` or
 | `openlibrary` · `uspto` | free (uspto needs a free key) | book records / patents |
 | `cnki` | CNKI web index | public metadata only, never paywalled full text; visible browser + manual slider |
 | `douban` | Douban web | public bibliographic data; headless |
-| `scihub` | shadow library (non-OA), DOI only | PDF, opt-in via `--scihub` |
-| `zlibrary` | shadow library (non-OA) | records + PDF; anonymous daily quota |
+| `scihub` | public copy (non-OA), DOI only | PDF, opt-in via `--scihub` |
+| `zlibrary` | public copy (non-OA) | records + PDF; anonymous daily quota |
 
 **China-specific sources.** CNKI drives a visible browser with your own logged-in profile and needs one
 manual slider; Douban runs headless by default (its search page ships the records server-side) and only

@@ -94,6 +94,8 @@ def record_to_item(result: dict, source: str = "doaj") -> AcademicItem:
 class DoajBackend(HttpBackend):
     """Read-only search across open-access journal articles."""
 
+    access = "oa"
+
     headers: ClassVar[dict] = {"Accept": "application/json"}
 
     def __init__(self, name: str = "doaj", base: str = _API, timeout: int = 25, delay: float = 1.0):

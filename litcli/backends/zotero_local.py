@@ -88,6 +88,7 @@ def _item_to_academic(data: dict, source: str = "zotero") -> AcademicItem:
 
 
 class ZoteroLocalBackend(HttpBackend):
+    access = "local"
     timeout = 20.0
     retries = 1             # the write paths handle their own version conflicts
 

@@ -84,6 +84,8 @@ def record_to_item(record: dict, source: str = "zenodo") -> AcademicItem:
 class ZenodoBackend(HttpBackend):
     """Read-only search over openly licensed records (datasets, software, preprints, reports)."""
 
+    access = "oa"
+
     headers: ClassVar[dict] = {"Accept": "application/json"}
 
     def __init__(self, name: str = "zenodo", base: str = _API, timeout: int = 30, delay: float = 1.0):
