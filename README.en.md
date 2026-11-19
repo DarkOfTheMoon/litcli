@@ -105,7 +105,8 @@ fail with the fix instead of waiting for a y/N answer.
 
 Metadata reads are cached for a day (`~/.cache/litcli/cache`; successful GETs only, no files, no writes),
 so repeating a search does not spend the site's budget again — use `--no-cache` for fresh results. Sources are
-queried a few at a time (up to four) instead of one after another. `search`, `fetch`, `export`, `refs`, `citing`, `related` are read-only;
+queried a few at a time (up to four) under a 45-second overall limit, so a stuck source is given up on instead of
+holding the command. `search`, `fetch`, `export`, `refs`, `citing`, `related` are read-only;
 `data` writes.
 
 The table adds a short abstract snippet under each title (160 chars), because a title alone cannot be judged.

@@ -18,7 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 元数据读取的本地缓存：成功的 GET JSON/文本存 24 小时（`~/.cache/litcli/cache`），重复检索不再重复消耗站点配额；
   写操作与文件下载不缓存，条目损坏/目录不可写一律降级为直接请求。`--no-cache`（`LITCLI_NO_CACHE=1`）绕过。
   重复同一检索实测 10.5s → 3.6s。
-- `search --all` 改成最多 4 路并发，按后端顺序归并，结果顺序仍确定。
+- `search --all` 改成最多 4 路并发，按后端顺序归并，结果顺序仍确定；整轮设 45 秒上限，
+  到点没答的来源按超时计入失败并按静默策略处理，一个卡住的重试不再把命令拖成两分钟。
+
 
 - 来源性质标注：每个后端声明自己给的是什么副本（`oa` 开放获取授权 / `public` 公开副本、非 OA 授权 /
   `local` 你的库），表格行内标 `[oa]`/`[public]`/`[local]`，JSON 给同名的 `access` 字段，`fetch` 的

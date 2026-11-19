@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import re
 import sys
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeout
 
 from ..aggregate import cited_key, merge_items
 from ..config import get_all_backends, get_backend
@@ -14,6 +15,9 @@ from ..provenance import stamp
 from .render import print_items
 
 _TOKEN_RE = re.compile(r"\w+", re.UNICODE)
+
+#: Seconds the whole fan-out may take before the stragglers are given up on.
+DEADLINE = 45.0
 
 
 def _tokens(query: str) -> list[str]:
@@ -95,10 +99,24 @@ def cmd_search(cfg, args) -> int:
             except Exception as exc:  # narrowed below, re-raised into the same handlers
                 return name, [], exc
 
-        with ThreadPoolExecutor(max_workers=min(4, len(names) or 1)) as pool:
-            results = list(pool.map(run, names))
+        pool = ThreadPoolExecutor(max_workers=min(4, len(names) or 1))
+        done: dict[str, tuple] = {}
+        pending = {pool.submit(run, n): n for n in names}
+        try:
+            for fut in as_completed(pending, timeout=DEADLINE):
+                name, found, exc = fut.result()
+                done[name] = (found, exc)
+        except FuturesTimeout:
+            pass  # whatever is left is reported as a timeout below
+        pool.shutdown(wait=False, cancel_futures=True)
+        for name in names:
+            if name not in done:
+                # A source that never answers must not hold the whole search hostage, which is
+                # how one slow 429 cascade used to turn into a 120-second command.
+                done[name] = ([], TimeoutError(f"no answer within {DEADLINE:.0f}s"))
 
-        for name, found, exc in results:
+        for name in names:
+            found, exc = done[name]
             items.extend(found)
             if exc is None:
                 continue

@@ -90,7 +90,7 @@ shell 补全只有 bash/zsh/fish（PowerShell 下可在 Git Bash 里生成）。
 本机 Zotero 没开着时，写库与检索会先探一次端口直接报错，省得等你按了 y 才发现。
 
 元数据读取会缓存一天（`~/.cache/litcli/cache`，只存成功的 GET、不存文件、写操作不缓存），重复检索不必再花站点的配额；
-要拿最新结果用 `--no-cache`。检索对来源是并发的（最多 4 路），不再一个接一个排队。
+要拿最新结果用 `--no-cache`。检索对来源是并发的（最多 4 路），整轮 45 秒上限：卡住的来源按超时跳过，不再把命令拖住。
 `search` / `fetch` / `export` / `refs` / `citing` / `related` 只读，`data` 写库。
 
 **检索与引文图谱**

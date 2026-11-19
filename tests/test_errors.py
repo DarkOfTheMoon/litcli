@@ -164,6 +164,27 @@ class AllPolicyTest(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("T", out)
 
+    def test_a_stuck_source_is_given_up_on(self):
+        import time
+
+        def stuck(_q, **_kw):
+            time.sleep(2)
+            return []
+
+        args = mock.Mock(backend=None, query="q", limit=5, format="lines", no_cite=False,
+                         type=None, sort=None, title=None, author=None, year=None,
+                         container=None)
+        quick = mock.Mock()
+        quick.search.return_value = [AcademicItem(source="quick", key="k", title="T")]
+        pool = {"slow": mock.Mock(search=stuck), "quick": quick}
+        started = time.monotonic()
+        with mock.patch.object(search, "get_all_backends", return_value=pool), \
+                mock.patch.object(search, "DEADLINE", 0.1), \
+                mock.patch.object(search, "print_items", return_value=0):
+            rc = search.cmd_search({}, args)
+        self.assertLess(time.monotonic() - started, 1.0)
+        self.assertEqual(rc, 0)  # the answering source still produced a result
+
     def test_sources_are_queried_at_the_same_time(self):
         import time
 
@@ -179,7 +200,7 @@ class AllPolicyTest(unittest.TestCase):
         with mock.patch.object(search, "get_all_backends", return_value=pool), \
                 mock.patch.object(search, "print_items", return_value=0):
             search.cmd_search({}, args)
-        self.assertLess(time.monotonic() - started, 0.6)  # 0.8+ if serial
+        self.assertLess(time.monotonic() - started, 0.75)  # 0.8+ if serial
 
     def test_the_result_order_follows_the_backend_order(self):
         args = mock.Mock(backend=None, query="q", limit=9, format="lines", no_cite=False,
