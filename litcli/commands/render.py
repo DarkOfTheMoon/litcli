@@ -16,9 +16,15 @@ def _authors(item: AcademicItem) -> str:
     return ", ".join(names[:3]) + (" et al." if len(names) > 3 else "")
 
 
-def present(item: AcademicItem, fmt: str = "table", no_cite: bool = False) -> str:
+#: Characters of abstract shown by ``--snippet`` / the search table.
+SNIPPET = 160
+
+
+def present(item: AcademicItem, fmt: str = "table", no_cite: bool = False,
+            snippet: bool = False) -> str:
     """One record. The table keeps the title whole and adds the container and DOI: a truncated
-    title cannot be judged, and the DOI is what ``fetch`` needs next."""
+    title cannot be judged, and the DOI is what ``fetch`` needs next. With ``snippet`` a short
+    abstract line follows on an indented row — enough to tell relevant from not."""
     if fmt == "json":
         return json.dumps(item.to_dict(), ensure_ascii=False)
     if fmt == "csl":
@@ -38,10 +44,14 @@ def present(item: AcademicItem, fmt: str = "table", no_cite: bool = False) -> st
     if not no_cite:
         cite = render_intext([item])
         line = f"{line}  {cite[0]}"
+    if snippet and item.abstract:
+        text = " ".join(item.abstract.split())
+        line += f"\n    {text[:SNIPPET]}{'…' if len(text) > SNIPPET else ''}"
     return line
 
 
-def print_items(items: list[AcademicItem], fmt: str, no_cite: bool, empty_msg: str) -> int:
+def print_items(items: list[AcademicItem], fmt: str, no_cite: bool, empty_msg: str,
+                snippet: bool = False) -> int:
     """Render a list of items (json/csl single-line blocks, or table rows) + ``empty_msg`` fallback."""
     if fmt in ("json", "csl"):
         if not items:
@@ -50,7 +60,7 @@ def print_items(items: list[AcademicItem], fmt: str, no_cite: bool, empty_msg: s
             print(present(it, fmt, no_cite))
         return 0
     for it in items:
-        print(present(it, "table", no_cite))
+        print(present(it, "table", no_cite, snippet))
     if not items:
         print(empty_msg)
     return 0

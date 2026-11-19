@@ -168,6 +168,18 @@ class TableRowTest(unittest.TestCase):
                       no_cite=True)
         self.assertIn("(sources disagree)", row)
 
+    def test_a_snippet_follows_on_an_indented_line(self):
+        row = present(self._item(abstract="relevant text"), no_cite=True, snippet=True)
+        self.assertTrue(row.splitlines()[1].startswith("    relevant text"))
+
+    def test_a_long_snippet_is_cut_with_an_ellipsis(self):
+        row = present(self._item(abstract="A" * 400), no_cite=True, snippet=True)
+        self.assertTrue(row.endswith("…"))
+        self.assertLess(len(row.splitlines()[1]), 170)
+
+    def test_no_snippet_without_the_flag(self):
+        self.assertEqual(len(present(self._item(abstract="x"), no_cite=True).splitlines()), 1)
+
     def test_a_long_author_list_is_capped(self):
         creators = [{"family": f} for f in "ABCDE"]
         row = present(self._item(creators=creators), no_cite=True)

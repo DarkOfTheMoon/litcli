@@ -161,4 +161,4 @@ def cmd_search(cfg, args) -> int:
     # otherwise return ninety rows for a ten-row request.
     items = items[:args.limit]
 
-    return print_items(items, args.format, args.no_cite, "[no results]")
+    return print_items(items, args.format, args.no_cite, "[no results]", snippet=True)

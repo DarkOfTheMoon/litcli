@@ -74,7 +74,7 @@ class SearchOrderTest(unittest.TestCase):
         backend.name = "openalex"
         backend.search.return_value = items
         with mock.patch.object(search, "get_backend", return_value=backend), \
-                mock.patch.object(search, "print_items", side_effect=lambda its, *a: seen.extend(its)):
+                mock.patch.object(search, "print_items", side_effect=lambda its, *a, **k: seen.extend(its)):
             search.cmd_search({}, args)
         return seen
 

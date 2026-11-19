@@ -106,6 +106,7 @@ so repeating a search does not spend the site's budget again — use `--no-cache
 queried a few at a time (up to four) instead of one after another. `search`, `fetch`, `export`, `refs`, `citing`, `related` are read-only;
 `data` writes.
 
+The table adds a short abstract snippet under each title (160 chars), because a title alone cannot be judged.
 Results are ordered by relevance (a title hit outweighs an abstract hit, covering every token adds more, ties go
 to citations then year), so `--limit` keeps the rows that answer the query rather than whichever source replied
 first; `--sort cited` switches to a pure citation ranking. Field filters are sent to the backends and re-checked

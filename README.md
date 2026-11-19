@@ -134,7 +134,7 @@ shell 补全只有 bash/zsh/fish（PowerShell 下可在 Git Bash 里生成）。
 - **zotero** → 全部折进单个 `q`（`qmode=everything` 全字段命中）
 
 `cited_by_count` 取 openalex / crossref 的对应字段，table 输出显示 `[cited N via 来源]`（来源之间数字不一致时标注 `(sources disagree)`）。
-默认按相关度排序（标题命中 > 摘要命中，命中全部词再加分，同分看被引与年份），`--sort cited` 改按被引降序；
+表格在标题下给一行摘要片段（160 字），判断要不要更省事。默认按相关度排序（标题命中 > 摘要命中，命中全部词再加分，同分看被引与年份），`--sort cited` 改按被引降序；
 字段过滤除了映射给后端，还会在本地再判一次，后端忽略条件时记录不会漏出。
 
 ## 后端与授权边界

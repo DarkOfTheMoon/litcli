@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 检索表格在标题下补一行缩进摘要（160 字截断加省略号）：光看标题判不出该不该要，摘要片段才够；
+  只对有摘要的记录输出，JSON 仍走 `abstract` 全字段。
+
 - 元数据读取的本地缓存：成功的 GET JSON/文本存 24 小时（`~/.cache/litcli/cache`），重复检索不再重复消耗站点配额；
   写操作与文件下载不缓存，条目损坏/目录不可写一律降级为直接请求。`--no-cache`（`LITCLI_NO_CACHE=1`）绕过。
   重复同一检索实测 10.5s → 3.6s。

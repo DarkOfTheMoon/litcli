@@ -194,7 +194,7 @@ class AllPolicyTest(unittest.TestCase):
         seen = []
         with mock.patch.object(search, "get_all_backends", return_value=pool), \
                 mock.patch.object(search, "print_items",
-                                  side_effect=lambda its, *a: seen.extend(it.source for it in its)):
+                                  side_effect=lambda its, *a, **k: seen.extend(it.source for it in its)):
             search.cmd_search({}, args)
         self.assertEqual(seen, ["b0", "b1", "b2"])
 
