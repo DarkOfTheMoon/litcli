@@ -30,7 +30,11 @@ def present(item: AcademicItem, fmt: str = "table", no_cite: bool = False) -> st
     if item.doi:
         line += f"  doi:{item.doi}"
     if item.cited_by_count:
-        line += f"  [cited {item.cited_by_count}]"
+        claims = item.extra.get("cited_by_source") or {}
+        src = max(claims, key=claims.get) if claims else ""
+        line += f"  [cited {item.cited_by_count}{f' via {src}' if src else ''}]"
+        if len(set(claims.values())) > 1:
+            line += " (sources disagree)"
     if not no_cite:
         cite = render_intext([item])
         line = f"{line}  {cite[0]}"

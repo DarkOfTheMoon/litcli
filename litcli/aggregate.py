@@ -49,8 +49,42 @@ def norm_isbn(isbn: str) -> str:
     return re.sub(r"[^0-9xX]", "", (isbn or "")).lower()
 
 
+def _first_author(item: AcademicItem) -> str:
+    for c in item.creators:
+        name = _WS_RE.sub(" ", (c.get("family") or "").lower()).strip()
+        if name:
+            return name
+    return ""
+
+
+def weak_identity(item: AcademicItem) -> str:
+    """Title + first author, for records with no DOI/ISBN.
+
+    A title alone is too loose (``Editorial``, ``Introduction`` recur) and a title that is too
+    tight fails to merge the same preprint coming from two repositories, so the author surname
+    breaks the tie without needing a network lookup.
+    """
+    return f"{norm_title(item.title)}|{_first_author(item)}"
+
+
+def _year_ok(one: str, other: str) -> bool:
+    """Same year, or one of them unknown: a preprint and its published version are one work."""
+    a, b = (one or "")[:4], (other or "")[:4]
+    if not (a.isdigit() and b.isdigit()):
+        return True
+    return abs(int(a) - int(b)) <= 1
+
+
+def _joinable(item: AcademicItem, groups: dict, weak_index: dict) -> str | None:
+    """The single group a DOI-less record belongs to, if exactly one claims its title+author."""
+    weak = weak_identity(item)
+    hits = {gid for gid, keys in weak_index.items()
+            if weak in keys and any(_year_ok(item.year, m.year) for m in groups[gid])}
+    return hits.pop() if len(hits) == 1 else None
+
+
 def identity(item: AcademicItem) -> str:
-    """Identity key: prefer an effective DOI, then ISBN (books), else the normalized title.
+    """Identity key: prefer an effective DOI, then ISBN (books), else the weak title+author key.
 
     Used to judge sameness across libraries. Journal articles / papers carry a DOI; books
     typically carry an ISBN and no DOI, so ISBN is the book counterpart of DOI.
@@ -61,7 +95,7 @@ def identity(item: AcademicItem) -> str:
     b = norm_isbn(item.isbn)
     if b:
         return "isbn:" + b
-    return "title:" + norm_title(item.title)
+    return "title:" + weak_identity(item)
 
 
 def _info_score(item: AcademicItem) -> tuple:
@@ -125,27 +159,54 @@ def merge_items(items: list[AcademicItem]) -> list[AcademicItem]:
     """Dedupe + merge + sort.
 
     - Group by :func:`identity`, preserving first-occurrence order;
+    - a DOI-less record joins the single strong group with the same title and author (and a
+      compatible year) rather than forming a second copy of the same work;
     - within each group, take the most complete record as the primary and fill the rest's
       missing fields from it (copy operations, do not mutate the inputs);
+    - citation counts disagree per source: the largest is kept for ranking and every claim is
+      recorded in ``extra["cited_by_source"]``;
     - ``extra["sources"]`` records all sources, while ``source`` keeps the primary's source;
     - finally sort by year descending, then by title ascending (stable).
     """
+    # Strong identifiers first: a DOI/ISBN group must exist before a DOI-less twin can find it.
+    strong = [it for it in items if not identity(it).startswith("title:")]
+    weak_only = [it for it in items if identity(it).startswith("title:")]
+
     groups: dict[str, list[AcademicItem]] = {}
     order: list[str] = []
-    for it in items:
-        k = identity(it)
+    weak_index: dict[str, list[str]] = {}
+
+    def add(k: str, it: AcademicItem) -> None:
         if k not in groups:
             groups[k] = []
             order.append(k)
         groups[k].append(it)
+        weak_index.setdefault(k, []).append(weak_identity(it))
+
+    for it in strong:
+        add(identity(it), it)
+    for it in weak_only:
+        k = _joinable(it, groups, weak_index)
+        if k is None:
+            k = identity(it)
+            if k in groups:  # same title and author, but not the same work (years far apart)
+                k = f"{k}#{len(order)}"
+        add(k, it)
 
     merged: list[AcademicItem] = []
     for k in order:
         group = groups[k]
-        primary = copy.deepcopy(max(group, key=_info_score))
-        for other in group:
-            if other is primary:
-                continue
+        primary = max(group, key=_info_score)
+        others = [it for it in group if it is not primary]
+        claims: dict[str, int] = {}
+        for member in group:
+            if member.cited_by_count and member.source:
+                claims.setdefault(member.source, member.cited_by_count)
+        primary = copy.deepcopy(primary)
+        if claims:
+            # Counts disagree per source; keep the largest for ranking, remember every claim.
+            primary.extra["cited_by_source"] = claims
+        for other in others:
             _merge_two(primary, other)
         srcs = sorted({it.source for it in group if it.source})
         if srcs:

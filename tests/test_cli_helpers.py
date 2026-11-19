@@ -157,6 +157,17 @@ class TableRowTest(unittest.TestCase):
         self.assertIn("Nature", row)
         self.assertIn("doi:10.1/x", row)
 
+    def test_the_citation_badge_names_its_source(self):
+        row = present(self._item(access="oa", cited_by_count=5,
+                                 extra={"cited_by_source": {"openalex": 5}}), no_cite=True)
+        self.assertIn("[cited 5 via openalex]", row)
+
+    def test_disagreeing_sources_are_flagged(self):
+        row = present(self._item(access="oa", cited_by_count=7,
+                                 extra={"cited_by_source": {"openalex": 7, "crossref": 3}}),
+                      no_cite=True)
+        self.assertIn("(sources disagree)", row)
+
     def test_a_long_author_list_is_capped(self):
         creators = [{"family": f} for f in "ABCDE"]
         row = present(self._item(creators=creators), no_cite=True)

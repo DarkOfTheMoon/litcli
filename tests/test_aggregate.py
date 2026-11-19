@@ -136,6 +136,38 @@ class MergeTest(unittest.TestCase):
         self.assertEqual(out[0].publisher, "国防工业出版社")
         self.assertEqual(out[0].extra["sources"], ["douban", "openlibrary"])
 
+    def test_a_doi_less_twin_joins_its_doi_record(self):
+        # Same work from a repository without a DOI must not survive as a second row.
+        a = AcademicItem(source="arxiv", key="1701.00001", title="Deep learning",
+                         year="2015", creators=[{"family": "LeCun"}])
+        b = AcademicItem(source="crossref", key="10.1038/nature14539", title="Deep Learning",
+                         year="2016", doi="10.1038/nature14539",
+                         creators=[{"family": "LeCun"}])
+        out = merge_items([a, b])
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].extra["sources"], ["arxiv", "crossref"])
+
+    def test_same_title_different_author_is_two_works(self):
+        a = AcademicItem(source="arxiv", key="1", title="Editorial", year="2020",
+                         creators=[{"family": "Smith"}])
+        b = AcademicItem(source="arxiv", key="2", title="Editorial", year="2020",
+                         creators=[{"family": "Jones"}])
+        self.assertEqual(len(merge_items([a, b])), 2)
+
+    def test_far_apart_years_are_two_works(self):
+        a = AcademicItem(source="arxiv", key="1", title="Editorial", year="1990",
+                         creators=[{"family": "Smith"}])
+        b = AcademicItem(source="arxiv", key="2", title="Editorial", year="2020",
+                         creators=[{"family": "Smith"}])
+        self.assertEqual(len(merge_items([a, b])), 2)
+
+    def test_conflicting_counts_keep_every_claim(self):
+        a = AcademicItem(source="openalex", key="1", title="T", doi="10.1/x", cited_by_count=100)
+        b = AcademicItem(source="crossref", key="2", title="T", doi="10.1/x", cited_by_count=120)
+        out = merge_items([a, b])
+        self.assertEqual(out[0].cited_by_count, 120)
+        self.assertEqual(out[0].extra["cited_by_source"], {"crossref": 120, "openalex": 100})
+
     def test_merge_carries_cited_and_openalex_id(self):
         # Read-only backend (zotero has no citation count) vs openalex same year/title: the merge must
         # carry the citation count and openalex_id, otherwise --all --sort cited degrades to all 0 and

@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `--all` 去重身份从「归一标题」收紧为「归一标题 + 第一作者」，且年份相差超过 1 年不合并：同名的
+  `Editorial` 不再被捏成一条，同一篇预印本与刊出本仍能合并；反过来，**带 DOI 的记录会吸并同标题同作者的
+  无 DOI 记录**，不再留成两行。
+- 各来源的引用数互相打架时保留最大值供排序，但把每个来源各自的数记进 `extra["cited_by_source"]`，
+  表格改为 `[cited N via 源]`，来源不一致时追加 `(sources disagree)`，不再把单源数字当成共识。
 - 后端失败改为带分类的异常（`litcli/errors.py`）：`bad-input` / `not-found` / `paywalled` / `auth` /
   `bot-wall` / `unavailable` / `unsupported` / `external`。调用方（`--all` 聚合、全文链、CLI 出口）
   按分类决定策略与退出标签，不再靠字符串匹配或笼统的 `RuntimeError`；HTTP 状态经 `http_kind()`
