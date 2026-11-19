@@ -1,6 +1,7 @@
 """``search``: one backend or all of them, with aggregation and post-filters."""
 from __future__ import annotations
 
+import re
 import sys
 
 from ..aggregate import cited_key, merge_items
@@ -10,6 +11,50 @@ from ..errors import LitcliError
 from ..models import AcademicItem
 from ..provenance import stamp
 from .render import print_items
+
+_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
+
+
+def _tokens(query: str) -> list[str]:
+    return [t.lower() for t in _TOKEN_RE.findall(query or "")]
+
+
+def matches(item: AcademicItem, filters: dict) -> bool:
+    """Enforce a filter locally as well, so a backend that ignores part of the mapping (or
+    folds it into free text) cannot leak records past it."""
+    def has(hay: str, needle: str) -> bool:
+        return needle.lower() in (hay or "").lower()
+
+    if not has(item.title, filters.get("title", "")):
+        return False
+    if not has(item.container_title, filters.get("container", "")):
+        return False
+    if filters.get("year") and not (item.year or "").startswith(filters["year"]):
+        return False
+    if filters.get("author"):
+        names = [f"{c.get('given', '')} {c.get('family', '')}" for c in item.creators]
+        if not any(has(n, filters["author"]) for n in names):
+            return False
+    return True
+
+
+def relevance(item: AcademicItem, query: str) -> tuple:
+    """A descending sort key for "how well does this answer the query".
+
+    Title matches outweigh the abstract, and a hit containing every token beats one that only
+    shares a word; citation count breaks ties, then year and title make the order stable.
+    """
+    tokens = _tokens(query)
+    title = (item.title or "").lower()
+    abstract = (item.abstract or "").lower()
+    container = (item.container_title or "").lower()
+    score = sum(3 for t in tokens if t in title)
+    score += sum(2 for t in tokens if t in container)
+    score += sum(1 for t in tokens if t in abstract)
+    if tokens and all(t in title for t in tokens):
+        score += 5
+    return (-score, -item.cited_by_count, -(int(item.year) if (item.year or "").isdigit() else 0),
+            title)
 
 
 def search_filters(args) -> dict:
@@ -76,15 +121,24 @@ def cmd_search(cfg, args) -> int:
     if args.backend is None and items and len(items) > 1:
         items = merge_items(items)
 
+    # Backends map filters where they can; enforce them here too, because "the API said so" is
+    # not a guarantee and a filter that only reaches half the sources is worse than none.
+    if filters:
+        items = [it for it in items if matches(it, filters)]
+
     # --type filter: drop noisy items (book titles / off-topic). Post-merge so --all dedup
     # is preserved; kept as a CLI post-filter for cross-backend semantic consistency.
     if getattr(args, "type", None):
         want = args.type.lower()
         items = [it for it in items if it.item_type.lower() == want]
 
-    # --sort cited: descending by citation count (default is merge's year/title order).
+    # Default order: relevance to the query (title beats abstract, more tokens beat fewer),
+    # then citations. Without it ``--limit`` would return whichever backend answered first.
+    # --sort cited overrides with a pure citation ranking.
     if getattr(args, "sort", None) == "cited":
         items = sorted(items, key=cited_key)
+    else:
+        items = sorted(items, key=lambda it: relevance(it, args.query))
 
     # --limit is a cap on what the caller sees, not per backend: nine backends at 10 each would
     # otherwise return ninety rows for a ten-row request.

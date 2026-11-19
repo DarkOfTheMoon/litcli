@@ -102,6 +102,12 @@ is not "nothing found". Commands whose result you need (`fetch`, `data`, `export
 fail with the fix instead of waiting for a y/N answer. `search`, `fetch`, `export`, `refs`, `citing`, `related` are read-only;
 `data` writes.
 
+Results are ordered by relevance (a title hit outweighs an abstract hit, covering every token adds more, ties go
+to citations then year), so `--limit` keeps the rows that answer the query rather than whichever source replied
+first; `--sort cited` switches to a pure citation ranking. Field filters are sent to the backends and re-checked
+locally, so a source that ignores one cannot leak records. A citation badge reads `[cited N via source]` and says
+`(sources disagree)` when sources report different counts.
+
 **Read-only**
 
 | Command | What it does |

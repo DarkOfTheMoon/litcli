@@ -39,7 +39,7 @@ scripts/verify_release.sh vX.Y.Z
 
 CLI 帮助用 `./bin/litcli --help`。常用面：
 
-- 检索：`litcli search "..."`（默认查本机 Zotero 库），`--all` 跨后端聚合，`--type` 降噪，`--title/--author/--year/--container` 字段级过滤，`--sort cited` 按被引降序；`litcli backends list/status` 看可用后端与授权状态。
+- 检索：`litcli search "..."`（默认查本机 Zotero 库），`--all` 跨后端聚合，`--type` 降噪，`--title/--author/--year/--container` 字段级过滤，`--sort cited` 按被引降序；不指定 `--sort` 时按相关度排序（标题命中 > 摘要命中、全词命中加分，同分看被引/年份），字段过滤在本地另有兜底判定（`commands/search.py` 的 `relevance` / `matches`）；`litcli backends list/status` 看可用后端与授权状态。
 - **失败怎么呈现（约定）**：`search --all` 这类扇出读取默认静默，单源失败只在 `--verbose`（`LITCLI_VERBOSE=1`）下逐条写明来源与原因，不追加尾行；全部来源都失败是最响的一档，即使无 `--verbose` 也打印一行并以退 2 结束。需要确定结果的命令（`fetch`、`data` 读写、`export`、`refs/citing/related`、`backends status/authorize`、写前预检）失败一律明说。`--verbose` 是纯增量，永不改退出码；`--debug` 是更细一层的请求追踪，两者独立。
 - 引文图谱：`refs`（回溯奠基）/`citing`（前向跟进）/`related`（语义邻居），均 OpenAlex、默认按被引降序；`related` 默认走语义序，`--sort cited` 才改被引序。
 - 导出：`export` 的 arXiv key（如 `arxiv/1806.09180`）自动归一为 DOI `10.48550/arxiv.x`。
