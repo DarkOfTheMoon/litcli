@@ -48,6 +48,7 @@ def stub(backend, *responses: tuple) -> Recorder:
     An already-built client is dropped so a second ``stub()`` in one test takes effect.
     """
     backend.close()
+    backend.cacheable = False  # a canned body must win over whatever the process cached
     backend._transport = Recorder(*responses)
     return backend._transport
 

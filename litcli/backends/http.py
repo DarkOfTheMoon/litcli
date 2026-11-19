@@ -10,6 +10,7 @@ into a ``[skipped]`` backend instead of a stack trace.
 """
 from __future__ import annotations
 
+import json
 import threading
 import time
 from typing import Any, ClassVar
@@ -18,7 +19,7 @@ import httpx
 from pyrate_limiter import Duration, Limiter, Rate
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
-from .. import debug
+from .. import cache, debug
 from ..debug import log
 from ..errors import Unavailable
 from ..transport import UA as DEFAULT_UA
@@ -66,6 +67,8 @@ class HttpBackend(Session, Backend):
     retry_wait = wait_exponential(multiplier=0.5, max=8)
     follow_redirects = True
     http2 = False
+    #: Metadata reads may be served from the local cache; page-state backends turn this off.
+    cacheable = True
 
     def __init__(self, name: str | None = None, timeout: float | None = None,
                  rate: int | None = None, min_interval: float | None = None):
@@ -149,11 +152,29 @@ class HttpBackend(Session, Backend):
     def fetch(self, url: str, **kw) -> httpx.Response:
         return self.request("GET", url, **kw)
 
+    def _cache_key(self, url: str) -> str:
+        return f"{self.name}|{url}|{self.headers.get('Accept', '')}|{self.UA}"
+
     def fetch_json(self, url: str, **kw) -> Any:
-        return self.fetch(url, **kw).json()
+        return json.loads(self.fetch_text(url, **kw))
 
     def fetch_text(self, url: str, **kw) -> str:
-        return self.fetch(url, **kw).text
+        """GET as text, through the response cache when this backend allows it.
+
+        The retry/pacing path is skipped on a hit, which is the point: a repeated search
+        should not spend the site's budget again.
+        """
+        key = None
+        if self.cacheable and cache.enabled():
+            key = self._cache_key(url)
+            hit = cache.get(key)
+            if hit is not None:
+                log(f"cache hit {self.name}: {debug.mask(url)}")
+                return hit
+        body = self.fetch(url, **kw).text
+        if key is not None:
+            cache.put(key, body)
+        return body
 
     def fetch_bytes(self, url: str, **kw) -> bytes:
         return self.fetch(url, **kw).content

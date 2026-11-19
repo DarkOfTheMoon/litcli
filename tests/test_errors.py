@@ -164,6 +164,40 @@ class AllPolicyTest(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("T", out)
 
+    def test_sources_are_queried_at_the_same_time(self):
+        import time
+
+        def slow(_q, **_kw):
+            time.sleep(0.2)
+            return []
+
+        args = mock.Mock(backend=None, query="q", limit=5, format="lines", no_cite=False,
+                         type=None, sort=None, title=None, author=None, year=None,
+                         container=None)
+        pool = {f"b{i}": mock.Mock(search=slow) for i in range(4)}
+        started = time.monotonic()
+        with mock.patch.object(search, "get_all_backends", return_value=pool), \
+                mock.patch.object(search, "print_items", return_value=0):
+            search.cmd_search({}, args)
+        self.assertLess(time.monotonic() - started, 0.6)  # 0.8+ if serial
+
+    def test_the_result_order_follows_the_backend_order(self):
+        args = mock.Mock(backend=None, query="q", limit=9, format="lines", no_cite=False,
+                         type=None, sort=None, title=None, author=None, year=None,
+                         container=None)
+        pool = {}
+        for i in range(3):
+            b = mock.Mock()
+            b.search.return_value = [AcademicItem(source=f"b{i}", key=f"k{i}", title=f"T{i}",
+                                                 year="2020")]
+            pool[f"b{i}"] = b
+        seen = []
+        with mock.patch.object(search, "get_all_backends", return_value=pool), \
+                mock.patch.object(search, "print_items",
+                                  side_effect=lambda its, *a: seen.extend(it.source for it in its)):
+            search.cmd_search({}, args)
+        self.assertEqual(seen, ["b0", "b1", "b2"])
+
     def test_an_all_failed_search_is_loud_even_without_verbose(self):
         rc, out, err = self._search(Unavailable("down"), good=False)
         self.assertEqual(rc, 2)

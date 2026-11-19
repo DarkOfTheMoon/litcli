@@ -21,6 +21,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"litcli {__version__}")
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="show sources that failed inside a fan-out search (also LITCLI_VERBOSE=1)")
+    parser.add_argument("--no-cache", action="store_true",
+                        help="bypass the response cache (also LITCLI_NO_CACHE=1)")
     parser.add_argument("--debug", action="store_true",
                         help="trace requests, pacing and retries to stderr (also LITCLI_DEBUG=1)")
     sub = parser.add_subparsers(dest="cmd", required=True)

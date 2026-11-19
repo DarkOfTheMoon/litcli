@@ -89,6 +89,19 @@ def browser_cache_dir() -> Path:
     return Path(base) / "ms-playwright"
 
 
+def cache_dir() -> Path:
+    r"""Per-user HTTP response cache (metadata reads only; files are not cached).
+
+    ``%LOCALAPPDATA%\litcli\cache`` on Windows, ``$XDG_CACHE_HOME/litcli/cache``
+    (default ``~/.cache/litcli/cache``) elsewhere.
+    """
+    if _IS_WINDOWS:
+        base = os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local")
+    else:
+        base = os.environ.get("XDG_CACHE_HOME") or (Path.home() / ".cache")
+    return Path(base) / APP_DIR / "cache"
+
+
 def apply_browser_cache() -> Path:
     """Make Playwright resolve browsers from :func:`browser_cache_dir` and return it.
 

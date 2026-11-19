@@ -99,7 +99,11 @@ Search fans out: **a single failing source is silent by default** — `--verbose
 which source failed and why. When every source failed it says so even without the flag and exits `2`, since that
 is not "nothing found". Commands whose result you need (`fetch`, `data`, `export`, `refs`, `citing`, `related`,
 `backends`) always speak up on failure. With the local Zotero app closed, reads and writes probe the port first and
-fail with the fix instead of waiting for a y/N answer. `search`, `fetch`, `export`, `refs`, `citing`, `related` are read-only;
+fail with the fix instead of waiting for a y/N answer.
+
+Metadata reads are cached for a day (`~/.cache/litcli/cache`; successful GETs only, no files, no writes),
+so repeating a search does not spend the site's budget again — use `--no-cache` for fresh results. Sources are
+queried a few at a time (up to four) instead of one after another. `search`, `fetch`, `export`, `refs`, `citing`, `related` are read-only;
 `data` writes.
 
 Results are ordered by relevance (a title hit outweighs an abstract hit, covering every token adds more, ties go
@@ -121,6 +125,7 @@ locally, so a source that ignores one cannot leak records. A citation badge read
 | `litcli data add --title "..." --creator "Family, Given" [--doi ..] [--force]` / `data add --pdf|--csl <file>` | ingest metadata (dedupe gate, `--force` skips), heuristics from page 1 (y/N), or CSL JSON |
 | `litcli data get <key>` · `data tree` · `data members <coll> [--limit N]` | read one record; browse collections |
 | `litcli backends list/status` · `litcli completions <bash\|zsh\|fish>` | diagnostics, shell completion |
+| `litcli --no-cache <command>` | bypass the response cache (`LITCLI_NO_CACHE=1` does the same); entries live 24 h and only successful metadata reads are kept |
 | `litcli --verbose <command>` | per-source failure lines for a search (silent by default; `LITCLI_VERBOSE=1` does the same), stderr only |
 | `litcli --debug <command>` | one line per request, status, duration, pacing wait and retry on stderr (`LITCLI_DEBUG=1` does the same); unexpected exceptions also print the stack. stdout is untouched |
 

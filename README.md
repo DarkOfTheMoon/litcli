@@ -87,6 +87,9 @@ shell 补全只有 bash/zsh/fish（PowerShell 下可在 Git Bash 里生成）。
 什么原因；全部来源都失败时即使不加开关也会明说并以 `2` 退出——那不算「没有结果」。
 其余需要拿到确定结果的命令（`fetch`、`data`、`export`、`refs`、`citing`、`related`、`backends`）失败一律明说。
 本机 Zotero 没开着时，写库与检索会先探一次端口直接报错，省得等你按了 y 才发现。
+
+元数据读取会缓存一天（`~/.cache/litcli/cache`，只存成功的 GET、不存文件、写操作不缓存），重复检索不必再花站点的配额；
+要拿最新结果用 `--no-cache`。检索对来源是并发的（最多 4 路），不再一个接一个排队。
 `search` / `fetch` / `export` / `refs` / `citing` / `related` 只读，`data` 写库。
 
 **检索与引文图谱**
@@ -115,6 +118,7 @@ shell 补全只有 bash/zsh/fish（PowerShell 下可在 Git Bash 里生成）。
 |---|---|
 | `litcli backends list` · `backends status` | 已配置后端与能力 / 授权与可达状态 |
 | `litcli completions <bash\|zsh\|fish>` | 打印自包含补全脚本；`eval "$(...)"` 后按 TAB 补全 |
+| `litcli --no-cache <命令>` | 跳过响应缓存（`LITCLI_NO_CACHE=1` 同样生效）；缓存默认 24 小时、只存成功的元数据读取 |
 | `litcli --verbose <命令>` | 检索里失败来源的逐条说明（默认静默；`LITCLI_VERBOSE=1` 同样生效），只写 stderr |
 | `litcli --debug <命令>` | 把请求、状态、耗时、限速等待与重试逐行写到 stderr（`LITCLI_DEBUG=1` 同样生效）；意外异常额外打印调用栈。stdout 不受影响 |
 

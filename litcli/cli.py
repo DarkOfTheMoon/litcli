@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import sys
 
+from . import cache
 from .commands import data as data_cmd
 from .commands import diagnostics, export, fetch, graph, search
 from .commands.parser import build_parser
@@ -73,13 +74,15 @@ def main(argv=None) -> int:
     # argparse see the rest. It is registered on the root parser so it shows up in --help.
     raw = list(sys.argv[1:] if argv is None else argv)
     debug_flag, verbose_flag = "--debug" in raw, any(a in ("-v", "--verbose") for a in raw)
-    quiet = [a for a in raw if a not in ("--debug", "-v", "--verbose")]
+    quiet = [a for a in raw if a not in ("--debug", "-v", "--verbose", "--no-cache")]
     args = build_parser().parse_args(quiet)
     if debug_flag or getattr(args, "debug", False):
         set_enabled()
         log(f"litcli {quiet}")
     if verbose_flag or getattr(args, "verbose", False):
         set_verbose()
+    if "--no-cache" in raw or getattr(args, "no_cache", False):
+        cache.disable()
     try:
         cfg = load_config()
         _apply_proxy(cfg)

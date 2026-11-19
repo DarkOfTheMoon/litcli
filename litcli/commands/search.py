@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor
 
 from ..aggregate import cited_key, merge_items
 from ..config import get_all_backends, get_backend
@@ -83,23 +84,39 @@ def cmd_search(cfg, args) -> int:
         backends = get_all_backends(cfg, corpora=True)
         items: list[AcademicItem] = []
         failed: dict[str, int] = {}
-        for name, b in backends.items():
+        # A few sources at a time: sequential fan-out at nine backends is slow and walks
+        # straight into the rate limits the retries then have to back off from.
+        names = list(backends)
+
+        def run(name: str):
             try:
-                items.extend(stamp(b.search(args.query, limit=args.limit, filters=filters), b))
-            except LitcliError as e:
+                return name, stamp(backends[name].search(args.query, limit=args.limit,
+                                                         filters=filters), backends[name]), None
+            except Exception as exc:  # narrowed below, re-raised into the same handlers
+                return name, [], exc
+
+        with ThreadPoolExecutor(max_workers=min(4, len(names) or 1)) as pool:
+            results = list(pool.map(run, names))
+
+        for name, found, exc in results:
+            items.extend(found)
+            if exc is None:
+                continue
+            if isinstance(exc, LitcliError):
+                e = exc
                 # Policy by kind, never by message: an unsupported operation is this backend's
                 # normal state and counts for nothing; anything else is a failure to name.
                 if e.kind != "unsupported":
                     failed[e.kind] = failed.get(e.kind, 0) + 1
                     notice(f"[skipped] backend {name}: {e}"
                            + (f" ({e.hint})" if e.hint else ""))
-                continue
-            except (NotImplementedError, RuntimeError, OSError, ValueError, SyntaxError) as e:
+            elif isinstance(exc, (NotImplementedError, RuntimeError, OSError, ValueError, SyntaxError)):
                 # A single backend failure (timeout / non-JSON body / malformed XML) must not
                 # bring down the whole aggregation; count it and continue.
-                failed[type(e).__name__] = failed.get(type(e).__name__, 0) + 1
-                notice(f"[skipped] backend {name}: {e}")
-                continue
+                failed[type(exc).__name__] = failed.get(type(exc).__name__, 0) + 1
+                notice(f"[skipped] backend {name}: {exc}")
+            else:
+                raise exc
         if failed:
             summary = ", ".join(f"{kind}:{count}" for kind, count in sorted(failed.items()))
             notice(f"[partial] {sum(failed.values())}/{len(backends)} sources failed ({summary})")

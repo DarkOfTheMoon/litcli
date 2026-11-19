@@ -51,6 +51,7 @@ class OpenAlexStubTest(unittest.TestCase):
     def setUp(self):
         self.be = OpenAlexBackend(mailto="t@e.com")
         speed_up(self.be)
+        self.be.cacheable = False  # tests swap the transport directly, cached bodies would win
 
     def test_inverted_rebuild(self):
         self.assertEqual(_inverted_to_text(WORK["abstract_inverted_index"]),
