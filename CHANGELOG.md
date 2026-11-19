@@ -34,6 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- 表格不再截断标题（60 字）与作者（24 字）：标题整句显示，作者超过三人折成 `et al.`，并补出刊名与 DOI——
+  截断后的标题没法判断要不要，DOI 正是下一步 `fetch` 的入参；`data members` 同样不再截断。
+- `data get arxiv/1806.09180` 打到 DOI 后端时曾 404：现在与 `export` 同样先把 arXiv id 归一为 DOI，
+  Zotero 等本机后端仍用自己的条目 key。
 - 无终端（管道、脚本）时 `data add --pdf` 的 y/N 复核曾静默读成「取消」：现在明确报错并提示 `--yes`。
 - `--backend` 默认值改为在分发处回落，`source/key` 前缀与显式 `--backend` 可同时使用而不再互斥出错。
 

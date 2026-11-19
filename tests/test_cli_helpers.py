@@ -14,7 +14,7 @@ from typing import ClassVar
 from litcli.backends.base import Backend, NotSupportedError
 from litcli.commands.keys import arxiv_id_from_key, normalize_export_key, normalize_related_key
 from litcli.commands.parser import build_parser
-from litcli.commands.render import print_items
+from litcli.commands.render import present, print_items
 from litcli.models import AcademicItem
 
 
@@ -139,6 +139,63 @@ class PreflightTest(unittest.TestCase):
 
         plain = mock.Mock(spec=[])  # a backend without ensure_running
         data._writable(plain)  # must not raise
+
+
+class TableRowTest(unittest.TestCase):
+    """The table must stay judgeable: whole title, container, DOI, and no author flood."""
+
+    def _item(self, **kw):
+        base = dict(source="openalex", key="10.1/x", title="T", year="2020")
+        base.update(kw)
+        return AcademicItem(**base)
+
+    def test_a_long_title_is_not_truncated(self):
+        self.assertIn("A" * 120, present(self._item(title="A" * 120), no_cite=True))
+
+    def test_container_and_doi_are_shown(self):
+        row = present(self._item(container_title="Nature", doi="10.1/x"), no_cite=True)
+        self.assertIn("Nature", row)
+        self.assertIn("doi:10.1/x", row)
+
+    def test_a_long_author_list_is_capped(self):
+        creators = [{"family": f} for f in "ABCDE"]
+        row = present(self._item(creators=creators), no_cite=True)
+        self.assertIn("A, B, C et al.", row)
+        self.assertNotIn("D", row.split("  ")[2])
+
+
+class DataGetKeyTest(unittest.TestCase):
+    """A key that names a DOI-less source still resolves on the DOI backends."""
+
+    def _get(self, backend):
+        import argparse
+        from unittest import mock
+
+        from litcli.commands import data
+
+        with mock.patch.object(data, "resolve_backend", return_value=(backend, "1806.09180")) as _r, \
+                mock.patch("builtins.print"):
+            data.cmd_data_get({}, argparse.Namespace(backend=None, key="arxiv/1806.09180",
+                                                     format="json"))
+        return backend.get.call_args.args[0]
+
+    def test_the_arxiv_id_becomes_a_doi_on_a_public_backend(self):
+        from unittest import mock
+
+        b = mock.Mock()
+        b.access = "oa"
+        b.name = "openalex"
+        b.get.return_value = AcademicItem(source="openalex", key="k")
+        self.assertEqual(self._get(b), "10.48550/arxiv.1806.09180")
+
+    def test_the_local_store_keeps_its_own_item_key(self):
+        from unittest import mock
+
+        b = mock.Mock()
+        b.access = "local"
+        b.name = "zotero"
+        b.get.return_value = AcademicItem(source="zotero", key="k")
+        self.assertEqual(self._get(b), "1806.09180")
 
 
 class BackendsParserTest(unittest.TestCase):

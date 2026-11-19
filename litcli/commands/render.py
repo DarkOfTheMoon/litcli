@@ -8,20 +8,32 @@ from ..models import AcademicItem
 from ..provenance import tag
 
 
+def _authors(item: AcademicItem) -> str:
+    """Family names only, capped: a 40-author paper must not push the title off the screen."""
+    names = [i.get("family", "") for i in item.creators if i.get("family")]
+    if not names:
+        return "Anon"
+    return ", ".join(names[:3]) + (" et al." if len(names) > 3 else "")
+
+
 def present(item: AcademicItem, fmt: str = "table", no_cite: bool = False) -> str:
+    """One record. The table keeps the title whole and adds the container and DOI: a truncated
+    title cannot be judged, and the DOI is what ``fetch`` needs next."""
     if fmt == "json":
         return json.dumps(item.to_dict(), ensure_ascii=False)
     if fmt == "csl":
         return json.dumps(item.to_csl(), ensure_ascii=False)
-    authors = ", ".join(i.get("family", "") for i in item.creators) or "Anon"
-    first = f"{item.source}/{item.key}"
-    source = f"{first:<22}{tag(item.access):<9}"
-    line = f"{source} {authors:<24} {item.year:<5} {item.title[:60]}"
+    label = tag(item.access)
+    line = f"{item.source}/{item.key}  {label + ' ' if label else ''}{_authors(item)}  {item.year or '-'}  {item.title}"
+    if item.container_title:
+        line += f"  — {item.container_title}"
+    if item.doi:
+        line += f"  doi:{item.doi}"
     if item.cited_by_count:
-        line += f"   [cited {item.cited_by_count}]"
+        line += f"  [cited {item.cited_by_count}]"
     if not no_cite:
         cite = render_intext([item])
-        line = f"{line}   {cite[0]}"
+        line = f"{line}  {cite[0]}"
     return line
 
 

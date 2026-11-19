@@ -15,7 +15,7 @@ from ..config import get_backend
 from ..errors import BadInput
 from ..models import AcademicItem
 from ..provenance import stamp
-from .keys import resolve_backend
+from .keys import normalize_export_key, resolve_backend
 from .render import present
 
 
@@ -33,6 +33,10 @@ def _writable(backend) -> None:
 
 def cmd_data_get(cfg, args) -> int:
     backend, key = _resolve(cfg, args)
+    if getattr(backend, "access", "") != "local":
+        # "arxiv/1806.09180" resolves on arXiv but 404s on the DOI backends; the local API
+        # wants its own item key, so only the public backends get the normalization.
+        key = normalize_export_key(key, backend.name)
     item = stamp([backend.get(key)], backend)[0]
     print(present(item, args.format, no_cite=True))
     if args.format == "table" and item.abstract:
@@ -230,6 +234,7 @@ def cmd_data_members(cfg, args) -> int:
             cite = render_intext([it])[0]
         except Exception:
             cite = ""
-        authors = ", ".join(i.get("family", "") for i in it.creators) or "Anon"
-        print(f"  {it.key:<8} {authors[:22]:<22} {it.year:<5} {it.title[:50]:<50} | {subs[:46]}  {cite}")
+        names = [i.get("family", "") for i in it.creators if i.get("family")]
+        authors = (", ".join(names[:3]) + (" et al." if len(names) > 3 else "")) or "Anon"
+        print(f"  {it.key}  {authors}  {it.year or '-'}  {it.title} | {subs}  {cite}")
     return 0
