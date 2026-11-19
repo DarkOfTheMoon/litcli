@@ -15,7 +15,7 @@ from .commands import diagnostics, export, fetch, graph, search
 from .commands.parser import build_parser
 from .config import load_config
 from .debug import enabled as debug_enabled
-from .debug import log, set_enabled
+from .debug import log, set_enabled, set_verbose
 from .errors import LitcliError
 from .transport import set_proxy
 
@@ -72,11 +72,14 @@ def main(argv=None) -> int:
     # ``--debug`` is accepted anywhere (before or after the subcommand): strip it first, then let
     # argparse see the rest. It is registered on the root parser so it shows up in --help.
     raw = list(sys.argv[1:] if argv is None else argv)
-    trailing_debug = "--debug" in raw
-    args = build_parser().parse_args([a for a in raw if a != "--debug"] if trailing_debug else raw)
-    if trailing_debug or getattr(args, "debug", False):
+    debug_flag, verbose_flag = "--debug" in raw, any(a in ("-v", "--verbose") for a in raw)
+    quiet = [a for a in raw if a not in ("--debug", "-v", "--verbose")]
+    args = build_parser().parse_args(quiet)
+    if debug_flag or getattr(args, "debug", False):
         set_enabled()
-        log(f"litcli {raw}")
+        log(f"litcli {quiet}")
+    if verbose_flag or getattr(args, "verbose", False):
+        set_verbose()
     try:
         cfg = load_config()
         _apply_proxy(cfg)

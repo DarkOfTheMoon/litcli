@@ -151,5 +151,52 @@ class FlagTest(unittest.TestCase):
             self.assertEqual("Traceback" in err.getvalue(), expected, argv)
 
 
+class VerboseFlagTest(unittest.TestCase):
+    """``--verbose`` is accepted anywhere, writes only to stderr, and is not ``--debug``."""
+
+    def setUp(self):
+        self._saved = (debug._VERBOSE, debug._ENABLED)
+        debug._VERBOSE = debug._ENABLED = False
+        self.addCleanup(lambda: setattr(debug, "_VERBOSE", self._saved[0]))
+        self.addCleanup(lambda: setattr(debug, "_ENABLED", self._saved[1]))
+
+    def _main(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.dict(cli._TOP_LEVEL_COMMANDS, {"search": mock.Mock(return_value=0)}), \
+                mock.patch.object(cli, "load_config", return_value={}), \
+                mock.patch.object(cli, "_apply_proxy"), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = cli.main(argv)
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_the_short_and_long_flags_are_accepted_before_the_command(self):
+        self.assertEqual(parser_mod.build_parser().parse_args(["-v", "search", "x"]).verbose, True)
+        self.assertEqual(parser_mod.build_parser().parse_args(["--verbose", "search", "x"]).verbose, True)
+
+    def test_main_accepts_the_long_flag_after_the_command_too(self):
+        rc, out, _ = self._main(["search", "x", "--verbose"])
+        self.assertEqual((rc, out), (0, ""))
+        self.assertTrue(debug.verbose())
+
+    def test_the_short_flag_after_the_command_works_and_is_not_passed_down(self):
+        fn = mock.Mock(return_value=0)
+        with mock.patch.dict(cli._TOP_LEVEL_COMMANDS, {"search": fn}):
+            cli.main(["search", "x", "-v"])
+        self.assertTrue(debug.verbose())
+        self.assertEqual(fn.call_args.args[1].cmd, "search")
+
+    def test_notice_goes_to_stderr_only(self):
+        debug._VERBOSE = True
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            debug.notice("[skipped] x")
+        self.assertEqual((out.getvalue(), err.getvalue()), ("", "[skipped] x\n"))
+
+    def test_verbose_does_not_turn_on_the_debug_trace(self):
+        self._main(["--verbose", "search", "x"])
+        self.assertTrue(debug.verbose())
+        self.assertFalse(debug.enabled())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -54,10 +54,24 @@ class DataAddStubTest(unittest.TestCase):
         fb = _FakeBackend()
         with mock.patch("litcli.metadata.extract_metadata", return_value=_item(title="Deep learning", doi="10.1/x")), \
              mock.patch("litcli.commands.data.get_backend", return_value=fb), \
-             mock.patch("builtins.input", return_value="n"):
+             mock.patch("builtins.input", return_value="n"), \
+             mock.patch("litcli.commands.data.sys.stdin.isatty", return_value=True):
             rc = cmd_data_add({}, _args(pdf="/tmp/a.pdf"))
         self.assertEqual(rc, 2)
         self.assertEqual(len(fb.added), 0)
+
+    def test_no_terminal_refuses_the_review_instead_of_cancelling(self):
+        # Piped stdin used to hit EOF and read as "user cancelled"; say what to do instead.
+        from litcli.errors import BadInput
+
+        fb = _FakeBackend()
+        with mock.patch("litcli.metadata.extract_metadata", return_value=_item(title="T", doi="10.1/x")), \
+             mock.patch("litcli.commands.data.get_backend", return_value=fb), \
+             mock.patch("litcli.commands.data.sys.stdin.isatty", return_value=False), \
+             self.assertRaises(BadInput) as caught:
+            cmd_data_add({}, _args(pdf="/tmp/a.pdf"))
+        self.assertIn("--yes", str(caught.exception))
+        self.assertEqual(fb.added, [])
 
     def test_duplicate_doi_rejected_without_force(self):
         fb = _FakeBackend(existing=[_item(doi="10.1/x", title="Old")])

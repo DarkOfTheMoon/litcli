@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import socket
 import time
 import urllib.parse
 
@@ -17,6 +18,9 @@ import httpx
 from ..errors import AuthRequired, LitcliError, NotFound, Unavailable, for_status
 from ..models import AcademicItem
 from .http import HttpBackend
+
+#: What to do when the desktop app is not answering.
+_START_HINT = "start the Zotero desktop app, or pass --backend <source>"
 
 _ITEMTYPE_MAP = {
     "journalArticle": "article",
@@ -91,6 +95,22 @@ class ZoteroLocalBackend(HttpBackend):
     access = "local"
     timeout = 20.0
     retries = 1             # the write paths handle their own version conflicts
+
+    def request(self, method: str, url: str, **kw):
+        """Same as the HTTP base, with an actionable hint when the local app is down."""
+        try:
+            return super().request(method, url, **kw)
+        except Unavailable as e:
+            raise Unavailable(str(e), hint=_START_HINT) from e
+
+    def ensure_running(self) -> None:
+        """Fail fast, before a write prompt, when the local app is not listening at all."""
+        host, port = httpx.URL(self._base).host, httpx.URL(self._base).port
+        try:
+            socket.create_connection((host, port), timeout=0.5).close()
+        except OSError as e:
+            raise Unavailable(f"[{self.name}] local API not listening on {host}:{port}: {e}",
+                              hint=_START_HINT) from e
 
     def __init__(self, name: str = "zotero", base: str = "http://localhost:23119/api",
                  library: str = "0", api_key: str | None = None, app_name: str = "litcli"):

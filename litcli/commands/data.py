@@ -6,19 +6,34 @@ Writes go through the backend's ``_require("write")``, so a read-only backend ra
 from __future__ import annotations
 
 import json
+import sys
 
 from .. import fulltext as fulltext_mod
 from .. import metadata
 from ..citation import render_intext
 from ..config import get_backend
+from ..errors import BadInput
 from ..models import AcademicItem
 from ..provenance import stamp
+from .keys import resolve_backend
 from .render import present
 
 
+def _resolve(cfg, args):
+    """The backend and bare key: an explicit --backend wins, then the key's own source prefix."""
+    return resolve_backend(cfg, args.backend, args.key, fallback="zotero")
+
+
+def _writable(backend) -> None:
+    """Fail fast and loudly before a write: the local store must be up (no silent no-op)."""
+    ensure_running = getattr(backend, "ensure_running", None)
+    if ensure_running:
+        ensure_running()
+
+
 def cmd_data_get(cfg, args) -> int:
-    backend = get_backend(args.backend, cfg)
-    item = stamp([backend.get(args.key)], backend)[0]
+    backend, key = _resolve(cfg, args)
+    item = stamp([backend.get(key)], backend)[0]
     print(present(item, args.format, no_cite=True))
     if args.format == "table" and item.abstract:
         print(f"\n  {item.abstract[:260]}")
@@ -37,11 +52,12 @@ def cmd_data_add(cfg, args) -> int:
     Written entries pass the ``should_import`` dedup / completeness gate to prevent the local
     store from exploding.
     """
-    backend = get_backend(args.backend, cfg)
+    backend = get_backend(args.backend or "zotero", cfg)
+    _writable(backend)
     item = None
     if args.pdf:
         item = metadata.extract_metadata(args.pdf)
-        item.source = args.backend
+        item.source = backend.name
         print("--- Heuristic extraction from PDF first page (for review) ---")
         print(f"  title: {item.title}")
         print(f"  authors: {', '.join(a.get('family','') for a in item.creators) or '-'}")
@@ -58,13 +74,13 @@ def cmd_data_add(cfg, args) -> int:
             giv = parts[1] if len(parts) > 1 else ""
             creators.append({"family": fam, "given": giv})
         item = AcademicItem(
-            source=args.backend, title=args.title, creators=creators, year=args.year,
+            source=backend.name, title=args.title, creators=creators, year=args.year,
             doi=args.doi, url=args.url, abstract=args.abstract, item_type=args.type,
         )
         if args.csl:
             with open(args.csl, encoding="utf-8") as f:
                 csl = json.load(f)
-            item = AcademicItem.from_csl(csl, source=args.backend)
+            item = AcademicItem.from_csl(csl, source=backend.name)
 
     # Dedup / completeness gate (skipped only with --force)
     if not args.force:
@@ -81,6 +97,8 @@ def cmd_data_add(cfg, args) -> int:
     # Heuristic metadata (--pdf) is noisy: confirm before mutating the library, unless --yes/--force.
     # In a non-interactive context (no TTY, piped) input() raises EOFError -> cancel (safe default).
     if args.pdf and not (args.force or args.yes):
+        if not sys.stdin.isatty():
+            raise BadInput("no terminal for the y/N review; re-run with --yes to write the candidate as is")
         print("  Confirm writing this item to the library? [y/N]", end=" ", flush=True)
         try:
             answer = input().strip().lower()
@@ -91,33 +109,36 @@ def cmd_data_add(cfg, args) -> int:
             return 2
 
     key = backend.add(item)
-    print(f"Added [{args.backend}] key={key}")
+    print(f"Added [{backend.name}] key={key}")
     return 0
 
 
 def cmd_data_set(cfg, args) -> int:
-    backend = get_backend(args.backend, cfg)
+    backend, key = _resolve(cfg, args)
+    _writable(backend)
     fields = {k: v for k, v in {
         "title": args.title, "abstract": args.abstract, "year": args.year,
         "doi": args.doi, "url": args.url,
     }.items() if v is not None}
-    it = backend.patch(args.key, fields)
-    print(f"Updated [{args.backend}] {args.key}")
+    it = backend.patch(key, fields)
+    print(f"Updated [{backend.name}] {key}")
     print(present(it, "table", no_cite=True))
     return 0
 
 
 def cmd_data_del(cfg, args) -> int:
-    backend = get_backend(args.backend, cfg)
-    backend.delete(args.key)
-    print(f"Deleted [{args.backend}] {args.key}")
+    backend, key = _resolve(cfg, args)
+    _writable(backend)
+    backend.delete(key)
+    print(f"Deleted [{backend.name}] {key}")
     return 0
 
 
 def cmd_data_attach(cfg, args) -> int:
-    backend = get_backend(args.backend, cfg)
-    att_key = backend.attach(args.key, args.src)
-    print(f"Attached fulltext [{args.backend}] {args.key} attachment-key={att_key or '-'} src={args.src}")
+    backend, key = _resolve(cfg, args)
+    _writable(backend)
+    att_key = backend.attach(key, args.src)
+    print(f"Attached fulltext [{backend.name}] {key} attachment-key={att_key or '-'} src={args.src}")
     return 0
 
 
@@ -176,7 +197,7 @@ def render_tree(nodes: list[dict]) -> str:
 
 def cmd_data_tree(cfg, args) -> int:
     """List the collection tree (hierarchical indented display). Read-only."""
-    backend = get_backend(args.backend, cfg)
+    backend = get_backend(args.backend or "zotero", cfg)
     nodes = backend.collection_tree()
     if not nodes:
         print("[no collections]")
@@ -187,7 +208,7 @@ def cmd_data_tree(cfg, args) -> int:
 
 def cmd_data_members(cfg, args) -> int:
     """List items in a collection (recursing into all subcollections by default). Read-only."""
-    backend = get_backend(args.backend, cfg)
+    backend = get_backend(args.backend or "zotero", cfg)
     recursive = not getattr(args, "no_recursive", False)
     items = backend.collection_items(args.coll_key, recursive=recursive)
 

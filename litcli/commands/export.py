@@ -4,13 +4,12 @@ from __future__ import annotations
 import json
 
 from ..citation import render_bibliography, render_intext
-from ..config import get_backend
-from .keys import normalize_export_key
+from .keys import normalize_export_key, resolve_backend
 
 
 def cmd_export(cfg, args) -> int:
-    backend = get_backend(args.backend, cfg)
-    items = [backend.get(normalize_export_key(k, args.backend)) for k in args.key]
+    resolved = [resolve_backend(cfg, args.backend, k, fallback="zotero") for k in args.key]
+    items = [b.get(normalize_export_key(k, b.name)) for b, k in resolved]
     if args.format == "csljson":
         if len(items) == 1:
             print(json.dumps(items[0].to_csl(), ensure_ascii=False, indent=2))

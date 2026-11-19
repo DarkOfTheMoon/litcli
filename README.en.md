@@ -90,10 +90,16 @@ Gemini) and keeps a neutral copy under `~/.local/share/litcli/skill/`.
 
 ## Commands
 
-`--backend` picks the source (default `zotero`); `--all` aggregates across the backends **enabled in your config**,
-de-duplicates and tags `extra["sources"]`. The second column of a result row is the key; for Zotero drop the
-`source/` prefix, public backends accept either form. Exit codes: `0` success (including no results), `2` error or
-unsupported backend. `search`, `fetch`, `export`, `refs`, `citing`, `related` are read-only;
+`--backend` picks the source (default `zotero`); a key may also carry its source prefix (`openalex/W123`,
+`zotero/AB12`), which routes by prefix with `--backend` still winning. `--all` aggregates across the backends
+**enabled in your config**, de-duplicates and tags `extra["sources"]`. The second column of a result row is the
+key; both forms are accepted. Exit codes: `0` success (including no results), `2` error or unsupported backend.
+
+Search fans out: **a single failing source is silent by default** — `--verbose` (or `LITCLI_VERBOSE=1`) names
+which source failed and why. When every source failed it says so even without the flag and exits `2`, since that
+is not "nothing found". Commands whose result you need (`fetch`, `data`, `export`, `refs`, `citing`, `related`,
+`backends`) always speak up on failure. With the local Zotero app closed, reads and writes probe the port first and
+fail with the fix instead of waiting for a y/N answer. `search`, `fetch`, `export`, `refs`, `citing`, `related` are read-only;
 `data` writes.
 
 **Read-only**
@@ -109,6 +115,7 @@ unsupported backend. `search`, `fetch`, `export`, `refs`, `citing`, `related` ar
 | `litcli data add --title "..." --creator "Family, Given" [--doi ..] [--force]` / `data add --pdf|--csl <file>` | ingest metadata (dedupe gate, `--force` skips), heuristics from page 1 (y/N), or CSL JSON |
 | `litcli data get <key>` · `data tree` · `data members <coll> [--limit N]` | read one record; browse collections |
 | `litcli backends list/status` · `litcli completions <bash\|zsh\|fish>` | diagnostics, shell completion |
+| `litcli --verbose <command>` | per-source failure lines for a search (silent by default; `LITCLI_VERBOSE=1` does the same), stderr only |
 | `litcli --debug <command>` | one line per request, status, duration, pacing wait and retry on stderr (`LITCLI_DEBUG=1` does the same); unexpected exceptions also print the stack. stdout is untouched |
 
 **Writes** (Zotero only; read-only backends answer `[skipped]` and exit 2)

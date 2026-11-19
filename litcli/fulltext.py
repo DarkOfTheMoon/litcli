@@ -26,6 +26,7 @@ from lxml import etree as ET
 
 from . import unpaywall
 from .aggregate import norm_doi
+from .debug import notice
 from .errors import LitcliError
 from .models import AcademicItem
 
@@ -61,7 +62,9 @@ def _from_local(doi: str, backends: dict | None = None) -> dict | None:
                 if data:
                     return {"kind": "local", "data": data, "title": item.title,
                             "key": item.key, "source": name, "access": "local"}
-        except (LitcliError, RuntimeError, OSError):
+        except (LitcliError, RuntimeError, OSError) as e:
+            # The local store is the first hop on purpose; say when this hop did not run.
+            notice(f"[skipped] local store {name}: {e}")
             continue
     return None
 

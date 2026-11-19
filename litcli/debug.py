@@ -19,10 +19,28 @@ _TRUTHY = {"1", "true", "yes", "on"}
 _SECRET = re.compile(r"(\b(?:api_key|apikey|key|token|email)=)[^&]+", re.I)
 
 _ENABLED = os.environ.get("LITCLI_DEBUG", "").lower() in _TRUTHY
+_VERBOSE = os.environ.get("LITCLI_VERBOSE", "").lower() in _TRUTHY
 
 
 def enabled() -> bool:
     return _ENABLED
+
+
+def verbose() -> bool:
+    """``--verbose``: the failure detail that fan-out reads keep quiet by default."""
+    return _VERBOSE
+
+
+def set_verbose(flag: bool = True) -> None:
+    global _VERBOSE
+    if flag:
+        _VERBOSE = True
+
+
+def notice(message: str) -> None:
+    """A failure line for the user, shown only in verbose mode; never on stdout."""
+    if _VERBOSE:
+        print(message, file=sys.stderr, flush=True)
 
 
 def set_enabled(flag: bool = True) -> None:

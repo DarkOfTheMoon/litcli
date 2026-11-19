@@ -60,6 +60,87 @@ class RelatedKeyNormalizeTest(unittest.TestCase):
                          "10.48550/arxiv.1806.09180")
 
 
+class ResolveBackendTest(unittest.TestCase):
+    """A ``source/key`` prefix picks the source, an explicit ``--backend`` overrides it, and a bare
+    key falls back — a key that only looks prefixed (``10.1016/j...``) keeps its slash."""
+
+    def _resolve(self, key, explicit=None, fallback="zotero"):
+        from unittest import mock
+
+        from litcli.commands.keys import resolve_backend
+
+        class _B:
+            def __init__(self, name):
+                self.name = name
+
+        def fake_get_backend(name, _cfg):
+            return _B(name)
+
+        with mock.patch("litcli.commands.keys.get_backend", side_effect=fake_get_backend):
+            backend, bare = resolve_backend({}, explicit, key, fallback)
+        return backend.name, bare
+
+    def test_the_prefix_selects_the_source(self):
+        self.assertEqual(self._resolve("openalex/W123"), ("openalex", "W123"))
+
+    def test_the_zotero_prefix_resolves_to_the_local_store(self):
+        self.assertEqual(self._resolve("zotero/AB12"), ("zotero_local", "AB12"))
+
+    def test_an_explicit_backend_overrides_the_prefix(self):
+        self.assertEqual(self._resolve("openalex/W123", explicit="crossref"),
+                         ("crossref", "openalex/W123"))
+
+    def test_an_explicit_backend_matching_the_prefix_keeps_the_bare_key(self):
+        self.assertEqual(self._resolve("openalex/W123", explicit="openalex"), ("openalex", "W123"))
+
+    def test_a_bare_key_falls_back(self):
+        self.assertEqual(self._resolve("AB12", fallback="zotero"), ("zotero", "AB12"))
+
+    def test_a_doi_is_not_read_as_a_prefix(self):
+        self.assertEqual(self._resolve("10.1016/j.cma.2004.11.019", fallback="zotero"),
+                         ("zotero", "10.1016/j.cma.2004.11.019"))
+
+
+class PreflightTest(unittest.TestCase):
+    """A local store that is not running fails before the prompt, with the one hint that helps."""
+
+    def _backend(self):
+        from litcli.backends.zotero_local import ZoteroLocalBackend
+        return ZoteroLocalBackend()
+
+    def test_a_closed_port_raises_with_the_start_hint(self):
+        from unittest import mock
+
+        from litcli.errors import Unavailable
+
+        with mock.patch("litcli.backends.zotero_local.socket.create_connection",
+                        side_effect=ConnectionRefusedError("refused")), self.assertRaises(Unavailable) as caught:
+            self._backend().ensure_running()
+        self.assertIn("Zotero", caught.exception.hint)
+
+    def test_a_listening_port_passes(self):
+        from unittest import mock
+
+        with mock.patch("litcli.backends.zotero_local.socket.create_connection"):
+            self._backend().ensure_running()  # no raise
+
+    def test_writes_preflight_and_read_only_backends_do_not(self):
+        import argparse
+        from unittest import mock
+
+        from litcli.commands import data
+
+        fake = mock.Mock(name="zotero")  # Mock.name is not the string; keep it explicit
+        fake.name = "zotero"
+        with mock.patch.object(data, "resolve_backend", return_value=(fake, "K1")):
+            data.cmd_data_del({}, argparse.Namespace(backend=None, key="K1"))
+        fake.ensure_running.assert_called_once()
+        fake.delete.assert_called_once_with("K1")
+
+        plain = mock.Mock(spec=[])  # a backend without ensure_running
+        data._writable(plain)  # must not raise
+
+
 class BackendsParserTest(unittest.TestCase):
     def test_backends_accepts_list_and_status(self):
         p = build_parser()
@@ -225,7 +306,7 @@ class MainCatchTest(unittest.TestCase):
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             rc = cmd_search({}, args)
         self.assertEqual(rc, 0)
-        self.assertIn("[skipped]", err.getvalue())
+        self.assertEqual(err.getvalue(), "")  # silent unless --verbose
         self.assertIn("Good", out.getvalue())
 
 

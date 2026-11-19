@@ -11,14 +11,16 @@ from .. import __version__
 from ..completions import SHELL_CHOICES
 
 
-def add_common_backend(p: argparse.ArgumentParser, default: str = "zotero") -> None:
-    p.add_argument("--backend", default=default,
-                   help=f"backend name (default {default})")
+def add_common_backend(p: argparse.ArgumentParser, fallback: str = "zotero") -> None:
+    p.add_argument("--backend", default=None,
+                   help=f"backend name (default {fallback}; a 'source/key' prefix also selects it)")
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="litcli", description="General academic CLI (pluggable multi-backend)")
     parser.add_argument("--version", action="version", version=f"litcli {__version__}")
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        help="show sources that failed inside a fan-out search (also LITCLI_VERBOSE=1)")
     parser.add_argument("--debug", action="store_true",
                         help="trace requests, pacing and retries to stderr (also LITCLI_DEBUG=1)")
     sub = parser.add_subparsers(dest="cmd", required=True)

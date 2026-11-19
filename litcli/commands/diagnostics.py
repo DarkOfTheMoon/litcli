@@ -81,6 +81,9 @@ def cmd_backends_authorize(cfg, args) -> int:
     if not hasattr(b, "authorize"):
         print(f"[error] backend '{backend}' does not support local authorization (only zotero_local provides it)")
         return 2
+    ensure_running = getattr(b, "ensure_running", None)
+    if ensure_running:
+        ensure_running()  # a dialog nobody can approve is worth failing fast on
     try:
         key = b.authorize()
     except (LitcliError, RuntimeError) as e:

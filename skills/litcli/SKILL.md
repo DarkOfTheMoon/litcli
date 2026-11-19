@@ -20,7 +20,8 @@ description: 用 litcli 与用户的学术资料互操作——检索、读取�
 
 ## 命令面（`litcli` 在 PATH；源码检出内用 `./bin/litcli`）
 
-后端经 `--backend`（默认 `zotero`），`--all` 跨后端聚合（去重/合并/排序，`extra["sources"]` 标来源）。
+后端经 `--backend`（默认 `zotero`），key 也可自带来源前缀（`openalex/W123`、`zotero/AB12`）——有前缀按前缀路由，
+`--backend` 仍优先；`--all` 跨后端聚合（去重/合并/排序，`extra["sources"]` 标来源）。
 命令按意图分族：`search`/`fetch`/`export` 只读，`data` 写库（须决策）。
 
 | 任务 | 命令 | 读写 |
@@ -40,6 +41,7 @@ description: 用 litcli 与用户的学术资料互操作——检索、读取�
 | 罗列集合树 | `litcli data tree` 层级显示全部集合 | 只读 |
 | 罗列某集合条目 | `litcli data members <集合key> [--no-recursive]` 默认递归全部子集合 | 只读 |
 | 列后端 | `litcli backends list`（能力）· `litcli backends status`（授权/可达） | 只读 |
+| 失败明细 | `litcli --verbose <命令>`：检索里哪个来源、什么原因失败（默认静默，只写 stderr） | 只读 |
 | 追踪 | `litcli --debug <命令>`：请求/状态/耗时/重试到 stderr，排查后端为何失败 | 只读 |
 | 装浏览器 | `litcli backends install-browser`（二进制安装包不带 Chromium；知网/豆瓣首次使用前跑一次）；装完用 `backends install-browser --check` 自检能否启动 | 下载 |
 | 中文题录检索 | `litcli search --backend cnki "关键词"` 知网公开题录（需 Playwright + 可见浏览器；只取题录不抓全文） | 只读 |
@@ -62,7 +64,7 @@ description: 用 litcli 与用户的学术资料互操作——检索、读取�
 - `data add` 返回新 key；写库仅对可写后端（zotero）成功，其余报错并退出码 2。
 - `data add` 写前过 `should_import` 查重/半残门：同 DOI/题已存在、或缺标题/缺作者且缺年份 → 拒绝，需 `--force` 覆盖。
 - `data add --pdf` 是**启发式**候选，写前会交互确认（y/N）请核对；非交互/脚本用 `--yes` 跳过确认。勿盲目入库。
-- 无 `--all` 时只查默认后端（zotero）；要跨库检索必须显式 `--all` 或逐个 `--backend`。
+- **检索失败默认静默**：单个来源挂了不提（`--verbose` 才逐条说明）；全部来源都失败会明说并退出码 2。因此退出码 0 且「没结果」要先想「是不是全挂了」，怀疑时补 `--verbose` 重跑。`fetch`/`data`/`export`/`refs`/`citing`/`related` 出错一律明说。
 - **CNKI 只取公开题录、不抓全文**：知网无开放 API；`search --backend cnki` 需先 `./install.sh --with-cnki` 装 Playwright + Chromium。它会弹**可见浏览器**，请你手动过滑块验证码 + 登录知网（校外账号）一次（独立 profile，之后复用）。检索结果仅标题/作者/刊名/年份/摘要片段，**不下载付费墙全文**；遇验证码交给人工，脚本不绕过、不实现反爬规避。
 - **开放获取源只给公开 OA 记录**：DOAJ / DOAB / Europe PMC / Zenodo 均免 key、开放授权；`fetch` 在合法链里用 Europe PMC（JATS XML 文本，存 `.xml`）与 Zenodo（开放文件），Unpaywall 只给落地页时退到链末并标 `HTML`。
 - **被 403 不等于你的 IP 被封**：`europepmc.org` 在 Cloudflare managed challenge/Turnstile 后面（CLI、假浏览器头、无头/有头浏览器实测都过不去，故走 EBI 的 REST）；DOAB 的 `/rest` 对无 JS 客户端 403（故走 Atom feed），但它的详情页是可解的工作量证明，litcli 本地解、换 cookie 后正常取页。这两类站点都无需换网络/代理。

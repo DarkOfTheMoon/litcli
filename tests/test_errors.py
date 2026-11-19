@@ -3,6 +3,9 @@
 The point of the taxonomy is that no caller has to read a message to decide what to do: ``kind``
 carries the decision and the CLI maps it to an exit code once.
 """
+import contextlib
+import io
+import json
 import os
 import sys
 import unittest
@@ -10,7 +13,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from litcli import cli, errors
+from litcli import cli, debug, errors
 from litcli.backends.base import Backend, NotSupportedError
 from litcli.commands import search
 from litcli.errors import (
@@ -26,6 +29,7 @@ from litcli.errors import (
     for_status,
     http_kind,
 )
+from litcli.models import AcademicItem
 from litcli.transport import HttpError
 
 
@@ -84,7 +88,7 @@ class HttpKindTest(unittest.TestCase):
 class CliPolicyTest(unittest.TestCase):
     def _run(self, exc):
         parser = mock.Mock()
-        parser.parse_args.return_value = mock.Mock(cmd="search", data_cmd=None, debug=False)
+        parser.parse_args.return_value = mock.Mock(cmd="search", data_cmd=None, debug=False, verbose=False)
         with mock.patch.object(cli, "build_parser", return_value=parser), \
                 mock.patch.object(cli, "load_config", return_value={}), \
                 mock.patch.object(cli, "_apply_proxy"), \
@@ -109,37 +113,68 @@ class CliPolicyTest(unittest.TestCase):
 
 
 class AllPolicyTest(unittest.TestCase):
-    """``--all`` skips a failing backend instead of sinking the aggregation — silently when the
-    failure is the backend's normal state."""
+    """Fan-out reads are silent by default; ``--verbose`` names the failures, and an all-failed
+    search says so even without it (an empty answer nobody gave is not an empty result)."""
 
-    def _search(self, exc):
-        args = mock.Mock(backend=None, query="q", limit=5, format="lines", no_cite=False,
+    def setUp(self):
+        self._saved = debug._VERBOSE
+        debug._VERBOSE = False
+        self.addCleanup(setattr, debug, "_VERBOSE", self._saved)
+
+    def _search(self, exc, good=True, verbose=False, fmt="lines"):
+        """``good=False`` makes every source fail; otherwise the second source answers."""
+        args = mock.Mock(backend=None, query="q", limit=5, format=fmt, no_cite=False,
                          type=None, sort=None, title=None, author=None, year=None, container=None)
-        good = mock.Mock()
-        good.search.return_value = []
-        bad = mock.Mock()
-        bad.search.side_effect = exc
-        with mock.patch.object(search, "get_all_backends", return_value={"bad": bad, "good": good}), \
-                mock.patch("builtins.print") as printed, \
-                mock.patch.object(search, "print_items", return_value=0):
+        hit = [AcademicItem(source="good", key="k", title="T")]
+        good_b = mock.Mock()
+        good_b.search.return_value = hit
+        if not good:
+            good_b.search.side_effect = Unavailable("down")
+        bad_b = mock.Mock()
+        bad_b.search.side_effect = exc
+        out, err = io.StringIO(), io.StringIO()
+        debug._VERBOSE = verbose
+        with mock.patch.object(search, "get_all_backends",
+                               return_value={"bad": bad_b, "good": good_b}), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             rc = search.cmd_search({}, args)
-        return rc, [c.args[0] for c in printed.call_args_list if c.args]
+        return rc, out.getvalue(), err.getvalue()
 
-    def test_an_unsupported_backend_is_silent(self):
-        _, out = self._search(NotSupportedError("search", _Stub()))
-        self.assertEqual(out, [])
+    def test_a_failing_source_is_silent_by_default(self):
+        rc, out, err = self._search(AuthRequired("key missing", hint="set api_key"))
+        self.assertEqual(rc, 0)
+        self.assertEqual(err, "")
+        self.assertIn("T", out)
 
-    def test_other_failures_are_one_line_with_the_hint(self):
-        _, out = self._search(AuthRequired("key missing", hint="set api_key"))
-        self.assertEqual(out, ["[skipped] backend bad: key missing (set api_key)"])
+    def test_verbose_names_the_source_with_its_hint(self):
+        _, _, err = self._search(AuthRequired("key missing", hint="set api_key"), verbose=True)
+        self.assertIn("[skipped] backend bad: key missing (set api_key)", err)
+        self.assertIn("[partial] 1/2 sources failed (auth:1)", err)
 
-    def test_a_stray_runtime_failure_still_only_skips(self):
-        _, out = self._search(RuntimeError("boom"))
-        self.assertEqual(out, ["[skipped] backend bad: boom"])
+    def test_an_unsupported_operation_counts_for_nothing(self):
+        _, _, err = self._search(NotSupportedError("search", _Stub()), verbose=True)
+        self.assertNotIn("[partial]", err)
+
+    def test_a_stray_runtime_failure_is_traced_under_verbose(self):
+        _, _, err = self._search(RuntimeError("boom"), verbose=True)
+        self.assertIn("[skipped] backend bad: boom", err)
 
     def test_the_search_survives_to_the_result_line(self):
-        rc, _ = self._search(Unavailable("down"))
+        rc, out, _ = self._search(Unavailable("down"))
         self.assertEqual(rc, 0)
+        self.assertIn("T", out)
+
+    def test_an_all_failed_search_is_loud_even_without_verbose(self):
+        rc, out, err = self._search(Unavailable("down"), good=False)
+        self.assertEqual(rc, 2)
+        self.assertEqual(err, "")  # the detail still needs --verbose
+        self.assertEqual(out, "[no results] all 2 sources failed; --verbose for why\n")
+
+    def test_an_all_failed_json_search_keeps_stdout_parseable(self):
+        rc, out, err = self._search(Unavailable("down"), good=False, fmt="json")
+        self.assertEqual(rc, 2)
+        self.assertEqual(json.loads(out), [])
+        self.assertEqual(err.strip(), "[no results] all 2 sources failed; --verbose for why")
 
 
 class ExitCodeTest(unittest.TestCase):

@@ -78,9 +78,15 @@ shell 补全只有 bash/zsh/fish（PowerShell 下可在 Git Bash 里生成）。
 
 ## 命令
 
-`--backend` 选来源（默认 `zotero`）；`--all` 在**配置里启用的**后端之间聚合、去重合并并在 `extra["sources"]` 标注来源。
-表格第二列就是 key；查 Zotero 时取去掉 `source/` 前缀的部分，公网后端两种写法都认。
+`--backend` 选来源（默认 `zotero`）；key 也可以自带来源前缀（`openalex/W123`、`zotero/AB12`），
+有前缀时按前缀路由、`--backend` 仍然优先；`--all` 在**配置里启用的**后端之间聚合、去重合并并在
+`extra["sources"]` 标注来源。表格第二列就是 key，两种写法都认。
 退出码：`0` 成功（含无结果），`2` 出错或后端不支持。
+
+检索是向外扇出：**单个来源失败默认不提**，加 `--verbose`（或 `LITCLI_VERBOSE=1`）才逐条说明哪个来源、
+什么原因；全部来源都失败时即使不加开关也会明说并以 `2` 退出——那不算「没有结果」。
+其余需要拿到确定结果的命令（`fetch`、`data`、`export`、`refs`、`citing`、`related`、`backends`）失败一律明说。
+本机 Zotero 没开着时，写库与检索会先探一次端口直接报错，省得等你按了 y 才发现。
 `search` / `fetch` / `export` / `refs` / `citing` / `related` 只读，`data` 写库。
 
 **检索与引文图谱**
@@ -109,6 +115,7 @@ shell 补全只有 bash/zsh/fish（PowerShell 下可在 Git Bash 里生成）。
 |---|---|
 | `litcli backends list` · `backends status` | 已配置后端与能力 / 授权与可达状态 |
 | `litcli completions <bash\|zsh\|fish>` | 打印自包含补全脚本；`eval "$(...)"` 后按 TAB 补全 |
+| `litcli --verbose <命令>` | 检索里失败来源的逐条说明（默认静默；`LITCLI_VERBOSE=1` 同样生效），只写 stderr |
 | `litcli --debug <命令>` | 把请求、状态、耗时、限速等待与重试逐行写到 stderr（`LITCLI_DEBUG=1` 同样生效）；意外异常额外打印调用栈。stdout 不受影响 |
 
 `data tree` / `data members <集合key>` 罗列集合；`--year` 等过滤在各后端的映射见下节。

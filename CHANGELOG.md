@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--debug`（或环境变量 `LITCLI_DEBUG=1`）：把每个请求、状态码、耗时、限速等待与重试逐行打到
   stderr，query 里的 key / email 打码；意外异常额外打印调用栈。该开关在子命令前后都接受，
   stdout 不受影响，不开启时只有一次布尔判断的开销。
+- `--verbose`（或环境变量 `LITCLI_VERBOSE=1`）：检索里哪个来源、什么原因失败逐条写 stderr，默认静默；
+  `search` 全部来源都失败时即使不加也会打印一行并退 2（那不算「没有结果」）。
+- key 自带来源前缀即可路由（`litcli data get openalex/W123`、`zotero/AB12`），显式 `--backend` 仍然优先；
+  DOI 里的斜杠不会被误认作前缀。
+- 本机 Zotero 没开时，检索与写库先探一次端口直接报错并给出启动提示（含 `--backend <source>` 的去路），
+  不再等浏览器式超时。
 
 ### Changed
 
@@ -22,7 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `bot-wall` / `unavailable` / `unsupported` / `external`。调用方（`--all` 聚合、全文链、CLI 出口）
   按分类决定策略与退出标签，不再靠字符串匹配或笼统的 `RuntimeError`；HTTP 状态经 `http_kind()`
   统一归入同一套分类，各后端只在站点含义不同处就地上报。
-- 出错时可附一行 `[hint]`（如缺浏览器时的 `litcli backends install-browser`），与错误正文分开呈现。
+- 出错时可附一行 `[hint]`（如缺浏览器时的 `litcli backends install-browser`、Zotero 未启动时的启动提示），与错误正文分开呈现。
+- 失败呈现分层：`search` 扇出默认静默（详见上），`fetch`/`data`/`export`/`refs`/`citing`/`related`/`backends`
+  这类要拿到确定结果的命令失败一律明说。
+
+### Fixed
+
+- 无终端（管道、脚本）时 `data add --pdf` 的 y/N 复核曾静默读成「取消」：现在明确报错并提示 `--yes`。
+- `--backend` 默认值改为在分发处回落，`source/key` 前缀与显式 `--backend` 可同时使用而不再互斥出错。
 
 ## [0.3.1] - 2026-11-06
 

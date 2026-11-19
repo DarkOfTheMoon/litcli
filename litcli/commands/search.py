@@ -5,6 +5,7 @@ import sys
 
 from ..aggregate import cited_key, merge_items
 from ..config import get_all_backends, get_backend
+from ..debug import notice
 from ..errors import LitcliError
 from ..models import AcademicItem
 from ..provenance import stamp
@@ -25,8 +26,10 @@ def cmd_search(cfg, args) -> int:
     """Search one backend, or (the default) every enabled one plus the keyless OA corpora.
 
     Aggregating is the default because a caller should not have to know that the interesting
-    results live outside their local store. A backend that fails is skipped with one stderr line
-    instead of sinking the whole search; an explicitly requested ``--backend`` still raises.
+    results live outside their local store. Fan-out reads answer "what exists across sources",
+    so a failing source is silent by default and only ``--verbose`` names it; a search where
+    every source failed is not an empty result, though, and says so with exit 2. An explicitly
+    requested ``--backend`` always raises.
     """
     filters = search_filters(args)
     if args.backend is None:
@@ -34,22 +37,37 @@ def cmd_search(cfg, args) -> int:
         # what ``fetch`` does for fulltext, so an empty config still searches the OA literature.
         backends = get_all_backends(cfg, corpora=True)
         items: list[AcademicItem] = []
+        failed: dict[str, int] = {}
         for name, b in backends.items():
             try:
                 items.extend(stamp(b.search(args.query, limit=args.limit, filters=filters), b))
             except LitcliError as e:
                 # Policy by kind, never by message: an unsupported operation is this backend's
-                # normal state and stays silent; anything else gets one line, with the hint when
-                # the failure has a fix the caller can act on.
+                # normal state and counts for nothing; anything else is a failure to name.
                 if e.kind != "unsupported":
-                    print(f"[skipped] backend {name}: {e}"
-                          + (f" ({e.hint})" if e.hint else ""), file=sys.stderr)
+                    failed[e.kind] = failed.get(e.kind, 0) + 1
+                    notice(f"[skipped] backend {name}: {e}"
+                           + (f" ({e.hint})" if e.hint else ""))
                 continue
             except (NotImplementedError, RuntimeError, OSError, ValueError, SyntaxError) as e:
-                # A single backend failure (not connected / timeout / non-JSON body / malformed
-                # XML) must not bring down the whole aggregation; skip and continue.
-                print(f"[skipped] backend {name}: {e}", file=sys.stderr)
+                # A single backend failure (timeout / non-JSON body / malformed XML) must not
+                # bring down the whole aggregation; count it and continue.
+                failed[type(e).__name__] = failed.get(type(e).__name__, 0) + 1
+                notice(f"[skipped] backend {name}: {e}")
                 continue
+        if failed:
+            summary = ", ".join(f"{kind}:{count}" for kind, count in sorted(failed.items()))
+            notice(f"[partial] {sum(failed.values())}/{len(backends)} sources failed ({summary})")
+            if not items and sum(failed.values()) == len(backends):
+                # Not "nothing exists" — nobody answered. Saying nothing here would read as a
+                # complete empty result, so this one case is loud even without --verbose (to
+                # stderr under a machine format, where stdout must stay parseable).
+                line = f"[no results] all {len(backends)} sources failed; --verbose for why"
+                machine = args.format in ("json", "csl")
+                print(line, file=sys.stderr if machine else sys.stdout)
+                if machine:
+                    print_items([], args.format, args.no_cite, line)
+                return 2
     else:
         backend = get_backend(args.backend, cfg)
         items = stamp(backend.search(args.query, limit=args.limit, filters=filters), backend)
