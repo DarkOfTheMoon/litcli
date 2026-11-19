@@ -113,7 +113,7 @@ locally, so a source that ignores one cannot leak records. A citation badge read
 | Command | What it does |
 |---|---|
 | `litcli search "X" [--all] [--backend B] [--type T] [--limit N] [--format table\|json\|csl]` | candidate search; field filters and sorting below |
-| `litcli refs <key>` / `citing <key>` / `related <key>` | cited works / citing works / semantic neighbours (OpenAlex graph) |
+| `litcli refs <key>` / `citing <key>` / `related <key>` | cited works / citing works / semantic neighbours (OpenAlex graph; with no neighbour list it falls back to a title-term search and says so) |
 | `litcli export <key>... [--format csljson\|bibtex\|ris\|text] [--no-cite]` | citations; `csljson` feeds `pandoc --citeproc`. arXiv keys normalise to a DOI only with `--backend openalex\|crossref` |
 | `litcli fetch <doi\|arXiv id> [--out DIR] [--no-download] [--scihub]` | save the fulltext: local store → Unpaywall → OpenAlex → Europe PMC → Zenodo → landing page |
 | `litcli fetch --book "title\|ISBN" [--backend zlibrary\|doab\|openlibrary] [--pick N]` | book candidates → pick → full metadata → save the file (an ISBN takes this path automatically) |

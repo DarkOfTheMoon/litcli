@@ -110,9 +110,12 @@ def _work_to_item(rec: dict, source: str = "openalex") -> AcademicItem:
     # ``url`` is a real resolvable landing URL (consistently with the other backends), not a bare
     # DOI: prefer https://doi.org/<doi>, then the OA landing page, then the work's openalex.org page.
     url = f"https://doi.org/{doi}" if doi else (_oa_landing(rec) or rec.get("id", ""))
+    oid = (rec.get("id") or "").rsplit("/", 1)[-1]
     return AcademicItem(
         source=source,
-        key=doi,
+        # A work without a DOI (preprints, tech reports) still needs a usable key: its W-id is
+        # resolvable by ``get`` and keeps the table row copyable.
+        key=doi or oid,
         title=title,
         creators=_creators(rec),
         year=str(rec.get("publication_year") or ""),

@@ -29,7 +29,7 @@ description: 用 litcli 与用户的学术资料互操作——检索、读取�
 | 检索候选 | `litcli search "关键词" [--all] [--limit N] [--type article] [--title ..] [--author ..] [--year ..] [--container ..] [--sort cited]` | 只读 |
 | 参考文献(回溯) | `litcli refs <key> [--limit N] [--backend openalex]` 该文所引文献,按被引降序(奠基在前) | 只读 |
 | 引用该文(前向) | `litcli citing <key> [--limit N] [--backend openalex]` 引用该文的文献,按被引降序(跟进在前) | 只读 |
-| 语义相关 | `litcli related <key> [--limit N] [--backend openalex]` OpenAlex `related_works` 邻居;不支持的只读后端 `[skipped]` 退出码 2 | 只读 |
+| 语义相关 | `litcli related <key> [--limit N] [--backend openalex]` OpenAlex `related_works` 邻居;该文无邻居列表时退回标题实词检索(`extra["related_via"]=keyword`);不支持的只读后端 `[skipped]` 退出码 2 | 只读 |
 | 单条全字段 | `litcli data get <key> [--format csl\|json]` | 只读 |
 | 导出引文 | `litcli export <key> [--format csljson\|bibtex\|ris\|text]`（arXiv key 如 `arxiv/1806.09180` 在 `--backend openalex\|crossref` 下归一为 DOI；csljson/bibtex 含期刊名/卷/页/出版社） | 只读 |
 | 定位全文 | `litcli fetch <doi\|arXiv id> [--out DIR] [--no-download] [--scihub]` 本地→OA，默认落盘；加 `--scihub` 才兜底公开副本(会标注) | 只读 |

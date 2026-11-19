@@ -43,6 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `related` 在 OpenAlex 没有 `related_works` 时不再只回「没有」：退回用该文标题里的实词再检索一次，
+  剔除种子本身并标 `extra["related_via"]="keyword"`，stderr 说明这是标题匹配（老文献、冷门文献大多没有邻居列表）。
+- 无 DOI 的 OpenAlex 记录（预印本、技术报告）key 曾为空，表格行 `openalex/` 无法复制、`get` 也解析不了；
+  现在回落到它的 W-id。
 - 表格不再截断标题（60 字）与作者（24 字）：标题整句显示，作者超过三人折成 `et al.`，并补出刊名与 DOI——
   截断后的标题没法判断要不要，DOI 正是下一步 `fetch` 的入参；`data members` 同样不再截断。
 - `data get arxiv/1806.09180` 打到 DOI 后端时曾 404：现在与 `export` 同样先把 arXiv id 归一为 DOI，

@@ -81,6 +81,15 @@ class OpenAlexStubTest(unittest.TestCase):
         self.assertEqual(it.doi, "10.1038/nature14539")
         self.assertNotIn("https://doi.org/", it.doi)
 
+    def test_a_work_without_a_doi_uses_its_w_id_as_the_key(self):
+        # Preprints/tech reports carry no DOI; an empty key makes the row uncopyable and
+        # related's self-exclusion unreliable. The W-id is resolvable by get().
+        rec = dict(WORK, doi=None, id="https://openalex.org/W2088845016")
+        stub(self.be, (200, {"results": [rec]}))
+        it = self.be.search("deep learning", limit=1)[0]
+        self.assertEqual(it.key, "W2088845016")
+        self.assertEqual(it.doi, "")
+
     def test_url_is_real_landing_not_bare_doi(self):
         # url must be a resolvable URL (consistent with other backends), not a bare DOI string.
         stub(self.be, (200, RESULTS))
