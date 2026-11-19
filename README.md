@@ -25,7 +25,8 @@ litcli fetch 10.1038/s41598-024-80509-9            # 落到当前目录，stdout
 
 `search` 默认搜全部来源，`--backend` 收窄到单个；`--format json` 是一行一条记录，空结果打印 `[]`。
 表格在 key 后标注来源性质：`[oa]` 开放获取授权、`[public]` 公开副本（非 OA 授权）、`[local]` 你自己的库；
-JSON 里是对应的 `access` 字段。
+JSON 里是对应的 `access` 字段。结果里出现 `[public]` 时还会在 stderr 打一行说明：那是 Sci-Hub / Z-Library 这类镜像给的副本，
+**不是开放获取授权**，能不能再用得你自己看许可——这条责任不该藏在标签里。
 `fetch` 默认把文件写到当前目录（`--out DIR` 另指），成功时 stdout 只有路径，失败原因走 stderr；
 退出码 `0` 拿到文件 / `1` 没有全文 / `2` 出错。
 

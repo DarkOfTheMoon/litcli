@@ -60,6 +60,37 @@ class RegistryTest(unittest.TestCase):
             self.assertEqual(getattr(registry[name], "access", ""), "", name)
 
 
+class LegendTest(unittest.TestCase):
+    """A public copy is explained once per run; the reader, not the row, owes the licence check."""
+
+    def test_the_note_is_printed_once_for_public_items(self):
+        import contextlib
+        import io
+
+        from litcli.commands.render import print_items
+
+        items = [AcademicItem(source="scihub", key="a", title="T", access="public"),
+                 AcademicItem(source="zlibrary", key="b", title="T", access="public")]
+        err, out = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+            print_items(items, "table", True, "[no results]")
+        self.assertEqual(err.getvalue().count("[note]"), 1)
+        self.assertIn("not an open-access licence", err.getvalue())
+        self.assertNotIn("[note]", out.getvalue())
+
+    def test_no_note_without_public_items(self):
+        import contextlib
+        import io
+
+        from litcli.commands.render import print_items
+
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            print_items([AcademicItem(source="arxiv", key="1", title="T", access="oa")],
+                        "table", True, "[no results]")
+        self.assertEqual(err.getvalue(), "")
+
+
 class RenderTest(unittest.TestCase):
     def test_the_table_marks_the_access(self):
         item = AcademicItem(source="zlibrary", key="book/x", title="T", access="public")

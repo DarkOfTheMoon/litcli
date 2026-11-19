@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 结果里出现 `[public]` 副本（Sci-Hub / Z-Library 等镜像）时，stderr 打一行说明「不是开放获取授权，许可见标签」，
+  整轮只打一次：判断许可的责任落在读者身上这件事，标签本身交代不了。
+
 - 检索表格在标题下补一行缩进摘要（160 字截断加省略号）：光看标题判不出该不该要，摘要片段才够；
   只对有摘要的记录输出，JSON 仍走 `abstract` 全字段。
 

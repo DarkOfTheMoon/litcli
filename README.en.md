@@ -32,6 +32,8 @@ litcli fetch 10.1038/s41598-024-80509-9            # saved to the current direct
 `search` covers every source by default; `--backend` narrows it. `--format json` prints one record per line and an
 empty result prints `[]`. The table marks what kind of copy a row is right after the key — `[oa]` openly
 licensed, `[public]` a public copy without an open licence, `[local]` your own library; JSON has the same in `access`.
+When `[public]` rows appear, one stderr line says so: those are copies from environments such as Sci-Hub / Z-Library,
+**not an open-access licence**, and checking the licence before reuse is on you rather than on the tag.
 `fetch` writes into the current directory (`--out DIR` overrides), prints only the path
 on stdout and its reasons on stderr; exit codes `0` file saved / `1` nothing found / `2` error.
 

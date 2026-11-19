@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import sys
 
 from ..citation import render_intext
 from ..models import AcademicItem
@@ -59,6 +60,10 @@ def print_items(items: list[AcademicItem], fmt: str, no_cite: bool, empty_msg: s
         for it in items:
             print(present(it, fmt, no_cite))
         return 0
+    if fmt == "table" and any(it.access == "public" for it in items):
+        # Who owes the licence check is the one thing a reader cannot see from a row.
+        print("[note] [public] = copy from a non-OA mirror (Sci-Hub / Z-Library), "
+              "not an open-access licence — check the licence before reuse", file=sys.stderr)
     for it in items:
         print(present(it, "table", no_cite, snippet))
     if not items:
