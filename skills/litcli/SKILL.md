@@ -11,8 +11,8 @@ description: 用 litcli 与用户的学术资料互操作——检索、读取�
 
 ## 一条检索怎么走
 
-1. **先查用户自己的库**：`litcli search "关键词"`（默认后端就是本机 Zotero，不需要 `--backend`）。
-2. **库里没有才外扩**：`--all` 跨后端聚合（去重/合并，`extra["sources"]` 标来源），或用 `--backend arxiv|crossref|openalex|doaj|europepmc|zenodo` 指定开放源；中文文献用 `--backend cnki`，中文图书用 `--backend douban`。
+1. **先看用户自己的库**：`litcli search "关键词" --backend zotero`（不带 `--backend` 时是全部来源一起搜，本机库只是其中之一）。
+2. **库里没有才外扩**：`litcli search "关键词"` 默认就跨全部已配置来源 + 免 key 的 OA 语料聚合（去重/合并，`extra["sources"]` 标来源），或用 `--backend arxiv|crossref|openalex|doaj|europepmc|zenodo` 指定开放源；中文文献用 `--backend cnki`，中文图书用 `--backend douban`。
 3. **收敛**：`--type article` 降噪，`--title/--author/--year/--container` 字段级过滤，`--sort cited` 按被引降序。结果只是候选，**引用前核对题名/作者/年份**，不要把摘要当结论。
 4. **顺藤摸瓜**：`refs`（回溯奠基）／`citing`（前向跟进）／`related`（语义邻居）——都基于 OpenAlex 引文图谱。
 5. **落盘**：要入库走 `data add`（先查重、经确认）；只要引文走 `export --format csljson`（喂 `pandoc --citeproc`）；要全文走 `fetch <doi|arXiv id>`（默认落盘，stdout 只有路径；要正文且合法源拿不到时加 `--scihub`）。
@@ -20,8 +20,9 @@ description: 用 litcli 与用户的学术资料互操作——检索、读取�
 
 ## 命令面（`litcli` 在 PATH；源码检出内用 `./bin/litcli`）
 
-后端经 `--backend`（默认 `zotero`），key 也可自带来源前缀（`openalex/W123`、`zotero/AB12`）——有前缀按前缀路由，
-`--backend` 仍优先；`--all` 跨后端聚合（去重/合并/排序，`extra["sources"]` 标来源）。
+不写 `--backend` 时搜全部来源（含免 key 的 OA 语料）；`--backend` 收窄到单个，key 也可自带来源前缀
+（`openalex/W123`、`zotero/AB12`）——有前缀按前缀路由，`--backend` 仍优先；`--all` 与 `--backend` 互斥，
+聚合会去重/合并/排序并在 `extra["sources"]` 标来源。
 命令按意图分族：`search`/`fetch`/`export` 只读，`data` 写库（须决策）。
 
 | 任务 | 命令 | 读写 |
@@ -30,7 +31,7 @@ description: 用 litcli 与用户的学术资料互操作——检索、读取�
 | 参考文献(回溯) | `litcli refs <key> [--limit N] [--backend openalex]` 该文所引文献,按被引降序(奠基在前) | 只读 |
 | 引用该文(前向) | `litcli citing <key> [--limit N] [--backend openalex]` 引用该文的文献,按被引降序(跟进在前) | 只读 |
 | 语义相关 | `litcli related <key> [--limit N] [--backend openalex]` OpenAlex `related_works` 邻居;该文无邻居列表时退回标题实词检索(`extra["related_via"]=keyword`);不支持的只读后端 `[skipped]` 退出码 2 | 只读 |
-| 单条全字段 | `litcli data get <key> [--format csl\|json]` | 只读 |
+| 单条全字段 | `litcli data get <key> [--format table\|json\|csl]`（默认 `table`） | 只读 |
 | 导出引文 | `litcli export <key> [--format csljson\|bibtex\|ris\|text]`（arXiv key 如 `arxiv/1806.09180` 在 `--backend openalex\|crossref` 下归一为 DOI；csljson/bibtex 含期刊名/卷/页/出版社） | 只读 |
 | 定位全文 | `litcli fetch <doi\|arXiv id> [--out DIR] [--no-download] [--scihub]`（旧写法 `fetch fulltext <doi>` 仍认） 本地→OA，默认落盘；加 `--scihub` 才兜底公开副本(会标注) | 只读 |
 | **新增(元信息)** | `litcli data add --title "..." --creator "家族, 名字" --year 2002 [--doi ...]` | **写库** |

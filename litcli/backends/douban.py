@@ -27,6 +27,7 @@ import json
 import re
 from urllib.parse import urlencode
 
+from ..errors import BotWall
 from ..models import AcademicItem, extract_year, normalize_author_name
 from ..paths import config_dir
 from .playwright import _PLAYWRIGHT_HINT, PlaywrightBackend
@@ -225,9 +226,12 @@ class DoubanBackend(PlaywrightBackend):
         ``#info`` exists in the SSR shell but stays empty until JavaScript fills it, so an
         existence-based wait is a false signal; we poll for actual content instead.
         """
+        # ``evaluate`` rather than ``eval_on_selector``: the latter raises when the selector is
+        # missing (which the polling loop then eats, hiding a layout change from the caller).
         return self._wait_until(
             page,
-            lambda p: (p.eval_on_selector("#info", "el => el ? el.innerText : ''") or "").strip(),
+            lambda p: (p.evaluate(
+                "() => document.querySelector('#info')?.innerText || ''") or "").strip(),
             timeout,
         ) or ""
 
@@ -242,6 +246,13 @@ class DoubanBackend(PlaywrightBackend):
             self._wait_for_signal(page, _CARD_SELECTOR)
             payload = self._read_payload(page)
             items = window_data_to_items(payload)[:n]
+            if not items:
+                # A real no-hit carries ``count: 0``; risk control renders a page without
+                # ``__DATA__`` at all. Both used to come back as the same silent ``[]``.
+                if payload.get("count") == 0 and not payload.get("error_info"):
+                    return []
+                raise BotWall(f"[{self.name}] no results page for {q!r} — risk control or "
+                              "a layout change; re-run to retry in the browser")
             return self._filter_year(items, filters)
 
     def get(self, key: str) -> AcademicItem:
@@ -254,7 +265,8 @@ class DoubanBackend(PlaywrightBackend):
             info_text = self._wait_for_info(page)
             if not info_text:
                 raise KeyError(f"[{self.name}] could not read subject page (blocked / missing): {key}")
-            title = page.eval_on_selector("#wrapper h1 span", "el => el ? el.innerText : ''") or ""
+            title = page.evaluate(
+                "() => document.querySelector('#wrapper h1 span')?.innerText || ''") or ""
             if not title:
                 raise KeyError(f"[{self.name}] could not read subject page (blocked / missing): {key}")
             info = _parse_info(info_text)

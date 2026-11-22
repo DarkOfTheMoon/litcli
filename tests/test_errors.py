@@ -88,7 +88,8 @@ class HttpKindTest(unittest.TestCase):
 class CliPolicyTest(unittest.TestCase):
     def _run(self, exc):
         parser = mock.Mock()
-        parser.parse_args.return_value = mock.Mock(cmd="search", data_cmd=None, debug=False, verbose=False)
+        parser.parse_args.return_value = mock.Mock(cmd="search", data_cmd=None, debug=False,
+                                                   verbose=False, no_cache=False)
         with mock.patch.object(cli, "build_parser", return_value=parser), \
                 mock.patch.object(cli, "load_config", return_value={}), \
                 mock.patch.object(cli, "_apply_proxy"), \
@@ -157,7 +158,8 @@ class AllPolicyTest(unittest.TestCase):
 
     def test_a_stray_runtime_failure_is_traced_under_verbose(self):
         _, _, err = self._search(RuntimeError("boom"), verbose=True)
-        self.assertIn("[skipped] backend bad: boom", err)
+        # The type name matters for the unclassified ones: it is all the user gets.
+        self.assertIn("[skipped] backend bad: RuntimeError: boom", err)
 
     def test_the_search_survives_to_the_result_line(self):
         rc, out, _ = self._search(Unavailable("down"))

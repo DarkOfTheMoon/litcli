@@ -196,6 +196,23 @@ class AcademicItem:
         lines.append("ER  -")
         return "\n".join(lines) + "\n"
 
+    @staticmethod
+    def _csl_creators(authors) -> list[dict]:
+        """Normalize CSL ``author`` entries to ``{"family"/"given"/"literal"}`` dicts.
+
+        CSL allows the name objects *and* plain strings (``"Smith, John"``); the rest of the code
+        reads creators as dicts, so a string entry would break rendering and export downstream.
+        """
+        out = []
+        for a in authors or []:
+            if isinstance(a, dict):
+                out.append(a)
+            elif isinstance(a, str) and a.strip():
+                family, comma, given = a.partition(",")
+                out.append({"family": family.strip(), "given": given.strip()} if comma
+                           else {"literal": a.strip()})
+        return out
+
     @classmethod
     def from_csl(cls, csl: dict, source: str = "", key: str = "") -> AcademicItem:
         """Build an AcademicItem from CSL JSON (often needed before writing to a backend)."""
@@ -212,7 +229,7 @@ class AcademicItem:
             source=source,
             key=key or csl.get("id", ""),
             title=csl.get("title", ""),
-            creators=list(authors),
+            creators=cls._csl_creators(authors),
             year=year,
             abstract=csl.get("abstract", ""),
             doi=doil,

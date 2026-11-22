@@ -23,6 +23,7 @@ def cmd_export(cfg, args) -> int:
             print(it.to_ris())
     else:
         for it in items:
-            print(render_intext([it])[0])
+            if not args.no_cite:
+                print(render_intext([it])[0])
             print(render_bibliography([it])[0])
     return 0

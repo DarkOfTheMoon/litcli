@@ -67,7 +67,7 @@ class ExtractTextTest(unittest.TestCase):
         with mock.patch("litcli.pdf.subprocess.run", return_value=proc) as m:
             text = pdfutil.extract_text("/tmp/a.pdf")
         self.assertEqual(text, "Hello\nWorld")
-        self.assertEqual(m.call_args[0][0], ["pdftotext", "-layout", "/tmp/a.pdf", "-"])
+        self.assertEqual(m.call_args[0][0], ["pdftotext", "-layout", "--", "/tmp/a.pdf", "-"])
 
     def test_first_page_flags(self):
         from unittest import mock
@@ -75,7 +75,7 @@ class ExtractTextTest(unittest.TestCase):
         with mock.patch("litcli.pdf.subprocess.run", return_value=proc) as m:
             pdfutil.extract_text("/tmp/a.pdf", first_page=True)
         self.assertEqual(m.call_args[0][0],
-                         ["pdftotext", "-layout", "-f", "1", "-l", "1", "/tmp/a.pdf", "-"])
+                         ["pdftotext", "-layout", "-f", "1", "-l", "1", "--", "/tmp/a.pdf", "-"])
 
     def test_nonzero_returncode_returns_empty(self):
         from unittest import mock
@@ -96,7 +96,7 @@ class ExtractTextTest(unittest.TestCase):
              mock.patch("litcli.pdf.os.unlink") as unlink:
             text = pdfutil.extract_text(b"pdf-bytes")
         self.assertEqual(text, "From bytes")
-        self.assertEqual(m.call_args[0][0], ["pdftotext", "-layout", "/fake/tmp.pdf", "-"])
+        self.assertEqual(m.call_args[0][0], ["pdftotext", "-layout", "--", "/fake/tmp.pdf", "-"])
         unlink.assert_called_once_with("/fake/tmp.pdf")
 
     def test_max_chars_truncates(self):

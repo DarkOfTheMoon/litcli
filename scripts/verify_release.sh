@@ -41,7 +41,8 @@ bad() { echo "FAILED"; }
 echo "==> verifying release v$VER of $GITEE_PROJECT"
 step "release exists and is published"
 META="$WORK/release.json"
-curl -sS -f "$GITEE_API/repos/$GITEE_PROJECT/releases/tags/v$VER" -o "$META" || {
+curl -sS -f --connect-timeout 10 --max-time 60 \
+  "$GITEE_API/repos/$GITEE_PROJECT/releases/tags/v$VER" -o "$META" || {
   bad; echo "no published release for v$VER" >&2; exit 1; }
 ok
 
@@ -59,12 +60,17 @@ ok
 
 step "download"
 python3 - "$META" "$WORK" <<'PY'
-import json, sys, urllib.request
+import json, os, sys, urllib.request
 meta, work = sys.argv[1], sys.argv[2]
 for asset in json.load(open(meta)).get("assets") or []:
     name = asset["name"]
     if name.endswith("SHA256SUMS") or name.endswith(".whl") or name.startswith("litcli-"):
-        urllib.request.urlretrieve(asset["browser_download_url"], f"{work}/{name}")
+        # Take the base name: a name carrying `/` or `..` must not land outside the work dir.
+        safe = os.path.basename(name.replace("\\", "/")) or "asset"
+        with urllib.request.urlopen(asset["browser_download_url"], timeout=120) as r, \
+                open(os.path.join(work, safe), "wb") as f:
+            while chunk := r.read(1 << 20):
+                f.write(chunk)
 PY
 ok
 
@@ -72,9 +78,20 @@ step "SHA256SUMS matches every artifact"
 ( cd "$WORK" && sha256sum -c --quiet SHA256SUMS ) || { bad; exit 1; }
 ok
 
-step "version in the artifact matches the tag"
-WHEEL="$WORK/$(basename "$(ls "$WORK"/*.whl)")"
-case "$WHEEL" in *"-$VER-"*) ok ;; *) bad; echo "$WHEEL does not carry $VER" >&2; exit 1 ;; esac
+step "exactly one wheel, carrying the tag version"
+# `basename` on a multi-line expansion folds every wheel into one broken path; select explicitly.
+WHEEL="$(python3 - "$WORK" "$VER" <<'PY'
+import glob, os, sys
+work, ver = sys.argv[1], sys.argv[2]
+wheels = sorted(glob.glob(os.path.join(work, "*.whl")))
+if len(wheels) != 1:
+    sys.exit(f"expected one wheel, found {len(wheels)}: {[os.path.basename(w) for w in wheels]}")
+if f"-{ver}-" not in os.path.basename(wheels[0]):
+    sys.exit(f"{os.path.basename(wheels[0])} does not carry {ver}")
+print(wheels[0])
+PY
+)" || { bad; exit 1; }
+ok
 
 step "wheel installs into a clean venv"
 python3 -m venv "$VENV" >/dev/null
@@ -91,7 +108,12 @@ step "a real backend answers (crossref)"
 ok
 
 step "sdist builds and installs"
-SDIST="$WORK/$(basename "$(ls "$WORK"/litcli-"$VER"*.tar.gz | head -1)")"
+SDIST="$(python3 - "$WORK" "$VER" <<'PY'
+import glob, os, sys
+found = sorted(glob.glob(os.path.join(sys.argv[1], f"litcli-{sys.argv[2]}*.tar.gz")))
+sys.exit("no sdist for this version") if not found else print(found[0])
+PY
+)" || { bad; exit 1; }
 "$VENV/bin/pip" install -q --force-reinstall "$SDIST" || { bad; exit 1; }
 ok
 

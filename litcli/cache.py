@@ -10,9 +10,11 @@ disk) degrades to a request.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -47,9 +49,13 @@ def get(key: str) -> str | None:
     try:
         with _path(key).open(encoding="utf-8") as f:
             entry = json.load(f)
-        if time.time() - entry.get("stored", 0) > TTL:
+        if not isinstance(entry, dict):
             return None
-        return entry.get("body")
+        stored = entry.get("stored", 0)
+        if not isinstance(stored, (int, float)) or time.time() - stored > TTL:
+            return None
+        body = entry.get("body")
+        return body if isinstance(body, str) else None
     except (OSError, ValueError):
         return None
 
@@ -61,7 +67,9 @@ def put(key: str, body: str) -> None:
     path = _path(key)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
+        # A per-writer temp name: openalex fans out from several threads, and a shared `.tmp`
+        # lets two writers truncate each other mid-dump.
+        tmp = path.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp")
         with tmp.open("w", encoding="utf-8") as f:
             json.dump({"stored": time.time(), "body": body}, f)
         tmp.replace(path)
@@ -71,19 +79,29 @@ def put(key: str, body: str) -> None:
 
 
 def _maybe_prune() -> None:
-    """Drop old entries when the cache is large; called from the write path only."""
+    """Keep the cache bounded: drop expired entries, then the oldest until under the cap.
+
+    Called from the write path only. Stale-only pruning was not enough — a day of fresh entries
+    never shrank the cache, so ``MAX_ENTRIES`` was a cap in name only.
+    """
     root = cache_dir()
     try:
-        files = [p for p in root.rglob("*") if p.is_file()]
+        files = [(p, p.stat().st_mtime) for p in root.rglob("*") if p.is_file()]
     except OSError:
         return
     if len(files) <= MAX_ENTRIES:
         return
     now = time.time()
-    for p in files:
-        try:
-            if now - p.stat().st_mtime > TTL:
+    kept = []
+    for p, mtime in files:
+        if now - mtime > TTL:
+            with contextlib.suppress(OSError):
                 p.unlink()
+        else:
+            kept.append((p, mtime))
+    for p, _mtime in sorted(kept, key=lambda f: f[1])[:len(kept) - MAX_ENTRIES]:
+        try:
+            p.unlink()
         except OSError:
             continue
 

@@ -66,7 +66,7 @@ class OpenLibraryBackend(HttpBackend):
         terms = [t for t in (query, filters.get("title"),
                              filters.get("author"),
                              filters.get("container")) if t]
-        params = urllib.parse.urlencode({"q": " ".join(terms), "limit": limit})
+        params = urllib.parse.urlencode({"q": " ".join(terms), "limit": min(max(limit, 1), 100)})
         data = self.fetch_json(f"{self._base}?{params}")
         return [_doc_to_item(d, self.name) for d in (data.get("docs") or [])]
 

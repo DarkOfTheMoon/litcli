@@ -7,7 +7,8 @@
 #      ① on master and level with origin        ② worktree clean
 #      ③ full test suite green                  ④ ruff clean
 #      ⑤ package builds (sdist + wheel)         ⑥ CHANGELOG [Unreleased] non-empty
-#      ⑦ target version not tagged yet          ⑧ __version__ == target
+#      ⑦ target version not tagged yet          ⑧ target is plain X.Y.Z and, after the bump, the
+#                                                  written __version__ equals it
 #   2) bump `litcli/_version.py` (--bump major|minor|patch, default patch; `none` releases the
 #      current __version__ in place) and harvest CHANGELOG [Unreleased] into a dated section
 #   3) commit `chore(release): vX.Y.Z` + tag vX.Y.Z
@@ -31,7 +32,9 @@
 #                      [--binary [--installer <path>]...]
 #   scripts/release.sh --release-only [vX.Y.Z]                  (re)create the Release of that tag
 #                                                               (default: the tag on HEAD); nothing is
-#                                                               bumped, committed or pushed
+#                                                               bumped, committed or pushed. Requires
+#                                                               HEAD == the tag on a clean tree, rebuilds
+#                                                               dist/ and runs the consumer check.
 #
 # Environment:
 #   GITEE_TOKEN   Gitee personal access token (releases scope), falls back to
@@ -72,7 +75,7 @@ fetch_ci_installer() {
   local sha="$1" id attempt
   echo "==> [5b/7] waiting for CI to build the Windows installer"
   for attempt in $(seq 1 60); do
-    id="$(gh run list --repo "$GITHUB_PROJECT" --commit "$sha" --limit 1 \
+    id="$(gh run list --repo "$GITHUB_PROJECT" --commit "$sha" --event push --limit 1 \
           --json databaseId --jq '.[0].databaseId // empty' 2>/dev/null || true)"
     [ -n "$id" ] && break
     sleep 10
@@ -99,28 +102,56 @@ publish_release() {
     return 0
   fi
 
-  local payload resp id f
-  payload="$(mktemp)"; resp="$(mktemp)"
-  trap 'rm -f "$payload" "$resp"' RETURN
-  NOTES="$notes" python3 - "$payload" "$ver" <<'PAYLOAD'
+  local payload resp id f failed=0 attached="" auth
+  payload="$(mktemp)"; resp="$(mktemp)"; auth="$(mktemp)"
+  # The token goes into a curl config file (mode 600) rather than a -H argument, so it is not
+  # readable from `ps` for the lifetime of every upload.
+  chmod 600 "$auth"
+  printf 'header = "Authorization: token %s"\n' "$GITEE_TOKEN" > "$auth"
+  trap 'rm -f "$payload" "$resp" "$auth"' RETURN
+  # A retry after a half-failed upload must attach to the existing Release, not POST a duplicate
+  # (Gitee rejects a second Release for the same tag). An asset of the same name is replaced
+  # rather than uploaded twice (a retry must not end up as `name (1).whl`).
+  if curl -sS -f --connect-timeout 10 --max-time 60 --config "$auth" "$GITEE_API/repos/$GITEE_PROJECT/releases/tags/v$ver" -o "$resp" 2>/dev/null; then
+    id="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('id',''))" "$resp")"
+    attached="$(python3 -c "import json,sys; print('\n'.join(f\"{a['id']}\t{a['name']}\" for a in (json.load(open(sys.argv[1])).get('assets') or [])))" "$resp")"
+    echo "  - Release v$ver already exists (id $id), attaching to it"
+  fi
+  if [ -z "$id" ]; then
+    NOTES="$notes" python3 - "$payload" "$ver" <<'PAYLOAD'
 import json, os, sys
 json.dump({"tag_name": f"v{sys.argv[2]}", "name": f"litcli v{sys.argv[2]}",
            "body": os.environ["NOTES"], "target_commitish": "master", "prerelease": False},
           open(sys.argv[1], "w", encoding="utf-8"), ensure_ascii=False)
 PAYLOAD
-  curl -sS -f -X POST "$GITEE_API/repos/$GITEE_PROJECT/releases" \
-    -H "Content-Type: application/json" -H "Authorization: token $GITEE_TOKEN" \
-    --data-binary "@$payload" > "$resp" || {
-      echo "  ✗ Release creation failed (is the tag pushed? does the token have the release scope?)" >&2
-      return 1; }
-  id="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['id'])" "$resp")"
-  echo "  ✓ Release v$ver created (id $id)"
+    curl -sS -f --connect-timeout 10 --max-time 60 -X POST "$GITEE_API/repos/$GITEE_PROJECT/releases" \
+      --config "$auth" -H "Content-Type: application/json" \
+      --data-binary "@$payload" > "$resp" || {
+        echo "  ✗ Release creation failed (is the tag pushed? does the token have the release scope?)" >&2
+        return 1; }
+    id="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['id'])" "$resp")"
+    echo "  ✓ Release v$ver created (id $id)"
+  fi
+  # A Release that silently misses an asset is worse than a failed run: the checksum list
+  # published with it would not resolve.
   for f in dist/* dist/bin/*; do
     [ -f "$f" ] || continue
-    curl -sS -f -X POST "$GITEE_API/repos/$GITEE_PROJECT/releases/$id/attach_files" \
-      -H "Authorization: token $GITEE_TOKEN" -F "file=@$f" >/dev/null \
-      && echo "  ✓ attached $(basename "$f")" || echo "  ✗ attach failed: $(basename "$f")" >&2
+    # Replace an existing asset of the same name: this run rebuilt the artifacts (and
+    # SHA256SUMS), so the old bytes would no longer match the published checksums.
+    old_id="$(awk -F'\t' -v n="$(basename "$f")" '$2 == n { print $1 }' <<<"$attached")"
+    if [ -n "$old_id" ]; then
+      curl -sS -f --connect-timeout 10 --max-time 60 -X DELETE \
+        "$GITEE_API/repos/$GITEE_PROJECT/releases/$id/assets/$old_id" --config "$auth" >/dev/null \
+        || { echo "  ✗ could not replace $(basename "$f")" >&2; failed=1; continue; }
+    fi
+    if curl -sS -f --connect-timeout 10 --max-time 1800 -X POST "$GITEE_API/repos/$GITEE_PROJECT/releases/$id/attach_files" \
+        --config "$auth" -F "file=@$f" >/dev/null; then
+      echo "  ✓ attached $(basename "$f")"
+    else
+      echo "  ✗ attach failed: $(basename "$f")" >&2; failed=1
+    fi
   done
+  return "$failed"
 }
 
 CHECK_ONLY=0
@@ -170,11 +201,25 @@ if [ "$RELEASE_ONLY" = 1 ]; then
   git ls-remote --tags --exit-code origin "refs/tags/v$REL_VER" >/dev/null 2>&1 || {
     echo "  ✗ v$REL_VER is not pushed yet: git push origin v$REL_VER" >&2; exit 1; }
   echo "  ✓ tag is pushed"
-  if [ ! -d dist ] || [ -z "$(ls -A dist 2>/dev/null)" ]; then
-    echo "  - dist/ missing, rebuilding ..."
-    python3 -m build --no-isolation --outdir dist >/dev/null
-    echo "  ✓ dist/ rebuilt (installers are only attached if already in dist/bin/)"
+  # The same two gates the full path relies on: artifacts must come from the tagged commit's
+  # tree, and a dirty tree means whatever sits in dist/ may be from anything.
+  [ "$(git rev-parse HEAD)" = "$(git rev-parse "v$REL_VER^{commit}")" ] || {
+    echo "  ✗ HEAD is not v$REL_VER; check it out first (artifacts are built from the worktree)" >&2
+    exit 1; }
+  [ -z "$(git status --porcelain --untracked-files=normal)" ] || {
+    echo "  ✗ worktree has changes" >&2; exit 1; }
+  # Always rebuild: a dist/ left over from an earlier run can hold another version's files
+  # (attach_files would ship them).
+  keep="$(mktemp -d)"
+  if [ -d dist/bin ]; then cp -a dist/bin "$keep/bin"; fi
+  rm -rf dist
+  if ! python3 -m build --outdir dist >/dev/null; then
+    if [ -d "$keep/bin" ]; then mkdir -p dist/bin && cp -a "$keep/bin/." dist/bin/; fi
+    rm -rf "$keep"; echo "  ✗ rebuild failed" >&2; exit 1
   fi
+  if [ -d "$keep/bin" ]; then mkdir -p dist/bin && cp -a "$keep/bin/." dist/bin/; fi
+  rm -rf "$keep"
+  echo "  ✓ dist/ rebuilt (installers are only attached if already in dist/bin/)"
   # A Release that lists installers must list both platforms; top up from CI before publishing.
   if ls dist/bin/*-* >/dev/null 2>&1; then
     if [ -n "$(missing_installers)" ] && [ -n "$GITHUB_PROJECT" ] && command -v gh >/dev/null 2>&1; then
@@ -185,6 +230,9 @@ if [ "$RELEASE_ONLY" = 1 ]; then
   fi
   write_sums
   publish_release "$REL_VER" || exit 1
+  # Same consumer check as the full path: what was just attached must be installable.
+  echo "==> consumer check"
+  scripts/verify_release.sh "v$REL_VER" || { echo "  ✗ published release is not consumable" >&2; exit 1; }
   echo "==> done: v$REL_VER"
   exit 0
 fi
@@ -208,10 +256,21 @@ NEW_VER="$(bump_ver "$BUMP")"
 fail=""
 echo "==> [1/6] gates"
 
+# A gate's detail is what lets the next run be fixed; discarding it leaves only "failed".
+gate_cmd() {  # gate_cmd <label> <command...>
+  local label="$1"; shift
+  local log; log="$(mktemp)"
+  if "$@" >"$log" 2>&1; then echo "  ✓ $label"; rm -f "$log"; return 0; fi
+  echo "  ✗ $label failed (last 25 lines):" >&2; tail -n 25 "$log" >&2; rm -f "$log"; return 1
+}
+
 echo "  - branch and sync state ..."
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 if [ "$BRANCH" = "$BRANCH_REQUIRED" ]; then echo "  ✓ on $BRANCH"; else
   echo "  ✗ on $BRANCH, releases are cut from $BRANCH" >&2; fail="$fail,branch"; fi
+# Without a fetch the comparison runs against a stale origin/<branch> and can pass a dozing tree.
+git fetch --quiet origin "$BRANCH_REQUIRED" 2>/dev/null \
+  || echo "  ! git fetch failed (offline?); comparing against the last known origin" >&2
 if git rev-parse --verify --quiet "origin/$BRANCH_REQUIRED" >/dev/null; then
   if [ "$(git rev-parse HEAD)" = "$(git rev-parse "origin/$BRANCH_REQUIRED")" ]; then
     echo "  ✓ level with origin/$BRANCH_REQUIRED"
@@ -229,21 +288,17 @@ else
 fi
 
 echo "  - test suite ..."
-if python3 -m unittest discover -s tests >/dev/null 2>&1; then echo "  ✓ tests green"; else
-  echo "  ✗ tests failed" >&2; fail="$fail,tests"; fi
+gate_cmd "tests green" python3 -m unittest discover -s tests || fail="$fail,tests"
 
 echo "  - lint (ruff) ..."
-if ruff check litcli tests >/dev/null 2>&1; then echo "  ✓ lint clean"; else
-  echo "  ✗ lint findings, run: ruff check litcli tests" >&2; fail="$fail,lint"; fi
+gate_cmd "lint clean" ruff check litcli tests || fail="$fail,lint"
 
 # A build failure must surface here, not after the version has been bumped and committed.
+# An isolated build (the default) compiles in a fresh environment, the way a consumer's wheel
+# ends up built, instead of trusting whatever happens to be importable right now.
 echo "  - package builds ..."
 BUILD_DIR="$(mktemp -d)"
-if python3 -m build --no-isolation --outdir "$BUILD_DIR" >/dev/null 2>&1; then
-  echo "  ✓ sdist + wheel build"
-else
-  echo "  ✗ build failed, run: python3 -m build --no-isolation" >&2; fail="$fail,build"
-fi
+gate_cmd "sdist + wheel build" python3 -m build --outdir "$BUILD_DIR" || fail="$fail,build"
 rm -rf "$BUILD_DIR"
 
 # The [Unreleased] section ends at the next H2 of any kind; a hand-added `## Notes` must not be swallowed.
@@ -256,6 +311,10 @@ fi
 
 echo "  - version and tag ..."
 echo "  - current __version__ = $VER, release target v$NEW_VER"
+case "$NEW_VER" in
+  [0-9]*.[0-9]*.[0-9]*) echo "  ✓ target v$NEW_VER is a plain X.Y.Z" ;;
+  *) echo "  ✗ target v$NEW_VER is not X.Y.Z" >&2; fail="$fail,version" ;;
+esac
 if [ "$BUMP" = none ] && [ "$NEW_VER" != "$VER" ]; then
   echo "  ✗ --bump none resolves to a different version" >&2; fail="$fail,version"
 fi
@@ -291,6 +350,9 @@ path, ver = sys.argv[1], sys.argv[2]
 s = open(path, encoding="utf-8").read()
 open(path, "w", encoding="utf-8").write(re.sub(r'__version__ = ".*"', f'__version__ = "{ver}"', s))
 PY
+  # Gate ⑧, on the written file: what got tagged must be the version that was gated.
+  [ "$(python3 -c "import re,pathlib; print(re.search(r'__version__ = \"(.*)\"', pathlib.Path('$VERSION_FILE').read_text()).group(1))")" = "$NEW_VER" ] \
+    || { echo "  ✗ $VERSION_FILE does not carry $NEW_VER after the bump" >&2; exit 1; }
 fi
 
 # Harvest: [Unreleased] becomes a dated version section, with a fresh empty [Unreleased] kept above
@@ -326,7 +388,7 @@ echo "  ✓ commit + tag v$NEW_VER (local)"
 
 echo "==> [4/6] build dist/ artifacts"
 rm -rf dist
-python3 -m build --no-isolation --outdir dist >/dev/null
+python3 -m build --outdir dist >/dev/null
 if [ "$DO_BINARY" = 1 ]; then
   # Only this platform's installer can be built here. The other one comes from --installer or,
   # failing that, from the CI run of this very commit (fetched after the push, step 5b).
@@ -393,7 +455,8 @@ fi
 publish_release "$NEW_VER"
 
 # Verify what consumers actually get, not what the gates proved about the working tree.
-if curl -sS -f -o /dev/null "$GITEE_API/repos/$GITEE_PROJECT/releases/tags/v$NEW_VER"; then
+if curl -sS -f --connect-timeout 10 --max-time 60 -o /dev/null \
+     "$GITEE_API/repos/$GITEE_PROJECT/releases/tags/v$NEW_VER"; then
   echo "==> [7/7] consumer check"
   scripts/verify_release.sh "v$NEW_VER" || { echo "  ✗ published release is not consumable" >&2; exit 1; }
 else

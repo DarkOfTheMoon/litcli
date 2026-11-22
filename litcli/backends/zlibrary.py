@@ -37,7 +37,7 @@ import urllib.parse
 
 import httpx
 
-from ..errors import External, LitcliError, Unavailable, for_status
+from ..errors import BotWall, External, LitcliError, Unavailable, for_status
 from ..models import AcademicItem, extract_year, normalize_author_name
 from .base import Backend
 from .scihub import _UA
@@ -387,8 +387,12 @@ class ZlibraryBackend(Backend):
         base = self._resolve_base(http)
         final, status, body = http.fetch(f"{base}/{path.lstrip('/')}", referer=base + "/")
         text = body.decode("utf-8", "replace")
-        if status == 404 or _CHALLENGE_MARK in text:
+        if status == 404:
             return final, ""
+        if _CHALLENGE_MARK in text:
+            # The page came back but the browser check is still up (solve failed or expired);
+            # folding it into "not found" made a wall look like a missing book.
+            raise BotWall(f"[{self.name}] browser check not passed for {path}")
         if status == 204:
             raise Unavailable(
                 f"[{self.name}] HTTP 204 (no content) — the page is unavailable or the "

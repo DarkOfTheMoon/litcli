@@ -99,12 +99,17 @@ def identity(item: AcademicItem) -> str:
 
 
 def _info_score(item: AcademicItem) -> tuple:
-    """Information-completeness score (coarse): add per present abstract/doi/isbn/url, with title
-    length as the tie-breaker."""
+    """Information-completeness score (coarse): identifiers first, then abstract/url, with title
+    length as the tie-breaker.
+
+    An identifier outranks an abstract on purpose: the record carrying the DOI is the one whose
+    key must survive the merge, or the result is an arXiv id that ``export``/``fetch`` cannot use
+    even though the DOI is known.
+    """
     return (
-        1 if item.abstract else 0,
         1 if item.doi else 0,
         1 if item.isbn else 0,
+        1 if item.abstract else 0,
         1 if item.url else 0,
         len(item.title or ""),
     )
@@ -118,6 +123,8 @@ def _merge_two(primary: AcademicItem, other: AcademicItem) -> None:
         primary.year = other.year
     if not primary.abstract and other.abstract:
         primary.abstract = other.abstract
+    if not primary.doi and other.doi:
+        primary.doi = other.doi
     if not primary.url and other.url:
         primary.url = other.url
     if not primary.container_title and other.container_title:

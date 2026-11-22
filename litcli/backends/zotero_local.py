@@ -32,6 +32,9 @@ _ITEMTYPE_MAP = {
     "thesis": "thesis",
     "preprint": "article",
     "reportArticle": "article",
+    "patent": "patent",
+    "dataset": "dataset",
+    "standard": "standard",
 }
 
 # Zotero write-JSON field names (camelCase) and the AcademicItem correspondence
@@ -86,6 +89,8 @@ def _item_to_academic(data: dict, source: str = "zotero") -> AcademicItem:
         issue=data.get("issue", "") or "",
         page=data.get("pages", "") or "",
         publisher=data.get("publisher", "") or "",
+        isbn=data.get("ISBN", "") or "",
+        edition=data.get("edition", "") or "",
         item_type=item_type,
         extra={"date": raw_date, "zoteroItemType": data.get("itemType", "")},
     )
@@ -105,7 +110,11 @@ class ZoteroLocalBackend(HttpBackend):
 
     def ensure_running(self) -> None:
         """Fail fast, before a write prompt, when the local app is not listening at all."""
-        host, port = httpx.URL(self._base).host, httpx.URL(self._base).port
+        url = httpx.URL(self._base)
+        # ``.port`` is None for a base without an explicit port; connecting with None probes
+        # port 0 and fails even when the app is up. Fall back to the scheme's default port.
+        host = url.host
+        port = url.port or (443 if url.scheme == "https" else 80)
         try:
             socket.create_connection((host, port), timeout=0.5).close()
         except OSError as e:
@@ -406,9 +415,13 @@ class ZoteroLocalBackend(HttpBackend):
         resp = json.loads(raw) or {}
         ok = resp.get("successful", {}) or {}
         if ok:
-            first = next(iter(ok.values()))
-            return first.get("key") or first.get("key", "")
-        return item.key
+            return next(iter(ok.values())).get("key", "")
+        # A 200 can still carry a rejection: Zotero answers ``{"successful": {}, "failed": {...}}``
+        # and the reason lives in ``failed``. Returning silently left the CLI printing an empty
+        # key and exiting 0.
+        failed = resp.get("failed", {}) or {}
+        detail = "; ".join(str((v or {}).get("message", v)) for v in failed.values()) or "rejected"
+        raise for_status(400, f"[{self.name}] add rejected: {detail}")
 
     def patch(self, key: str, fields: dict) -> AcademicItem:
         self._require("write")
@@ -523,6 +536,10 @@ class ZoteroLocalBackend(HttpBackend):
             out["publisher"] = item.publisher
         if item.doi:
             out["DOI"] = item.doi
+        if item.isbn:
+            out["ISBN"] = item.isbn    # the book counterpart of DOI; dropped before, so books lost identity
+        if item.edition:
+            out["edition"] = item.edition
         if item.url:
             out["url"] = item.url
         return out

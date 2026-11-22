@@ -31,9 +31,10 @@ class TestModels(unittest.TestCase):
         self.assertIn("author", it.to_bibtex())
 
     def test_three_plus_authors_intext(self):
+        from litcli.citation import render_intext
         it = AcademicItem(title="X", year=2020, creators=[
             {"family": "A"}, {"family": "B"}, {"family": "C"}, {"family": "D"}])
-        self.assertEqual(len(it.creators), 4)
+        self.assertEqual(render_intext([it]), ["(A et al. 2020)"])
 
 
 if __name__ == "__main__":
@@ -134,8 +135,7 @@ class TestExportContainerFields(unittest.TestCase):
         it = AcademicItem(**self.ARTL)
         entry = render_bibliography([it])[0]
         self.assertIn("J. Fluid Mech.", entry)
-        self.assertIn("45", entry)
-        self.assertIn("123-130", entry)
+        self.assertIn("45, (3), 123-130.", entry)
 
 
 class TestExportBookFields(unittest.TestCase):

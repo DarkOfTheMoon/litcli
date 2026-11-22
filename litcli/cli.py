@@ -46,7 +46,8 @@ def _apply_proxy(cfg: dict) -> None:
     prog = (cfg.get("network") or {}).get("proxy")
     if not prog:
         return
-    if os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy"):
+    # Any proxy already in the environment wins, HTTP_PROXY included (httpx reads both schemes).
+    if any(os.environ.get(v) for v in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy")):
         return
     set_proxy(prog)
 
@@ -68,14 +69,56 @@ def _utf8_redirected_streams() -> None:
             pass  # replaced streams (tests, wrappers) need no help
 
 
+#: Flags accepted in front of *or* behind the subcommand; they are stripped from argv before
+#: argparse runs, and only when they are not the value of a preceding ``--flag``.
+_GLOBAL_FLAGS = ("--debug", "-v", "--verbose", "--no-cache")
+
+
+def _value_options(parser) -> set[str]:
+    """Every option string that takes a value, across the whole parser tree.
+
+    Used to tell ``search --title --verbose`` (a value) from ``search x --verbose`` (a flag).
+    """
+    found: set[str] = set()
+    stack = [parser]
+    while stack:
+        current = stack.pop()
+        actions = getattr(current, "_actions", None)
+        for action in (actions if isinstance(actions, list) else []):
+            if action.option_strings and action.nargs != 0:
+                found.update(action.option_strings)
+            choices = getattr(action, "choices", None)
+            if isinstance(choices, dict):
+                stack.extend(choices.values())
+    return found
+
+
+def _split_global_flags(argv: list[str], value_options: set[str]) -> tuple[list[str], bool, bool]:
+    """Pull the global flags out of ``argv`` and report ``(debug, verbose)``.
+
+    A flag is only taken when it cannot be the value of the preceding token (the token before it
+    ends in ``=`` or is an option that takes a value), so ``search --title --debug`` keeps
+    ``--debug`` as the title while ``search x --debug`` turns tracing on.
+    """
+    kept: list[str] = []
+    debug = verbose = False
+    for arg in argv:
+        if arg in _GLOBAL_FLAGS and not (kept and (kept[-1].endswith("=") or kept[-1] in value_options)):
+            debug = debug or arg == "--debug"
+            verbose = verbose or arg in ("-v", "--verbose")
+            continue
+        kept.append(arg)
+    return kept, debug, verbose
+
+
 def main(argv=None) -> int:
     _utf8_redirected_streams()
     # ``--debug`` is accepted anywhere (before or after the subcommand): strip it first, then let
     # argparse see the rest. It is registered on the root parser so it shows up in --help.
     raw = list(sys.argv[1:] if argv is None else argv)
-    debug_flag, verbose_flag = "--debug" in raw, any(a in ("-v", "--verbose") for a in raw)
-    quiet = [a for a in raw if a not in ("--debug", "-v", "--verbose", "--no-cache")]
-    args = build_parser().parse_args(quiet)
+    parser = build_parser()
+    quiet, debug_flag, verbose_flag = _split_global_flags(raw, _value_options(parser))
+    args = parser.parse_args(quiet)
     if debug_flag or getattr(args, "debug", False):
         set_enabled()
         log(f"litcli {quiet}")
@@ -94,29 +137,35 @@ def main(argv=None) -> int:
             return _DATA_COMMANDS[args.data_cmd](cfg, args)
         if args.cmd == "fetch":
             return fetch.cmd_fetch(cfg, args)
-        print(f"[error] unknown command {args.cmd}")
+        print(f"[error] unknown command {args.cmd}", file=sys.stderr)
         return 2
     except LitcliError as e:
         # Every expected failure carries a kind and an exit code; the kind only drives the
-        # label here, the policy that led to the raise lives in the caller.
-        print(f"{'[skipped]' if e.kind == 'unsupported' else '[error]'} {e}")
+        # label here, the policy that led to the raise lives in the caller. Diagnostics go to
+        # stderr so ``--format json`` on stdout stays parseable.
+        print(f"{'[skipped]' if e.kind == 'unsupported' else '[error]'} {e}", file=sys.stderr)
         if e.hint:
-            print(f"[hint] {e.hint}")
+            print(f"[hint] {e.hint}", file=sys.stderr)
         return e.exit_code
     except KeyError as e:
-        print(f"[error] {e}")
+        print(f"[error] {e}", file=sys.stderr)
         return 2
     except (RuntimeError, ValueError, SyntaxError, OSError) as e:
         # Backend business errors (HTTP 401/404/timeout) and data-shape failures (non-JSON response,
         # malformed XML, config TOML syntax) are surfaced gracefully, never as a raw stack trace.
         # (json.JSONDecodeError -> ValueError, lxml XMLSyntaxError -> SyntaxError,
         #  TOMLDecodeError -> ValueError, URLError -> OSError.)
-        print(f"[error] {e}")
+        print(f"[error] {e}", file=sys.stderr)
         return 2
-    except Exception:
+    except Exception as e:
+        # Anything unexpected is still a failure, not the "not found" exit 1 a traceback would
+        # leave behind (scripts read 1 as fetch's no-fulltext answer).
         if debug_enabled():
             import traceback
             traceback.print_exc()
-        raise
+        print(f"[error] unexpected: {type(e).__name__}: {e}", file=sys.stderr)
+        return 2
 
+
+if __name__ == "__main__":
     raise SystemExit(main())

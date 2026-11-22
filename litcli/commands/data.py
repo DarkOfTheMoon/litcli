@@ -90,8 +90,10 @@ def cmd_data_add(cfg, args) -> int:
     if not args.force:
         try:
             existing = backend.search(item.doi or item.title, limit=20)
-        except Exception:
+        except Exception as exc:
+            # An empty list would read as "no duplicate"; say the check did not run.
             existing = []
+            print(f"[warning] duplicate check failed ({exc}); continuing unchecked", file=sys.stderr)
         ok, reason = fulltext_mod.should_import(item, existing)
         if not ok:
             print(f"[skipped] {reason}")

@@ -43,6 +43,24 @@ def _retryable(exc: BaseException, codes: frozenset[int]) -> bool:
     return isinstance(exc, httpx.TransportError)  # includes timeouts and connect errors
 
 
+#: Longest ``Retry-After`` we will sit through before the next attempt.
+RETRY_AFTER_CAP = 30.0
+
+
+def retry_after_seconds(exc: BaseException) -> float | None:
+    """The server's own ``Retry-After`` (seconds), when it sent one.
+
+    The exponential schedule starts at half a second; rate limiters here (arXiv, OpenAlex) ask
+    for tens of seconds, so ignoring the header means burning the attempts for nothing.
+    """
+    response = getattr(exc, "response", None)
+    value = (response.headers.get("Retry-After") if response is not None else None) or ""
+    try:
+        return min(max(float(value.strip()), 0.0), RETRY_AFTER_CAP)
+    except ValueError:
+        return None
+
+
 class HttpBackend(Session, Backend):
     """Base for backends that talk HTTP.
 
@@ -95,6 +113,13 @@ class HttpBackend(Session, Backend):
         """The shared client (alias kept because the method bodies read as ``self.http``)."""
         return self.client
 
+    def _wait(self, state) -> float:
+        """Backoff for the next attempt: the server's ``Retry-After`` when given, else the schedule."""
+        exc = state.outcome.exception() if state.outcome else None
+        asked = retry_after_seconds(exc) if exc is not None else None
+        scheduled = self.retry_wait(state)
+        return max(asked, scheduled) if asked is not None else scheduled
+
     # -- pacing / retry ----------------------------------------------------------
 
     def _throttle(self) -> None:
@@ -117,7 +142,7 @@ class HttpBackend(Session, Backend):
             @retry(
                 retry=retry_if_exception(lambda exc: _retryable(exc, self.retry_codes)),
                 stop=stop_after_attempt(self.retries),
-                wait=self.retry_wait,
+                wait=self._wait,
                 reraise=True,
                 before_sleep=_log_retry,
             )
@@ -152,11 +177,36 @@ class HttpBackend(Session, Backend):
     def fetch(self, url: str, **kw) -> httpx.Response:
         return self.request("GET", url, **kw)
 
-    def _cache_key(self, url: str) -> str:
-        return f"{self.name}|{url}|{self.headers.get('Accept', '')}|{self.UA}"
+    def _cache_key(self, url: str, headers: dict | None = None) -> str:
+        extra = "" if not headers else "|" + ";".join(f"{k}={v}" for k, v in sorted(headers.items()))
+        return f"{self.name}|{url}|{self.headers.get('Accept', '')}|{self.UA}{extra}"
+
+    def _cache_slot(self, url: str, kw: dict) -> str | None:
+        if self.cacheable and cache.enabled():
+            return self._cache_key(url, kw.get("headers"))
+        return None
 
     def fetch_json(self, url: str, **kw) -> Any:
-        return json.loads(self.fetch_text(url, **kw))
+        """GET and parse JSON; only a body that really parses is cached.
+
+        Caching before parsing meant a 200 WAF/error page stayed in the cache for a day and kept
+        failing every later attempt, retries included.
+        """
+        key = self._cache_slot(url, kw)
+        if key is not None:
+            hit = cache.get(key)
+            if hit is not None:
+                try:
+                    data = json.loads(hit)
+                    log(f"cache hit {self.name}: {debug.mask(url)}")
+                    return data
+                except ValueError:
+                    pass  # stale/garbled entry: take the network path
+        body = self.fetch(url, **kw).text
+        data = json.loads(body)
+        if key is not None:
+            cache.put(key, body)
+        return data
 
     def fetch_text(self, url: str, **kw) -> str:
         """GET as text, through the response cache when this backend allows it.
@@ -164,9 +214,8 @@ class HttpBackend(Session, Backend):
         The retry/pacing path is skipped on a hit, which is the point: a repeated search
         should not spend the site's budget again.
         """
-        key = None
-        if self.cacheable and cache.enabled():
-            key = self._cache_key(url)
+        key = self._cache_slot(url, kw)
+        if key is not None:
             hit = cache.get(key)
             if hit is not None:
                 log(f"cache hit {self.name}: {debug.mask(url)}")

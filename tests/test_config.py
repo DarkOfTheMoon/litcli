@@ -109,6 +109,31 @@ class TestConfig(unittest.TestCase):
         self.assertIn("api_key = \"a\\\"b\\\\c\"", cfg.read_text())
 
     @unittest.skipIf(os.name == "nt", "chmod only clears the read-only bit on Windows")
+    def test_defaults_do_not_leak_between_loads(self):
+        empty = Path(tempfile.mkdtemp())  # no config.toml: the built-in default answers
+        with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(empty)}):
+            os.environ.pop(config.CONFIG_ENV, None)
+            first = config.load_config()
+            self.assertIn("zotero", first["backends"])
+            first["backends"]["zotero"]["api_key"] = "MUTATED"
+            second = config.load_config()
+        self.assertNotIn("api_key", second["backends"]["zotero"])
+
+    @unittest.skipIf(os.name == "nt", "XDG_CONFIG_HOME is POSIX-only")
+    def test_xdg_config_home_set_after_import_moves_the_default(self):
+        # tempfile.mkdtemp never happens to exist before the call, so the default must be
+        # resolved per call rather than frozen at import time.
+        d = Path(tempfile.mkdtemp())
+        (d / "litcli").mkdir()
+        (d / "litcli" / "config.toml").write_text("[backends.arxiv]\ntype = \"arxiv\"\n", encoding="utf-8")
+        with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(d)}):
+            os.environ.pop(config.CONFIG_ENV, None)
+            self.assertEqual(config.load_config(), {"backends": {"arxiv": {"type": "arxiv"}}})
+            target = config.write_backend_key("zotero", "K")
+        self.assertEqual(target, d / "litcli" / "config.toml")
+        self.assertIn("[backends.zotero]", (d / "litcli" / "config.toml").read_text())
+
+    @unittest.skipIf(os.name == "nt", "chmod only clears the read-only bit on Windows")
     def test_write_backend_key_restricts_permissions(self):
         # The file holds a credential; it must be owner-only regardless of the umask.
         d = Path(tempfile.mkdtemp())

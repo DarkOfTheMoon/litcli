@@ -68,6 +68,17 @@ class CliSurfaceTest(unittest.TestCase):
         self.assertEqual(set(_subparsers(self.parser)) - dispatched, set())
         self.assertEqual(set(cli._DATA_COMMANDS), EXPECTED_PARENTS["data"])
 
+    def test_every_nested_command_has_a_handler(self):
+        """``backends`` children each reach a function (or the documented ``list`` fallback)."""
+        from litcli.commands import diagnostics
+
+        children = set(_subparsers(_subparsers(self.parser)["backends"]))
+        self.assertEqual(children - set(diagnostics._SUBCOMMANDS), {"list"})
+        self.assertEqual(set(diagnostics._SUBCOMMANDS) - children, set())
+
+    def test_every_graph_edge_maps_to_a_parser_command(self):
+        self.assertLessEqual(set(graph.EDGE_METHODS), set(_subparsers(self.parser)))
+
     def test_completion_spec_covers_the_surface(self):
         spec = completions_mod.build_spec(self.parser)
         self.assertEqual(set(spec["top"]), EXPECTED)

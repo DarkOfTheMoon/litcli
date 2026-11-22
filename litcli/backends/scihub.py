@@ -256,6 +256,10 @@ def resolve(doi: str, mirrors=None, timeout: int = 30, http: _Http | None = None
                         "pdf_url": pdf_url, "meta": parse_citation_meta(html)}
             except (LitcliError, RuntimeError) as e:
                 errors.append(f"{mirror}: {e}")
+        if errors and not_found:
+            # One mirror's "not here" says nothing about the mirrors that never answered.
+            raise Unavailable(f"[scihub] no mirror answered for {clean}: "
+                              f"{not_found} not-found, {'; '.join(errors)}")
         if not_found:
             raise KeyError(f"[scihub] {clean} is not in the library")
         raise Unavailable(f"[scihub] all mirrors failed ({'; '.join(errors)})")

@@ -51,19 +51,26 @@ def present(item: AcademicItem, fmt: str = "table", no_cite: bool = False,
     return line
 
 
+def _note_public(items: list[AcademicItem]) -> None:
+    """One stderr line when any hit is a non-OA mirror copy (who owes the licence check)."""
+    if any(it.access == "public" for it in items):
+        print("[note] [public] = copy from a non-OA mirror (Sci-Hub / Z-Library), "
+              "not an open-access licence — check the licence before reuse", file=sys.stderr)
+
+
 def print_items(items: list[AcademicItem], fmt: str, no_cite: bool, empty_msg: str,
                 snippet: bool = False) -> int:
     """Render a list of items (json/csl single-line blocks, or table rows) + ``empty_msg`` fallback."""
     if fmt in ("json", "csl"):
+        # The legend is on stderr in every format: JSON has only the ``access`` value, and the
+        # licence duty is the part a value cannot carry.
+        _note_public(items)
         if not items:
             print("[]")  # machine-readable empty list, not a silent blank stdout
         for it in items:
             print(present(it, fmt, no_cite))
         return 0
-    if fmt == "table" and any(it.access == "public" for it in items):
-        # Who owes the licence check is the one thing a reader cannot see from a row.
-        print("[note] [public] = copy from a non-OA mirror (Sci-Hub / Z-Library), "
-              "not an open-access licence — check the licence before reuse", file=sys.stderr)
+    _note_public(items)
     for it in items:
         print(present(it, "table", no_cite, snippet))
     if not items:

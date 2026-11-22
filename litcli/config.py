@@ -6,6 +6,7 @@ are not ready.
 """
 from __future__ import annotations
 
+import copy
 import os
 import tomllib
 from functools import cache
@@ -24,17 +25,25 @@ _INBUILT_DEFAULT = {"backends": {
 }}
 
 CONFIG_ENV = "LITCLI_CONFIG"
-DEFAULT_CONFIG = config_dir() / "config.toml"
+
+
+def default_config_path() -> Path:
+    """The per-user config file. Resolved per call, so an ``XDG_CONFIG_HOME`` set after import
+    (a wrapper, a test) still points the default at the right place."""
+    return config_dir() / "config.toml"
 
 
 def load_config(path: str | Path | None = None) -> dict:
     """Load config; precedence: explicit path > env var LITCLI_CONFIG > the per-user default
     (``%APPDATA%\\litcli`` on Windows, ``~/.config/litcli`` elsewhere) > built-in default."""
-    for candidate in (path, Path(os.environ[CONFIG_ENV]) if CONFIG_ENV in os.environ else None, DEFAULT_CONFIG):
+    for candidate in (path, Path(os.environ[CONFIG_ENV]) if CONFIG_ENV in os.environ else None,
+                      default_config_path()):
         if candidate and Path(candidate).exists():
             with open(candidate, "rb") as f:
                 return tomllib.load(f)
-    return dict(_INBUILT_DEFAULT)
+    # Deep copy: callers patch the dict (api_key, proxy), and the module constant must not leak
+    # those edits into the next load.
+    return copy.deepcopy(_INBUILT_DEFAULT)
 
 
 @cache
@@ -238,7 +247,8 @@ def write_backend_key(name: str, key: str, path: str | Path | None = None) -> Pa
     if the file doesn't exist, write the built-in default skeleton first so no default backend
     is lost. Returns the actual file path written.
     """
-    path = Path(path) if path else (Path(os.environ[CONFIG_ENV]) if CONFIG_ENV in os.environ else DEFAULT_CONFIG)
+    path = Path(path) if path else (
+        Path(os.environ[CONFIG_ENV]) if CONFIG_ENV in os.environ else default_config_path())
     text = path.read_text(encoding="utf-8") if path.exists() else _default_toml_text()
     text = _upsert_key(text, f"backends.{name}", "api_key", _toml_string(key))
     path.parent.mkdir(parents=True, exist_ok=True)

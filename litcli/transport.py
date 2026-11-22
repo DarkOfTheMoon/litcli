@@ -9,6 +9,8 @@ on the backend package, and keeps the proxy in one place instead of a global in 
 """
 from __future__ import annotations
 
+import threading
+
 import httpx
 
 from .debug import hooks
@@ -74,16 +76,20 @@ class Session:
         self.http2 = http2
         self._transport = transport
         self._client: httpx.Client | None = None
+        self._client_lock = threading.Lock()
 
     @property
     def client(self) -> httpx.Client:
-        if self._client is None:
-            self._client = httpx.Client(
-                headers={"User-Agent": self.UA, **self.headers},
-                timeout=httpx.Timeout(self.timeout), follow_redirects=self.follow_redirects,
-                http2=self.http2, proxy=proxy() or None, transport=self._transport,
-                event_hooks=hooks())
-        return self._client
+        # Backends fan out from several threads (openalex fetches inline work lists in parallel);
+        # without the lock each racer builds a pool and the loser is never closed.
+        with self._client_lock:
+            if self._client is None:
+                self._client = httpx.Client(
+                    headers={"User-Agent": self.UA, **self.headers},
+                    timeout=httpx.Timeout(self.timeout), follow_redirects=self.follow_redirects,
+                    http2=self.http2, proxy=proxy() or None, transport=self._transport,
+                    event_hooks=hooks())
+            return self._client
 
     def has_cookie(self, suffix: str) -> bool:
         """True when the jar holds a non-empty cookie whose name ends with ``suffix``."""

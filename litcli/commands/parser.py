@@ -28,13 +28,15 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     # --- Top-level: search / export / diagnostics ---
-    p = sub.add_parser("search", help="search every enabled backend (read-only); --backend narrows to one")
+    p = sub.add_parser("search", help="search every configured backend plus the keyless OA corpora "
+                                      "(read-only); --backend narrows to one")
     p.add_argument("query")
     only = p.add_mutually_exclusive_group()
     only.add_argument("--backend", default=None,
                       help="search this backend only (default: all enabled backends + keyless OA corpora)")
     only.add_argument("--all", action="store_true", help="explicit form of the default (all backends)")
-    p.add_argument("--limit", type=int, default=10, help="max results overall (default 10)")
+    p.add_argument("--limit", type=int, default=10,
+                   help="max results overall (default 10; 0 or less = no cap)")
     p.add_argument("--format", choices=["table", "json", "csl"], default="table")
     p.add_argument("--type", default=None, help="filter by item type (article/book/chapter/patent/...), reduce noise")
     p.add_argument("--title", default=None, help="narrow by title term (field-level filter, AND)")
@@ -42,7 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--year", default=None, help="narrow by publication year, e.g. 2018")
     p.add_argument("--container", default=None, help="narrow by journal / book title")
     p.add_argument("--sort", choices=["cited"], default=None,
-                   help="sort descending by citation count (default is descending by year)")
+                   help="sort descending by citation count (default: by relevance to the query)")
     p.add_argument("--no-cite", action="store_true", help="do not show in-text citations in table mode")
 
     for name, help_ in (("refs", "references (bibliography): works cited by this item, look backward for foundations"),
@@ -50,7 +52,9 @@ def build_parser() -> argparse.ArgumentParser:
                         ("related", "semantically related works (OpenAlex related_works, neighbors)")):
         pg = sub.add_parser(name, help=help_)
         pg.add_argument("key")
-        pg.add_argument("--backend", default="openalex", help="backend (default openalex; only openalex implements it)")
+        pg.add_argument("--backend", default=None,
+                        help="backend (default openalex; only openalex implements it; "
+                             "a 'source/key' prefix also selects it)")
         pg.add_argument("--limit", type=int, default=5)
         pg.add_argument("--format", choices=["table", "json", "csl"], default="table")
         pg.add_argument("--sort", choices=["cited"], default=None,
@@ -62,6 +66,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("key", nargs="+", help="one or more item keys")
     add_common_backend(p)
     p.add_argument("--format", choices=["csljson", "bibtex", "ris", "text"], default="csljson")
+    p.add_argument("--no-cite", action="store_true",
+                   help="with --format text, print the bibliography without the in-text citation")
 
     cp = sub.add_parser("completions", help="generate shell completion scripts (enable via eval; bash/zsh/fish)")
     cp.add_argument("shell", choices=SHELL_CHOICES, help="target shell")
@@ -145,9 +151,10 @@ def build_parser() -> argparse.ArgumentParser:
     #: and unquoted book titles still parse; ``cmd_fetch`` joins them back together.
     f.add_argument("extra", nargs="*", metavar="target", help=argparse.SUPPRESS)
     f.add_argument("--book", action="store_true",
-                   help="treat the target as a book title/ISBN and use a book backend")
+                   help="treat the target as a book title and use a book backend (an ISBN also "
+                        "takes the book path without this flag)")
     f.add_argument("--backend", default=None,
-                   help="book backend (default zlibrary; ignored without --book)")
+                   help="book backend (default zlibrary; a bare DOI/arXiv id is not a book)")
     f.add_argument("--no-download", action="store_true", help="print the link instead of saving the file")
     f.add_argument("--download", action="store_true",
                    help=argparse.SUPPRESS)  # 0.1 flag: downloading is the default now

@@ -53,7 +53,8 @@ def extract_text(pdf: str | bytes, max_chars: int | None = None, first_page: boo
         cmd = ["pdftotext", "-layout"]
         if first_page:
             cmd += ["-f", "1", "-l", "1"]
-        cmd += [path, "-"]
+        # ``--`` so a path starting with ``-`` is read as a file, not as another option.
+        cmd += ["--", path, "-"]
         # pdftotext emits UTF-8; decode it explicitly, or a Windows console code page (cp936,
         # cp1252) mangles non-ASCII text.
         proc = subprocess.run(cmd, capture_output=True, text=True,

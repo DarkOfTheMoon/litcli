@@ -178,6 +178,9 @@ class OpenAlexBackend(HttpBackend):
                 break
         if k.lower().startswith(("https://doi.org/", "http://doi.org/")):
             k = k.split("doi.org/", 1)[1]
+        if k.startswith(("works/", "Works/")):
+            # A copied landing-page URL keeps its path after the host prefix was stripped.
+            k = k.split("/", 1)[1]
         if k.startswith("W") and "/" in k:
             k = k.rsplit("/", 1)[-1]
         k = k.rstrip("/")
@@ -197,7 +200,9 @@ class OpenAlexBackend(HttpBackend):
         # Free query + container term go into the free-text ``search`` (OpenAlex has no
         # hard container filter; ``primary_location.source.display_name.search`` 400s).
         terms = [t for t in (query, filters.get("container")) if t]
-        params: dict = {"search": " ".join(terms), "per_page": limit}
+        # per_page is capped at 200 server-side; 0 or 300 is a 400, which would silently drop
+        # the whole source from a fan-out.
+        params: dict = {"search": " ".join(terms), "per_page": min(max(limit, 1), 200)}
         oa_filters = []
         # OpenAlex splits ``filter`` on commas, so a value containing one (e.g. author
         # "Bonaventura, J.") must be double-quoted or the whole query 400s.

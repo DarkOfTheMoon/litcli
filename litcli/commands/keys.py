@@ -35,6 +35,9 @@ def normalize_export_key(key: str, backend_name: str) -> str:
         return key
     if backend_name == "arxiv":
         return aid
+    if backend_name not in ("openalex", "crossref"):
+        # A local store resolves its own item keys; handing it a DOI would 404.
+        return key
     return f"10.48550/arxiv.{aid}"
 
 

@@ -120,13 +120,6 @@ class FlagTest(unittest.TestCase):
         self.assertTrue(debug.enabled())
         self.assertIn("[debug] litcli", err.getvalue())
 
-    def _main(self, argv, **patches):
-        ctx = [mock.patch.object(cli, k, **v) for k, v in patches.items()]
-        for c in ctx:
-            c.start()
-            self.addCleanup(c.stop)
-        return cli.main(argv)
-
     def test_it_is_not_printable_to_stdout(self):
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.dict(cli._TOP_LEVEL_COMMANDS, {"search": mock.Mock(return_value=0)}), \
@@ -138,16 +131,18 @@ class FlagTest(unittest.TestCase):
         self.assertIn("[debug]", err.getvalue())
         self.assertEqual(out.getvalue(), "")
 
-    def test_an_unexpected_failure_shows_a_traceback_only_with_the_flag(self):
+    def test_an_unexpected_failure_is_a_traced_error_with_exit_2(self):
         boom = ZeroDivisionError("boom")
         for argv, expected in ((["--debug", "search", "x"], True), (["search", "x"], False)):
             debug._ENABLED = False
             err = io.StringIO()
             with mock.patch.object(cli, "load_config", side_effect=boom), \
                     mock.patch.object(cli, "_apply_proxy"), \
-                    contextlib.redirect_stderr(err), \
-                    self.assertRaises(ZeroDivisionError):
-                cli.main(argv)
+                    contextlib.redirect_stderr(err):
+                rc = cli.main(argv)
+            # 2, not the 1 that a traceback-used-to-mean (1 is fetch's "no fulltext").
+            self.assertEqual(rc, 2, argv)
+            self.assertIn("[error] unexpected: ZeroDivisionError: boom", err.getvalue())
             self.assertEqual("Traceback" in err.getvalue(), expected, argv)
 
 

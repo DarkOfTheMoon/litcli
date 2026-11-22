@@ -54,7 +54,28 @@ class RoundTripTest(_TmpCache):
         self.assertEqual(cache.clear(), 0)
 
 
-class BackendCacheTest(_TmpCache):
+class PruneTest(_TmpCache):
+    def _age(self, key, seconds):
+        old = cache._path(key)
+        stamp = old.stat().st_atime - seconds
+        os.utime(old, (stamp, stamp))
+
+    def test_expired_entries_go_before_fresh_ones(self):
+        for i in range(2):
+            cache.put(f"stale{i}", "x")
+            self._age(f"stale{i}", cache.TTL + 60)
+        with mock.patch.object(cache, "MAX_ENTRIES", 3):
+            for i in range(5):
+                cache.put(f"fresh{i}", "x")
+        left = {p.name for p in Path(self._dir).rglob("*") if p.is_file()}
+        self.assertEqual(left, {cache._path(f"fresh{i}").name for i in (2, 3, 4)})
+
+    def test_prune_below_the_cap_removes_nothing(self):
+        cache.put("a", "x")
+        cache.put("b", "x")
+        with mock.patch.object(cache, "MAX_ENTRIES", 10):
+            cache._maybe_prune()
+        self.assertEqual((cache.get("a"), cache.get("b")), ("x", "x"))
     def setUp(self):
         super().setUp()
         self.be = OpenAlexBackend(mailto="t@e.com")
@@ -81,6 +102,43 @@ class BackendCacheTest(_TmpCache):
         self.be.cacheable = True
         self.assertEqual(self.be.fetch_json("https://api.openalex.org/works?q=b"), {"n": 2})
         self.assertEqual(len(first.urls), 1)
+
+
+class ConcurrencyTest(_TmpCache):
+    """Writers fan out from several threads; a shared temp name would truncate entries."""
+
+    def _hammer(self, keys, workers=8):
+        import threading
+
+        errors = []
+
+        def work(slot):
+            for i in keys:
+                try:
+                    cache.put(f"{slot}-{i}", f"body-{slot}-{i}")
+                except Exception as e:  # pragma: no cover - surfaced through the assert
+                    errors.append(e)
+
+        threads = [threading.Thread(target=work, args=(n,)) for n in range(workers)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        return errors
+
+    def test_distinct_keys_from_many_threads_all_stay_readable(self):
+        self.assertEqual(self._hammer(range(5)), [])
+        for slot in range(8):
+            for i in range(5):
+                self.assertEqual(cache.get(f"{slot}-{i}"), f"body-{slot}-{i}")
+
+    def test_no_temp_files_are_left_behind(self):
+        self._hammer(range(3), workers=4)
+        self.assertEqual([p for p in Path(self._dir).rglob("*.tmp")], [])
+
+    def test_the_same_key_written_by_many_threads_ends_valid(self):
+        self._hammer([0], workers=8)
+        self.assertEqual(cache.get("0-0"), "body-0-0")
 
 
 class FlagTest(unittest.TestCase):

@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import unicodedata
 from pathlib import Path
 
 APP_DIR = "litcli"
@@ -18,7 +19,9 @@ APP_DIR = "litcli"
 #: Characters Windows rejects in a path component (POSIX only rejects ``/`` and NUL).
 #: Old-style DOIs really do contain three of them, e.g.
 #: ``10.1002/(SICI)1097-0258(19970815)16:15<1705::AID-SIM599>3.0.CO;2-H``.
-_ILLEGAL = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+#: DEL is included with the C0 range; Unicode format characters (``Cf``: zero-width space,
+#: soft hyphen, the LRM/RLM marks copy-pasted from PDFs) are dropped separately.
+_ILLEGAL = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f]')
 
 #: Device names Windows reserves even with an extension: ``CON.pdf`` still opens the device.
 _RESERVED = ({"con", "prn", "aux", "nul"}
@@ -64,6 +67,7 @@ def safe_filename(stem: str, ext: str) -> str:
     strips, so ``a.`` and ``a`` would collide) are trimmed, an over-long stem is truncated,
     and a reserved device name gets a trailing ``_``.
     """
+    stem = "".join(ch for ch in stem if unicodedata.category(ch) != "Cf")
     name = re.sub(r"_+", "_", _ILLEGAL.sub("_", stem)).strip("_. ")
     name = name[:_MAX_STEM].rstrip(". _")
     if not name:

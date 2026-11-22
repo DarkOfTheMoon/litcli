@@ -23,7 +23,7 @@ own library.
 ```bash
 python3 -m venv .venv && . .venv/bin/activate                    # or use an environment you have
 pip install .                                                    # Debian/Ubuntu PEP 668: use ./install.sh
-litcli search "graph neural network" --limit 5            # every source by default; the key is the DOI
+litcli search "graph neural network" --limit 5            # every source by default; column 1 is `source/key`
 litcli data get 10.1038/s41598-024-80509-9 --backend crossref --format json
 litcli export 10.1038/s41598-024-80509-9 --backend crossref --format csljson
 litcli fetch 10.1038/s41598-024-80509-9            # saved to the current directory; stdout is the path
@@ -82,20 +82,24 @@ inside the checkout. In-repo development on Linux uses `./bin/litcli`. PDF previ
 `pdftotext.exe` from poppler on `PATH`; completion covers bash/zsh/fish only.
 
 Config lands per platform (`%APPDATA%\litcli\config.toml` on Windows, `~/.config/litcli/`
-elsewhere). Upgrading means rerunning `./install.sh` (it overwrites the snapshot); uninstall with `pip uninstall litcli` and
-remove `~/.config/litcli` and `~/.local/share/litcli`.
+elsewhere). Upgrading means rerunning `./install.sh` (it overwrites the snapshot); uninstall with
+`pip uninstall --break-system-packages litcli` (PEP 668 machines; not needed in a venv) and remove
+`~/.config/litcli` and `~/.local/share/litcli`.
 
 Everything stays local: citations go into your own Zotero library, config into
 `~/.config/litcli/config.toml`, and the only outbound traffic is to the upstream APIs. `install.sh`
 also distributes `skills/litcli/SKILL.md` to any detected agent (Claude Code / Codex / Cursor /
-Gemini) and keeps a neutral copy under `~/.local/share/litcli/skill/`.
+Gemini) and keeps a neutral copy under `~/.local/share/litcli/skill/`. `--no-skills` skips them,
+`--skills-only` installs nothing but skills, and `--skills claude,cursor` targets named agents.
 
 ## Commands
 
-`--backend` picks the source (default `zotero`); a key may also carry its source prefix (`openalex/W123`,
-`zotero/AB12`), which routes by prefix with `--backend` still winning. `--all` aggregates across the backends
-**enabled in your config**, de-duplicates and tags `extra["sources"]`. The second column of a result row is the
-key; both forms are accepted. Exit codes: `0` success (including no results), `2` error or unsupported backend.
+`--backend` narrows to one source (unset means every configured source plus the keyless OA corpora); a key may
+also carry its source prefix (`openalex/W123`, `zotero/AB12`), which routes by prefix with `--backend` still
+winning. `--all` and `--backend` are mutually exclusive. Aggregation de-duplicates (same work across sources
+becomes one row, DOI/ISBN first) and tags `extra["sources"]`. The first column of a result row is `source/key`;
+both forms are accepted. Exit codes: `0` success (including no results), `2` error or unsupported backend,
+`1` for `fetch` meaning "no fulltext".
 
 Search fans out: **a single failing source is silent by default** — `--verbose` (or `LITCLI_VERBOSE=1`) names
 which source failed and why. When every source failed it says so even without the flag and exits `2`, since that
@@ -116,19 +120,27 @@ first; `--sort cited` switches to a pure citation ranking. Field filters are sen
 locally, so a source that ignores one cannot leak records. A citation badge reads `[cited N via source]` and says
 `(sources disagree)` when sources report different counts.
 
+How each backend maps a filter (a backend without the field folds it into free text, or ignores it):
+
+- **crossref** → `query.title` / `query.author` / `query.container-title` / `filter=from-pub-date,until-pub-date`
+- **openalex** → `filter=title.search:` / `raw_author_name.search:` / `publication_year:`; `container` folds into free text
+- **arxiv** → `ti:` / `au:` / `submittedDate:[…]`, AND-joined into `search_query`
+- **zotero** → everything folds into a single `q` (`qmode=everything`, all fields)
+
 **Read-only**
 
 | Command | What it does |
 |---|---|
 | `litcli search "X" [--all] [--backend B] [--type T] [--limit N] [--format table\|json\|csl]` | candidate search; field filters and sorting below |
-| `litcli refs <key>` / `citing <key>` / `related <key>` | cited works / citing works / semantic neighbours (OpenAlex graph; with no neighbour list it falls back to a title-term search and says so) |
+| `litcli refs <key>` / `citing <key>` / `related <key>` (all take `--limit N`, `--sort cited`) | cited works / citing works / semantic neighbours (OpenAlex graph; with no neighbour list it falls back to a title-term search and says so) |
 | `litcli export <key>... [--format csljson\|bibtex\|ris\|text] [--no-cite]` | citations; `csljson` feeds `pandoc --citeproc`. arXiv keys normalise to a DOI only with `--backend openalex\|crossref` |
 | `litcli fetch <doi\|arXiv id> [--out DIR] [--no-download] [--scihub]` (the old `fetch fulltext <doi>` and the `--download` flag are still accepted) | save the fulltext: local store → Unpaywall → OpenAlex → Europe PMC → Zenodo → landing page |
 | `litcli fetch --book "title\|ISBN" [--backend zlibrary\|doab\|openlibrary] [--pick N]` | book candidates → pick → full metadata → save the file (an ISBN takes this path automatically) |
 | `litcli backends authorize zotero` | one-off write authorization (local dialog) |
-| `litcli data add --title "..." --creator "Family, Given" [--doi ..] [--force]` / `data add --pdf|--csl <file>` | ingest metadata (dedupe gate, `--force` skips), heuristics from page 1 (y/N), or CSL JSON |
-| `litcli data get <key>` · `data tree` · `data members <coll> [--limit N]` | read one record; browse collections |
+| `litcli data add --title "..." --creator "Family, Given" [--year ..] [--doi ..] [--force]` / `data add --pdf|--csl <file>` | ingest metadata (dedupe gate, `--force` skips), heuristics from page 1 (y/N), or CSL JSON |
+| `litcli data get <key> [--format table\|json\|csl]` · `data tree` · `data members <coll> [--limit N] [--format table\|json]` | read one record; browse collections |
 | `litcli backends list/status` · `litcli completions <bash\|zsh\|fish>` | diagnostics, shell completion |
+| `litcli backends install-browser [--check] [--dry-run] [--with-deps]` | download the browser; `--check` launches it headless, `--dry-run` only shows the source, `--with-deps` apt-installs OS libraries |
 | `litcli --no-cache <command>` | bypass the response cache (`LITCLI_NO_CACHE=1` does the same); entries live 24 h and only successful metadata reads are kept |
 | `litcli --verbose <command>` | per-source failure lines for a search (silent by default; `LITCLI_VERBOSE=1` does the same), stderr only |
 | `litcli --debug <command>` | one line per request, status, duration, pacing wait and retry on stderr (`LITCLI_DEBUG=1` does the same); unexpected exceptions also print the stack. stdout is untouched |
@@ -144,7 +156,9 @@ locally, so a source that ignores one cannot leak records. A citation badge read
 ## Backends and what they may fetch
 
 Zotero, arXiv, Crossref and OpenAlex are enabled by default. Every other backend works with a one-off `--backend`
-without any config; you only add it to `config.toml` to include it in `--all` or the default `fetch` chain.
+without any config. The keyless OA corpora (`doaj`/`europepmc`/`doab`/`zenodo`) need no config to take part in
+`--all` and the default `fetch` chain; `config.toml` is for tuning them or opting other backends (`uspto`,
+`cnki`, `douban`) into the aggregation.
 
 | Backend | Access | What is fetched |
 |---|---|---|

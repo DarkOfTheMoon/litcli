@@ -101,7 +101,7 @@ class CrossrefBackend(HttpBackend):
 
     def search(self, query: str, limit: int = 10, filters: dict | None = None) -> list[AcademicItem]:
         filters = self._filters(filters)
-        params: dict = {"query.bibliographic": query, "rows": limit}
+        params: dict = {"query.bibliographic": query, "rows": min(max(limit, 1), 1000)}
         for key, qparam in (("title", "query.title"),
                             ("author", "query.author"),
                             ("container", "query.container-title")):

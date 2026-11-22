@@ -307,12 +307,14 @@ class FetchBookTest(unittest.TestCase):
         with mock.patch("litcli.commands.fetch.get_backend", return_value=backend), \
                 contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
             rc = cli.main(argv)
-        return rc, buf.getvalue() + err.getvalue()
+        return rc, buf.getvalue(), err.getvalue()
 
     def test_download_on_a_metadata_only_backend_reports_the_page(self):
-        rc, out = self._run(["fetch", "--book", "x", "--backend", "openlibrary"], self.OpenLibrary())
+        rc, out, err = self._run(["fetch", "--book", "x", "--backend", "openlibrary"], self.OpenLibrary())
         self.assertEqual(rc, 1)  # the record resolved, but no bytes exist to save
-        self.assertIn("has no downloadable file", out)
+        self.assertIn("has no downloadable file", err)
+        # stdio contract: stdout is only the machine-readable link; the reason goes to stderr.
+        self.assertEqual(out, "https://openlibrary.org/books/OL1M\n")
 
     class MetadataOnly(Backend):
         name = "openlibrary"
@@ -325,14 +327,120 @@ class FetchBookTest(unittest.TestCase):
                                 url="https://openlibrary.org/books/OL1M")
 
     def test_metadata_only_backend_has_no_download_hint(self):
-        _rc, out = self._run(["fetch", "--book", "x", "--backend", "openlibrary"], self.MetadataOnly())
-        self.assertIn("metadata only, no file", out)
-        self.assertNotIn("Add --download", out)
+        _rc, _out, err = self._run(["fetch", "--book", "x", "--backend", "openlibrary"], self.MetadataOnly())
+        self.assertIn("metadata only, no file", err)
+        self.assertNotIn("Add --download", err)
 
     def test_a_public_copy_is_labelled_even_under_a_renamed_backend(self):
-        _rc, out = self._run(["fetch", "--book", "x", "--backend", "books"], self.PublicCopy())
-        self.assertIn("public copy, not an open-access licence", out)
-        self.assertNotIn("record (open access)", out)
+        _rc, _out, err = self._run(["fetch", "--book", "x", "--backend", "books"], self.PublicCopy())
+        self.assertIn("public copy, not an open-access licence", err)
+        self.assertNotIn("record (open access)", err)
+
+    def test_an_empty_target_is_an_error(self):
+        # A bare legacy verb leaves nothing behind once the verb is stripped.
+        rc, out, err = self._run(["fetch", "fulltext"], self.OpenLibrary())
+        self.assertEqual((rc, out), (2, ""))
+        self.assertIn("[error] empty target", err)
+
+    def test_a_pick_outside_the_candidates_is_an_error(self):
+        rc, out, err = self._run(["fetch", "--book", "x", "--backend", "openlibrary", "--pick", "3"],
+                                 self.OpenLibrary())
+        self.assertEqual(rc, 2)
+        self.assertEqual(out, "")
+        self.assertIn("--pick 3 is outside 1..1", err)
+
+
+class FetchFulltextTest(unittest.TestCase):
+    """The paper chain end-to-end in ``cmd_fetch``: save / print / refuse, and the exit codes.
+
+    Resolvers and the byte download are injected; the cwd is a scratch directory so a save
+    really lands on disk and can be checked.
+    """
+
+    def setUp(self):
+        import contextlib
+        import io
+        import tempfile
+        from unittest import mock
+
+        self.out, self.err = io.StringIO(), io.StringIO()
+        self.dir = tempfile.mkdtemp()
+        self.cwd = os.getcwd()
+        os.chdir(self.dir)
+        self.addCleanup(os.chdir, self.cwd)
+        for patcher in (mock.patch("litcli.commands.fetch.get_all_backends", return_value={}),
+                        mock.patch("litcli.commands.fetch._optional_backend", return_value=None)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        out_ctx = contextlib.redirect_stdout(self.out)
+        err_ctx = contextlib.redirect_stderr(self.err)
+        out_ctx.__enter__()
+        err_ctx.__enter__()
+        self.addCleanup(out_ctx.__exit__, None, None, None)
+        self.addCleanup(err_ctx.__exit__, None, None, None)
+
+    def _run(self, argv, info, download=None):
+        from unittest import mock
+
+        import litcli.cli as cli
+
+        with mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext", return_value=info):
+            if download is None:
+                rc = cli.main(argv)
+            else:
+                with mock.patch("litcli.commands.fetch.pdfutil.download", return_value=download):
+                    rc = cli.main(argv)
+        return rc, self.out.getvalue(), self.err.getvalue(), os.listdir(self.dir)
+
+    def test_a_missing_fulltext_exits_1_with_the_scihub_hint(self):
+        rc, out, err, files = self._run(["fetch", "10.1/x"], {"has_fulltext": False})
+        self.assertEqual((rc, out, files), (1, "", []))
+        self.assertIn("add --scihub", err)
+
+    def test_saved_bytes_go_to_disk_and_only_the_path_reaches_stdout(self):
+        info = {"has_fulltext": True, "kind": "local", "access": "local", "data": b"%PDF-1.4 x",
+                "source": "zotero", "key": "K1"}
+        rc, out, err, files = self._run(["fetch", "10.1/x", "--lines", "0"], info)
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, "10.1_x.pdf\n")  # a bare relative name in the cwd; nothing else
+        self.assertEqual(files, ["10.1_x.pdf"])
+        self.assertIn("Saved 10 bytes to 10.1_x.pdf", err)
+
+    def test_no_download_prints_the_attachment_url_and_writes_nothing(self):
+        info = {"has_fulltext": True, "kind": "local", "access": "local", "data": b"%PDF-1.4 x",
+                "source": "zotero", "key": "K1", "url": "https://local/K1"}
+        rc, out, _err, files = self._run(["fetch", "10.1/x", "--no-download"], info)
+        self.assertEqual((rc, out, files), (0, "https://local/K1\n", []))
+
+    def test_a_landing_page_only_returns_the_link_without_downloading(self):
+        info = {"has_fulltext": True, "kind": "unpaywall", "format": "html", "url": "https://legal/page"}
+        rc, out, err, files = self._run(["fetch", "10.1/x"], info)
+        self.assertEqual((rc, out, files), (0, "https://legal/page\n", []))
+        self.assertIn("landing page, not a file", err)
+
+    def test_a_paywall_page_instead_of_a_pdf_is_an_error_not_a_saved_file(self):
+        info = {"has_fulltext": True, "kind": "openalex", "format": "pdf", "url": "https://x/wall"}
+        rc, out, err, files = self._run(["fetch", "10.1/x"], info, download=b"<html>sign in</html>")
+        self.assertEqual((rc, out, files), (2, "", []))
+        self.assertIn("[error] not a PDF from https://x/wall", err)
+
+    def test_a_save_leaves_no_part_file_and_overwrites_cleanly(self):
+        info = {"has_fulltext": True, "kind": "local", "access": "local", "data": b"%PDF-1.4 new",
+                "source": "zotero", "key": "K1"}
+        written = os.path.join(self.dir, "10.1_x.pdf")
+        with open(written, "wb") as f:
+            f.write(b"%PDF-1.4 old")
+        rc, _out, _err, files = self._run(["fetch", "10.1/x"], info)
+        self.assertEqual((rc, files), (0, ["10.1_x.pdf"]))
+        with open(written, "rb") as f:
+            self.assertEqual(f.read(), b"%PDF-1.4 new")
+
+    def test_xml_fulltext_is_saved_with_an_xml_suffix(self):
+        info = {"has_fulltext": True, "kind": "europepmc", "format": "xml", "url": "https://x/fullTextXML"}
+        rc, out, _err, files = self._run(["fetch", "10.1/x"], info, download=b"<article/>")
+        self.assertEqual(rc, 0)
+        self.assertTrue(out.endswith(".xml\n"))
+        self.assertEqual(files, [f"{out.strip().rsplit(os.sep, 1)[-1]}"])
 
 
 class MainCatchTest(unittest.TestCase):
@@ -347,12 +455,14 @@ class MainCatchTest(unittest.TestCase):
 
         with mock.patch("litcli.cli.load_config", side_effect=tomllib.TOMLDecodeError("bad config")), \
              mock.patch("litcli.cli._apply_proxy"):
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
+            buf, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
                 rc = cli.main(["search", "x"])
         self.assertEqual(rc, 2)
-        self.assertIn("[error]", buf.getvalue())
-        self.assertNotIn("Traceback", buf.getvalue())
+        # Diagnostics go to stderr so a JSON/CSL stdout stays parseable.
+        self.assertEqual(buf.getvalue(), "")
+        self.assertIn("[error]", err.getvalue())
+        self.assertNotIn("Traceback", err.getvalue())
 
     def test_search_all_skips_valueerror_backend(self):
         # A single backend returning a non-JSON body (ValueError) must be skipped, not sink the search.

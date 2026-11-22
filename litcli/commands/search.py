@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import re
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from concurrent.futures import TimeoutError as FuturesTimeout
+import threading
+import time
 
 from ..aggregate import cited_key, merge_items
 from ..config import get_all_backends, get_backend
@@ -18,6 +18,43 @@ _TOKEN_RE = re.compile(r"\w+", re.UNICODE)
 
 #: Seconds the whole fan-out may take before the stragglers are given up on.
 DEADLINE = 45.0
+#: Sources searched at the same time.
+MAX_WORKERS = 4
+
+
+def _fan_out(backends: dict, query: str, limit: int, filters: dict,
+             deadline: float | None = None) -> dict[str, tuple]:
+    """Search ``backends`` in parallel and return ``{name: (items, exc)}`` for those that answered.
+
+    The workers are *daemon* threads: once ``deadline`` passes the caller walks away and a stuck
+    request cannot hold the process (``ThreadPoolExecutor`` threads are joined at interpreter
+    exit, which turned the 45-second cap into a 90-second one). A semaphore keeps at most
+    ``MAX_WORKERS`` requests in flight, and a name missing from the result was still running.
+    """
+    deadline = DEADLINE if deadline is None else deadline
+    results: dict[str, tuple] = {}
+    slots = threading.Semaphore(MAX_WORKERS)
+
+    def work(name: str) -> None:
+        with slots:
+            backend = backends[name]
+            try:
+                results[name] = (stamp(backend.search(query, limit=limit, filters=filters), backend),
+                                 None)
+            except Exception as exc:  # classified by the caller, whatever the type
+                results[name] = ([], exc)
+
+    threads = [threading.Thread(target=work, args=(name,), name=f"litcli-{name}", daemon=True)
+               for name in backends]
+    started = time.monotonic()
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        left = deadline - (time.monotonic() - started)
+        if left <= 0:
+            break
+        thread.join(left)
+    return results
 
 
 def _tokens(query: str) -> list[str]:
@@ -91,24 +128,7 @@ def cmd_search(cfg, args) -> int:
         # A few sources at a time: sequential fan-out at nine backends is slow and walks
         # straight into the rate limits the retries then have to back off from.
         names = list(backends)
-
-        def run(name: str):
-            try:
-                return name, stamp(backends[name].search(args.query, limit=args.limit,
-                                                         filters=filters), backends[name]), None
-            except Exception as exc:  # narrowed below, re-raised into the same handlers
-                return name, [], exc
-
-        pool = ThreadPoolExecutor(max_workers=min(4, len(names) or 1))
-        done: dict[str, tuple] = {}
-        pending = {pool.submit(run, n): n for n in names}
-        try:
-            for fut in as_completed(pending, timeout=DEADLINE):
-                name, found, exc = fut.result()
-                done[name] = (found, exc)
-        except FuturesTimeout:
-            pass  # whatever is left is reported as a timeout below
-        pool.shutdown(wait=False, cancel_futures=True)
+        done = _fan_out(backends, args.query, args.limit, filters)
         for name in names:
             if name not in done:
                 # A source that never answers must not hold the whole search hostage, which is
@@ -128,13 +148,11 @@ def cmd_search(cfg, args) -> int:
                     failed[e.kind] = failed.get(e.kind, 0) + 1
                     notice(f"[skipped] backend {name}: {e}"
                            + (f" ({e.hint})" if e.hint else ""))
-            elif isinstance(exc, (NotImplementedError, RuntimeError, OSError, ValueError, SyntaxError)):
-                # A single backend failure (timeout / non-JSON body / malformed XML) must not
-                # bring down the whole aggregation; count it and continue.
-                failed[type(exc).__name__] = failed.get(type(exc).__name__, 0) + 1
-                notice(f"[skipped] backend {name}: {exc}")
             else:
-                raise exc
+                # Any other failure (playwright's TimeoutError, a KeyError from a parser, ...) is
+                # still just one source failing: count it, keep the results the others gave.
+                failed[type(exc).__name__] = failed.get(type(exc).__name__, 0) + 1
+                notice(f"[skipped] backend {name}: {type(exc).__name__}: {exc}")
         if failed:
             summary = ", ".join(f"{kind}:{count}" for kind, count in sorted(failed.items()))
             notice(f"[partial] {sum(failed.values())}/{len(backends)} sources failed ({summary})")
@@ -177,6 +195,9 @@ def cmd_search(cfg, args) -> int:
 
     # --limit is a cap on what the caller sees, not per backend: nine backends at 10 each would
     # otherwise return ninety rows for a ten-row request.
-    items = items[:args.limit]
+    # A negative limit used to slice from the tail ("all but the last five"), which was nobody's
+    # intent; 0 and negatives now mean "no cap".
+    if args.limit and args.limit > 0:
+        items = items[:args.limit]
 
     return print_items(items, args.format, args.no_cite, "[no results]", snippet=True)

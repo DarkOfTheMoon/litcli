@@ -44,13 +44,23 @@ def _norm_doi(d: str) -> str:
 
 
 def _from_local(doi: str, backends: dict | None = None) -> dict | None:
-    """Local store first: for backends with attachment capability, locate an item by DOI and take its attachment."""
+    """Items already in reach of an attachment-capable backend, local store first.
+
+    The local store is tried before remote attachment backends (arXiv): a file on disk beats a
+    download, and only the local store's hit may be labelled ``local`` — an arXiv PDF taken over
+    the network is not a local copy.
+    """
     if not backends:
         return None
     want = _norm_doi(doi)
-    for name, b in backends.items():
+    order = sorted(backends.items(), key=lambda kv: getattr(kv[1], "access", "") != "local")
+    for name, b in order:
         if not b.can("attachment"):
             continue
+        # No ``access`` attribute means a plain store (a local one); the provenance labels are
+        # what tell a remote attachment backend (arXiv) apart.
+        access = getattr(b, "access", "") or "local"
+        local = access == "local"
         try:
             for item in b.search(doi, limit=8):
                 if _norm_doi(item.doi) != want and _norm_doi(item.url) != want:
@@ -60,8 +70,9 @@ def _from_local(doi: str, backends: dict | None = None) -> dict | None:
                 except (LitcliError, RuntimeError, OSError):
                     continue
                 if data:
-                    return {"kind": "local", "data": data, "title": item.title,
-                            "key": item.key, "source": name, "access": "local"}
+                    return {"kind": "local" if local else name, "data": data, "title": item.title,
+                            "key": item.key, "source": name, "url": item.url,
+                            "access": access}
         except (LitcliError, RuntimeError, OSError) as e:
             # The local store is the first hop on purpose; say when this hop did not run.
             notice(f"[skipped] local store {name}: {e}")

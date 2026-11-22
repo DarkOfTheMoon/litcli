@@ -8,16 +8,18 @@ to stderr so ``f=$(litcli fetch <id>)`` stays clean. Exit codes: 0 file saved, 1
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import sys
+import tempfile
 
 from .. import fulltext as fulltext_mod
 from .. import pdf as pdfutil
 from .. import provenance, unpaywall
 from ..backends.base import Backend, NotSupportedError
 from ..config import get_all_backends, get_backend
-from ..errors import LitcliError
+from ..errors import LitcliError, Unavailable
 from ..paths import target_path
 from .keys import normalize_related_key
 
@@ -52,6 +54,19 @@ def _optional_backend(name: str, cfg):
         return None
 
 
+def _verify(raw: bytes, fmt: str, url: str) -> None:
+    """Refuse to call a 200 a file when the bytes are a paywall/error page.
+
+    Only the local store and zlibrary/zenodo used to check; the OA paths would happily save a
+    login wall as ``<key>.pdf`` and exit 0.
+    """
+    if fmt == "pdf" and not raw.startswith(b"%PDF"):
+        head = raw[:120].decode("utf-8", "replace").replace("\n", " ").strip()
+        raise Unavailable(f"not a PDF from {url} (starts: {head!r})")
+    if fmt == "xml" and not raw.lstrip()[:1] == b"<":
+        raise Unavailable(f"not XML from {url}")
+
+
 def _save(raw: bytes, path: str, lines: int, verb: str = "Downloaded",
           extract=pdfutil.extract_text) -> None:
     """Write the fetched bytes to ``path`` and preview its first ``lines`` lines on stderr.
@@ -59,8 +74,18 @@ def _save(raw: bytes, path: str, lines: int, verb: str = "Downloaded",
     ``extract`` differs per format (PDF text via pdftotext, JATS XML, HTML); each takes the
     bytes and returns text.
     """
-    with open(path, "wb") as f:
-        f.write(raw)
+    # Write beside the target and rename: a reader never sees a half file, and a failed write
+    # leaves no truncated ``.pdf`` behind. ``mkstemp`` opens with O_EXCL and a unique name.
+    directory = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=f".{os.path.basename(path)}.", suffix=".part")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(raw)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
     note(f"  {verb} {len(raw)} bytes to {path}")
     if raw and lines:
         text = extract(raw)
@@ -131,8 +156,15 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
     if info.get("status"):
         note(f"  oa_status: {info['status']}")
 
-    if kind == "local":  # local-store hit: the attachment is already in hand
-        note(f"  local store [{info.get('source') or 'zotero'}] attachment matched (key={info.get('key')})")
+    if info.get("data") is not None:  # bytes in hand: local store, or an attachment backend
+        source = info.get("source") or kind
+        local = info.get("access") == "local"
+        label = (f"local store [{source}] attachment matched (key={info.get('key')})" if local
+                 else f"{source} attachment (key={info.get('key')})")
+        note(f"  {label}")
+        if args.no_download and info.get("url"):
+            out(info["url"])
+            return 0
         path = target_path(args.out, key, "pdf")
         _save(info["data"], path, args.lines, verb="Saved")
         out(path)
@@ -146,9 +178,10 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
         out(info["url"])
         return 0
 
+    raw = pdfutil.download(info["url"])
+    _verify(raw, fmt, info["url"])
     path = target_path(args.out, key, fmt)
-    _save(pdfutil.download(info["url"]), path, args.lines,
-          extract=_TEXT_EXTRACTORS.get(fmt, pdfutil.extract_text))
+    _save(raw, path, args.lines, extract=_TEXT_EXTRACTORS.get(fmt, pdfutil.extract_text))
     out(path)
     return 0
 

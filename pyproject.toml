@@ -1,5 +1,6 @@
 [build-system]
-requires = ["setuptools>=61"]
+# Upper bound: an unpinned setuptools changes packaging output under you between release runs.
+requires = ["setuptools>=61,<80"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -32,8 +33,8 @@ classifiers = [
 
 [project.optional-dependencies]
 # Browser-driven backends (install.sh --with-cnki / --with-douban installs these too).
-cnki = ["playwright>=1.40", "jieba>=0.42"]   # jieba: splits concatenated Chinese keywords
-douban = ["playwright>=1.40"]
+cnki = ["playwright>=1.40,<2", "jieba>=0.42"]   # jieba: splits concatenated Chinese keywords
+douban = ["playwright>=1.40,<2"]
 
 [project.urls]
 Homepage = "https://gitee.com/simult/litcli"

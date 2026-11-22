@@ -13,6 +13,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from litcli import config
+from litcli.commands.keys import _SOURCE_ALIASES
 from litcli.commands.parser import build_parser
 
 SKILL = os.path.join(os.path.dirname(__file__), "..", "skills", "litcli", "SKILL.md")
@@ -55,8 +56,11 @@ class SkillCommandTableTest(unittest.TestCase):
 
     def test_documented_backends_exist(self):
         registry = config._registry()
+        # `zotero` is a documented alias of the `zotero_local` backend type, not a registry key.
+        allowed = set(registry) | set(_SOURCE_ALIASES)
+        self.assertTrue(set(_SOURCE_ALIASES.values()) <= set(registry), "alias points at an unregistered backend")
         for name in _backends(self.text):
-            self.assertIn(name, registry, f"SKILL.md names `--backend {name}`, which is not a backend")
+            self.assertIn(name, allowed, f"SKILL.md names `--backend {name}`, which is not a backend")
 
 
 if __name__ == "__main__":

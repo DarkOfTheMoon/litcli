@@ -26,6 +26,8 @@ FILE_FLAGS = {"--pdf", "--csl", "--out"}
 # index counts non-command words that follow the resolved command path (``data attach`` has
 # ``key`` at 1 and ``src`` at 2).
 FILE_POSITIONALS = {("data", "attach"): {2: "src"}}
+# Flags ``cli`` accepts before or after any subcommand; offered on every command path.
+GLOBAL_FLAGS = ("--debug", "--verbose", "-v", "--no-cache")
 
 
 def build_spec(parser: argparse.ArgumentParser) -> dict:
@@ -36,7 +38,7 @@ def build_spec(parser: argparse.ArgumentParser) -> dict:
     tuple of command names (``()`` for the root).
     """
     spec: dict = {"top": [], "subs": {}, "opts": {}, "files": sorted(FILE_FLAGS),
-                  "file_positionals": FILE_POSITIONALS}
+                  "file_positionals": FILE_POSITIONALS, "booleans": set()}
 
     def visit(parser_: argparse.ArgumentParser, path: tuple) -> None:
         opts: dict = {}
@@ -55,7 +57,13 @@ def build_spec(parser: argparse.ArgumentParser) -> dict:
                         continue
                     choices = _flag_choices(act)
                     opts[flag] = choices
+                    if act.nargs == 0 or isinstance(act, (argparse._StoreTrueAction,
+                                                          argparse._StoreFalseAction)):
+                        spec["booleans"].add(flag)
         # Root options (e.g. ``--version``) are keyed at ``()`` so they complete too.
+        if path:
+            for flag in GLOBAL_FLAGS:
+                opts.setdefault(flag, None)
         spec["opts"][path] = opts
 
     visit(parser, ())
@@ -342,8 +350,12 @@ def _fish_lines(spec: dict) -> list[str]:
                 lines.append(f"complete -c litcli -n '{cond}' -l {name} -a '{_join(choices)}'")
             elif flag in spec["files"]:
                 lines.append(f"complete -c litcli -n '{cond}' -l {name} -r -F")
-            elif _boolean_flag(flag):
+            elif flag in spec["booleans"] or _boolean_flag(flag):
                 lines.append(f"complete -c litcli -n '{cond}' -l {name}")
+            else:
+                # A value flag with no enumerated choices (``--title``, ``--limit``): keep it on
+                # the menu but do not offer filenames.
+                lines.append(f"complete -c litcli -n '{cond}' -l {name} -r")
     for (path, _table) in spec["file_positionals"].items():
         seen = " ".join(path)
         lines.append(f"complete -c litcli -n '__fish_seen_subcommand_from {seen}' -r -F")

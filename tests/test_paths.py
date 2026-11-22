@@ -48,6 +48,17 @@ class SafeFilenameTest(unittest.TestCase):
     def test_unicode_survives(self):
         self.assertEqual(safe_filename("图书情报/2024", "pdf"), "图书情报_2024.pdf")
 
+    def test_format_characters_are_dropped(self):
+        # Zero-width space, soft hyphen and the LRM mark copy-pasted out of PDF text.
+        self.assertEqual(safe_filename("a​b­c‎d", "pdf"), "abcd.pdf")
+
+    def test_a_leading_dash_is_kept(self):
+        # Legal on disk; pdftotext is guarded with ``--`` instead of mangling the name.
+        self.assertEqual(safe_filename("-2024-report", "pdf"), "-2024-report.pdf")
+
+    def test_del_is_replaced(self):
+        self.assertEqual(safe_filename("a\x7fb", "pdf"), "a_b.pdf")
+
 
 class TargetPathTest(unittest.TestCase):
     def test_no_out_is_the_bare_name(self):

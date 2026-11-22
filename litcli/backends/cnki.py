@@ -28,6 +28,7 @@ import logging
 import re
 from urllib.parse import urlencode, urljoin
 
+from ..errors import BotWall, Unavailable
 from ..models import AcademicItem, extract_year, normalize_author_name
 from ..paths import config_dir
 from .playwright import _PLAYWRIGHT_HINT, PlaywrightBackend
@@ -270,7 +271,14 @@ class CnkiBackend(PlaywrightBackend):
         if self._detect_captcha(page) and not self._headless:
             # Visible browser: let the human solve the slider, then wait for the results.
             self._wait_captcha_finished(page)
-        self._wait_for_signal(page, _ROW_SELECTOR)
+        if self._wait_for_signal(page, _ROW_SELECTOR):
+            return
+        # No rows: say which of the two silent cases this is instead of returning an empty list.
+        if self._detect_captcha(page):
+            raise BotWall(f"[{self.name}] the slider captcha is still up — run it in the visible "
+                          "browser (headless cannot pass it) and solve the slider")
+        raise Unavailable(f"[{self.name}] result rows never rendered for {url} — "
+                          "the page layout may have changed")
 
     def search(self, query: str, limit: int = 10, filters: dict | None = None) -> list[AcademicItem]:
         """Search CNKI and return normalized title metadata (read-only).

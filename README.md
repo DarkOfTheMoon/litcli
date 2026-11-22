@@ -17,7 +17,7 @@
 ```bash
 python3 -m venv .venv && . .venv/bin/activate              # 或用你已有的环境
 pip install .                                             # Debian/Ubuntu 的 PEP 668 环境改用 ./install.sh
-litcli search "graph neural network" --limit 5       # 默认搜全部来源；key 是第二列，DOI 可直接喂下一条
+litcli search "graph neural network" --limit 5       # 默认搜全部来源；第一列 `来源/key` 可直接喂下一条
 litcli data get 10.1038/s41598-024-80509-9 --backend crossref --format json
 litcli export 10.1038/s41598-024-80509-9 --backend crossref --format csljson
 litcli fetch 10.1038/s41598-024-80509-9            # 落到当前目录，stdout 只回路径
@@ -66,7 +66,8 @@ litcli backends                      # 自测：列出已配置后端及能力
 `./bin/litcli`，与已装版本互不影响。PDF 文本抽取依赖系统 `pdftotext`（poppler-utils）；缺失时返回空文本，
 其余功能不受影响。CNKI / 豆瓣另需 `./install.sh --with-cnki`（或 `--with-douban`）装浏览器依赖。
 
-升级就是重跑 `./install.sh`（覆盖快照）；卸载用 `pip uninstall litcli` 并删 `~/.config/litcli` 与 `~/.local/share/litcli`。
+升级就是重跑 `./install.sh`（覆盖快照）；卸载用 `pip uninstall --break-system-packages litcli`
+（PEP 668 机器上卸载同样要这个开关；venv 里不用）并删 `~/.config/litcli` 与 `~/.local/share/litcli`。
 
 **Windows（源码）**：`install.sh` 与补全脚本是 POSIX 的，改用 `py -m venv .venv` 后 `.\\.venv\\Scripts\\Activate.ps1`
 与 `pip install .`；仓库内调试用 `bin\\litcli.cmd`。PDF 文本预览需要把 poppler 的 `pdftotext.exe` 放进 PATH；
@@ -74,15 +75,16 @@ shell 补全只有 bash/zsh/fish（PowerShell 下可在 Git Bash 里生成）。
 
 数据都留在本机：引文写进你自己的 Zotero 库，配置在 `~/.config/litcli/config.toml`，其余只有对外 API 请求。
 `install.sh` 还会把 `skills/litcli/SKILL.md` 分发给探测到的 agent（Claude Code / Codex / Cursor / Gemini，
-格式各随其主流），并总留一份中立副本在 `~/.local/share/litcli/skill/SKILL.md`；`--no-skills` / `--skills-only`
-可跳过包部分或只装技能。
+格式各随其主流），并总留一份中立副本在 `~/.local/share/litcli/skill/SKILL.md`；`--no-skills` 跳过技能、
+`--skills-only` 只装技能、`--skills claude,cursor` 只发给指定 agent。
 
 ## 命令
 
-`--backend` 选来源（默认 `zotero`）；key 也可以自带来源前缀（`openalex/W123`、`zotero/AB12`），
-有前缀时按前缀路由、`--backend` 仍然优先；`--all` 在**配置里启用的**后端之间聚合、去重合并并在
-`extra["sources"]` 标注来源。表格第二列就是 key，两种写法都认。
-退出码：`0` 成功（含无结果），`2` 出错或后端不支持。
+`--backend` 收窄到单个来源（不写就是搜全部已配置来源 + 免 key 的 OA 语料）；key 也可以自带来源前缀
+（`openalex/W123`、`zotero/AB12`），有前缀时按前缀路由、`--backend` 仍然优先。`--all` 与 `--backend` 互斥。
+聚合时会去重合并（同一作品跨来源并成一条，DOI/ISBN 优先），并在 `extra["sources"]` 标注来源。
+表格第一列就是 `来源/key`，两种写法都认。
+退出码：`0` 成功（含无结果）；`2` 出错或后端不支持；`fetch` 另用 `1` 表示「没有全文」。
 
 检索是向外扇出：**单个来源失败默认不提**，加 `--verbose`（或 `LITCLI_VERBOSE=1`）才逐条说明哪个来源、
 什么原因；全部来源都失败时即使不加开关也会明说并以 `2` 退出——那不算「没有结果」。
@@ -100,7 +102,7 @@ shell 补全只有 bash/zsh/fish（PowerShell 下可在 Git Bash 里生成）。
 | `litcli search "X" [--all] [--backend B] [--type T] [--limit N]` | 检索候选（`--format table\|json\|csl`）；字段过滤与排序见下节 |
 | `litcli refs <key>` / `citing <key>` / `related <key>`（均可 `--limit N`、`--sort cited`） | 参考文献（回溯奠基）／引用该文的文献（前向跟进）／语义邻居（OpenAlex 图谱；该文没有邻居列表时退回按标题实词检索并标注） |
 | `litcli data get <key> [--format table\|json\|csl]` | 单条全字段 |
-| `litcli export <key>... [--format csljson\|bibtex\|ris\|text] [--no-cite]` | 导出引文；`csljson` 可喂 `pandoc --citeproc`。arXiv key 只在 `--backend openalex\|crossref` 下归一为 DOI |
+| `litcli export <key>... [--format csljson\|bibtex\|ris\|text] [--no-cite]` | 导出引文；`csljson` 可喂 `pandoc --citeproc`；`--no-cite` 只对 `text` 生效。arXiv key 仅在 `--backend openalex\|crossref` 下归一为 DOI |
 | `litcli fetch <doi\|arXiv id> [--out DIR] [--no-download] [--scihub]`（旧动词 `fetch fulltext <doi>`、旧旗标 `--download` 仍接受） | 保存全文：本地库 → Unpaywall → OpenAlex → Europe PMC → Zenodo → 落地页 |
 | `litcli fetch --book "书名\|ISBN" [--backend zlibrary\|doab\|openlibrary] [--pick N]` | 图书候选 → 选定补全书目 → 保存文件（ISBN 自动走此路径） |
 
@@ -119,6 +121,8 @@ shell 补全只有 bash/zsh/fish（PowerShell 下可在 Git Bash 里生成）。
 |---|---|
 | `litcli backends list` · `backends status` | 已配置后端与能力 / 授权与可达状态 |
 | `litcli completions <bash\|zsh\|fish>` | 打印自包含补全脚本；`eval "$(...)"` 后按 TAB 补全 |
+| `litcli backends install-browser [--check] [--dry-run] [--with-deps]` | 下载浏览器；`--check` 无头启动验证、`--dry-run` 只显示下载源、`--with-deps` 顺带 apt 装系统库 |
+| `litcli data members <集合key> [--format table\|json]` | 罗列集合条目（`--format json` 一行一条记录） |
 | `litcli --no-cache <命令>` | 跳过响应缓存（`LITCLI_NO_CACHE=1` 同样生效）；缓存默认 24 小时、只存成功的元数据读取 |
 | `litcli --verbose <命令>` | 检索里失败来源的逐条说明（默认静默；`LITCLI_VERBOSE=1` 同样生效），只写 stderr |
 | `litcli --debug <命令>` | 把请求、状态、耗时、限速等待与重试逐行写到 stderr（`LITCLI_DEBUG=1` 同样生效）；意外异常额外打印调用栈。stdout 不受影响 |
@@ -140,8 +144,10 @@ shell 补全只有 bash/zsh/fish（PowerShell 下可在 Git Bash 里生成）。
 
 ## 后端与授权边界
 
-默认启用 Zotero、arXiv、Crossref、OpenAlex。其余随时可用单次 `--backend` 直接指定（不必写配置）；
-只有想让它们进入 `--all` 聚合或 `fetch` 默认链，才需要在 `config.toml` 里启用。CNKI / 豆瓣另需浏览器依赖。
+默认启用 Zotero、arXiv、Crossref、OpenAlex。其余随时可用单次 `--backend` 直接指定（不必写配置）。
+免 key 的 OA 语料（`doaj`/`europepmc`/`doab`/`zenodo`）**无需配置就参与** `--all` 聚合与 `fetch` 默认链；
+只有想在配置里调整它们、或让其它后端（如 `uspto`、`cnki`、`douban`）进入聚合，才需要写 `config.toml`。
+CNKI / 豆瓣另需浏览器依赖。
 
 | 后端 | 能力 | 授权 | 取什么 |
 |---|---|---|---|

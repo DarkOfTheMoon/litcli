@@ -48,7 +48,8 @@ def cmd_edge(cfg, args, method: str) -> int:
     items = stamp(getattr(backend, method)(bare, args.limit, sort_cited=(args.sort == "cited")),
                   backend)
     if method == "related" and not items and hasattr(backend, "search"):
-        items = _keyword_related(backend, bare, args.limit)
+        # Stamp it like a graph hit, or the [oa]/[public] provenance labels vanish on the fallback.
+        items = stamp(_keyword_related(backend, bare, args.limit), backend)
         if items:
             print("[related] no graph neighbours listed; matching on the title instead",
                   file=sys.stderr)
