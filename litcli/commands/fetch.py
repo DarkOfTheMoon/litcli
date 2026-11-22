@@ -67,9 +67,23 @@ def _save(raw: bytes, path: str, lines: int, verb: str = "Downloaded",
         note(f"  --- {lines}-line preview ---\n{pdfutil.first_lines(text, lines)}")
 
 
+#: The 0.1 subcommands, still accepted in front of the target (``fetch fulltext <doi>``).
+_LEGACY_VERBS = {"fulltext": "", "book": "book"}
+
+
 def cmd_fetch(cfg, args) -> int:
-    """Fetch ``args.target``: a book when ``--book`` or the target is an ISBN, else a paper fulltext."""
-    target = (args.target or "").strip()
+    """Fetch ``args.target``: a book when ``--book`` or the target is an ISBN, else a paper fulltext.
+
+    A leading ``fulltext`` / ``book`` is taken as the 0.1 verb rather than part of the target, and
+    the remaining words are rejoined so an unquoted title works.
+    """
+    parts = [args.target or "", *(getattr(args, "extra", None) or [])]
+    verb = _LEGACY_VERBS.get(parts[0].strip().lower())
+    if verb is not None:
+        parts = parts[1:]
+        if verb == "book":
+            args.book = True
+    target = " ".join(p.strip() for p in parts if p and p.strip())
     if not target:
         note("[error] empty target")
         return 2

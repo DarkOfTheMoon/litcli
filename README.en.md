@@ -123,7 +123,7 @@ locally, so a source that ignores one cannot leak records. A citation badge read
 | `litcli search "X" [--all] [--backend B] [--type T] [--limit N] [--format table\|json\|csl]` | candidate search; field filters and sorting below |
 | `litcli refs <key>` / `citing <key>` / `related <key>` | cited works / citing works / semantic neighbours (OpenAlex graph; with no neighbour list it falls back to a title-term search and says so) |
 | `litcli export <key>... [--format csljson\|bibtex\|ris\|text] [--no-cite]` | citations; `csljson` feeds `pandoc --citeproc`. arXiv keys normalise to a DOI only with `--backend openalex\|crossref` |
-| `litcli fetch <doi\|arXiv id> [--out DIR] [--no-download] [--scihub]` | save the fulltext: local store → Unpaywall → OpenAlex → Europe PMC → Zenodo → landing page |
+| `litcli fetch <doi\|arXiv id> [--out DIR] [--no-download] [--scihub]` (the old `fetch fulltext <doi>` and the `--download` flag are still accepted) | save the fulltext: local store → Unpaywall → OpenAlex → Europe PMC → Zenodo → landing page |
 | `litcli fetch --book "title\|ISBN" [--backend zlibrary\|doab\|openlibrary] [--pick N]` | book candidates → pick → full metadata → save the file (an ISBN takes this path automatically) |
 | `litcli backends authorize zotero` | one-off write authorization (local dialog) |
 | `litcli data add --title "..." --creator "Family, Given" [--doi ..] [--force]` / `data add --pdf|--csl <file>` | ingest metadata (dedupe gate, `--force` skips), heuristics from page 1 (y/N), or CSL JSON |

@@ -141,11 +141,16 @@ def build_parser() -> argparse.ArgumentParser:
     # --- fetch: get the file behind an id (read-only, nothing is stored) ---
     f = sub.add_parser("fetch", help="save the fulltext for a DOI / arXiv id / ISBN (read-only)")
     f.add_argument("target", help="DOI, arXiv id (arxiv/1806.09180), or ISBN; a title with --book")
+    #: A second positional so the 0.1 verbs (``fetch fulltext <doi>`` / ``fetch book <title>``)
+    #: and unquoted book titles still parse; ``cmd_fetch`` joins them back together.
+    f.add_argument("extra", nargs="*", metavar="target", help=argparse.SUPPRESS)
     f.add_argument("--book", action="store_true",
                    help="treat the target as a book title/ISBN and use a book backend")
     f.add_argument("--backend", default=None,
                    help="book backend (default zlibrary; ignored without --book)")
     f.add_argument("--no-download", action="store_true", help="print the link instead of saving the file")
+    f.add_argument("--download", action="store_true",
+                   help=argparse.SUPPRESS)  # 0.1 flag: downloading is the default now
     f.add_argument("--out", default=None,
                    help="save path or directory (default: <key>.<ext> in the current directory)")
     f.add_argument("--lines", type=int, default=0, help="print that many leading text lines as a preview")

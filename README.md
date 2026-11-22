@@ -101,7 +101,7 @@ shell 补全只有 bash/zsh/fish（PowerShell 下可在 Git Bash 里生成）。
 | `litcli refs <key>` / `citing <key>` / `related <key>`（均可 `--limit N`、`--sort cited`） | 参考文献（回溯奠基）／引用该文的文献（前向跟进）／语义邻居（OpenAlex 图谱；该文没有邻居列表时退回按标题实词检索并标注） |
 | `litcli data get <key> [--format table\|json\|csl]` | 单条全字段 |
 | `litcli export <key>... [--format csljson\|bibtex\|ris\|text] [--no-cite]` | 导出引文；`csljson` 可喂 `pandoc --citeproc`。arXiv key 只在 `--backend openalex\|crossref` 下归一为 DOI |
-| `litcli fetch <doi\|arXiv id> [--out DIR] [--no-download] [--scihub]` | 保存全文：本地库 → Unpaywall → OpenAlex → Europe PMC → Zenodo → 落地页 |
+| `litcli fetch <doi\|arXiv id> [--out DIR] [--no-download] [--scihub]`（旧动词 `fetch fulltext <doi>`、旧旗标 `--download` 仍接受） | 保存全文：本地库 → Unpaywall → OpenAlex → Europe PMC → Zenodo → 落地页 |
 | `litcli fetch --book "书名\|ISBN" [--backend zlibrary\|doab\|openlibrary] [--pick N]` | 图书候选 → 选定补全书目 → 保存文件（ISBN 自动走此路径） |
 
 **写库**（默认 Zotero；只读后端会报 `[skipped]` 并以退出码 2 结束）

@@ -3,7 +3,7 @@
 Sci-Hub is not a bibliographic search engine: in 2026 its home form accepts only a DOI / article
 URL (the old ``/search?query=`` endpoint returns an empty body), so this backend resolves *by
 DOI*. ``get(doi)`` returns a minimal item carrying the PDF link in ``attachments``;
-``get_attachment(doi)`` downloads the bytes. It sits at the **end** of the ``fetch fulltext``
+``get_attachment(doi)`` downloads the bytes. It sits at the **end** of the ``fetch``
 chain, after the legitimate open-access sources (local store -> Unpaywall -> OpenAlex), and is
 opt-in — anything Sci-Hub returns is copyright-evading content, not an OA licence.
 

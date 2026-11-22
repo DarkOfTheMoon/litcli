@@ -321,7 +321,7 @@ class ZlibraryBackend(Backend):
     """Z-Library book search + metadata + download (read-only, opt-in).
 
     It deliberately does NOT advertise ``attachment``: a Z-Library copy is an unevaluated
-    external file, not a local-store attachment, so ``fetch fulltext`` should not treat it as
+    external file, not a local-store attachment, so ``fetch`` should not treat it as
     one. ``get_attachment`` is still implemented for ``fetch book --download``.
     """
 

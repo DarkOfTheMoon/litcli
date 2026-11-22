@@ -56,6 +56,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `fetch fulltext <doi>` / `fetch --download`（0.1 的旧写法，老文档与旧技能副本仍在教）不再报一句裸
+  argparse usage 让人以为是 DOI 不被接受：`fulltext` / `book` 被当作旧动词认下，`--download` 作为
+  无操作别名保留（下载本就是默认）；顺带未加引号的书名也能直接给。
 - `related` 在 OpenAlex 没有 `related_works` 时不再只回「没有」：退回用该文标题里的实词再检索一次，
   剔除种子本身并标 `extra["related_via"]="keyword"`，stderr 说明这是标题匹配（老文献、冷门文献大多没有邻居列表）。
 - 无 DOI 的 OpenAlex 记录（预印本、技术报告）key 曾为空，表格行 `openalex/` 无法复制、`get` 也解析不了；

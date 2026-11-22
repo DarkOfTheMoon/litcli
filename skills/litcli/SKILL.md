@@ -32,7 +32,7 @@ description: 用 litcli 与用户的学术资料互操作——检索、读取�
 | 语义相关 | `litcli related <key> [--limit N] [--backend openalex]` OpenAlex `related_works` 邻居;该文无邻居列表时退回标题实词检索(`extra["related_via"]=keyword`);不支持的只读后端 `[skipped]` 退出码 2 | 只读 |
 | 单条全字段 | `litcli data get <key> [--format csl\|json]` | 只读 |
 | 导出引文 | `litcli export <key> [--format csljson\|bibtex\|ris\|text]`（arXiv key 如 `arxiv/1806.09180` 在 `--backend openalex\|crossref` 下归一为 DOI；csljson/bibtex 含期刊名/卷/页/出版社） | 只读 |
-| 定位全文 | `litcli fetch <doi\|arXiv id> [--out DIR] [--no-download] [--scihub]` 本地→OA，默认落盘；加 `--scihub` 才兜底公开副本(会标注) | 只读 |
+| 定位全文 | `litcli fetch <doi\|arXiv id> [--out DIR] [--no-download] [--scihub]`（旧写法 `fetch fulltext <doi>` 仍认） 本地→OA，默认落盘；加 `--scihub` 才兜底公开副本(会标注) | 只读 |
 | **新增(元信息)** | `litcli data add --title "..." --creator "家族, 名字" --year 2002 [--doi ...]` | **写库** |
 | **新增(从 PDF)** | `litcli data add --pdf <file>` 抽启发式候选→展示→**交互确认(y/N)**→写；`--yes` 跳过确认 | **写库** |
 | 修改 | `litcli data set <key> --title "..." [--year ...]` | **写库** |
