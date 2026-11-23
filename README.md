@@ -103,7 +103,7 @@ shell 补全只有 bash/zsh/fish（PowerShell 下可在 Git Bash 里生成）。
 | `litcli refs <key>` / `citing <key>` / `related <key>`（均可 `--limit N`、`--sort cited`） | 参考文献（回溯奠基）／引用该文的文献（前向跟进）／语义邻居（OpenAlex 图谱；该文没有邻居列表时退回按标题实词检索并标注） |
 | `litcli data get <key> [--format table\|json\|csl]` | 单条全字段 |
 | `litcli export <key>... [--format csljson\|bibtex\|ris\|text] [--no-cite]` | 导出引文；`csljson` 可喂 `pandoc --citeproc`；`--no-cite` 只对 `text` 生效。arXiv key 仅在 `--backend openalex\|crossref` 下归一为 DOI |
-| `litcli fetch <doi\|arXiv id\|ScienceDirect URL/PII> [--out DIR] [--no-download] [--scihub]`（旧动词 `fetch fulltext <doi>`、旧旗标 `--download` 仍接受） | 保存全文：本地库 → Unpaywall → OpenAlex → Europe PMC → Zenodo → ScienceDirect（Elsevier DOI / 文章 URL）→ 落地页 |
+| `litcli fetch <doi\|arXiv id\|ScienceDirect URL/PII\|Wiley URL> [--out DIR] [--no-download] [--scihub]`（旧动词 `fetch fulltext <doi>`、旧旗标 `--download` 仍接受） | 保存全文：本地库 → Unpaywall → OpenAlex → Europe PMC → Zenodo → ScienceDirect（Elsevier DOI / 文章 URL）→ Wiley → 落地页 |
 | `litcli fetch --book "书名\|ISBN" [--backend zlibrary\|doab\|openlibrary] [--pick N]` | 图书候选 → 选定补全书目 → 保存文件（ISBN 自动走此路径） |
 
 **写库**（默认 Zotero；只读后端会报 `[skipped]` 并以退出码 2 结束）
@@ -158,13 +158,16 @@ CNKI / 豆瓣另需浏览器依赖。
 | `cnki` | 读 | 知网网页 | 公开**题录**，不抓付费墙全文；需可见浏览器、人工过滑块 |
 | `douban` | 读 | 豆瓣网页 | 公开**书目**（书名/作者/ISBN/版次/页数），默认无头 |
 | `sciencedirect` | 读 | 订阅内容，凭你的机构授权（不是 OA） | Elsevier DOI 的全文 PDF；只对 `10.1016` 等 Elsevier 前缀自动尝试 |
+| `wiley` | 读 | 订阅内容，凭你的机构授权（不是 OA） | Wiley DOI 的全文 PDF；只对 `10.1002` 等 Wiley 前缀自动尝试 |
 | `scihub` | 读 | 公开副本（非 OA 授权），只按 DOI | PDF；`--scihub` 才兜底 |
 | `zlibrary` | 读 | 公开副本（非 OA 授权） | 书目 + PDF；匿名每日有下载配额 |
 
 反爬说明：被 403 不等于你的 IP 被封。`www.sciencedirect.com` 对无 JS 客户端先给 Cloudflare 挑战、再按会话判权限（`CPE00001`），
 所以它不像其它源那样"免配置即通"：在用**已认证**（机构登录 / 校园网）的浏览器标签里打开一次文章，把会话 Cookie 连同该浏览器的 UA 配进
 `[backends.sciencedirect]`（`cookie` / `cookie_file` + `user_agent`，二者缺一不可——清关 Cookie 同时绑定 **UA 与出口 IP**，
-寿命只有分钟到小时级，换机器回放会直接失效）；未认证的标签页只会得到 "Purchase PDF"，且 `/pii/` 会被静默改写成 `/abs/`；
+寿命分钟到小时级、服务端随时可能吊销，换机器回放会直接失效）；未认证的标签页只会得到 "Purchase PDF"，且 `/pii/` 会被静默改写成 `/abs/`；
+`onlinelibrary.wiley.com` 是同一套形态、同一套配置法（`[backends.wiley]`；它的清关 Cookie 虽可存活一年，仍随会话吊销，未订阅时 PDF 端点会静默跳到摘要页）；
+Wiley 另有 **TDM token**（`[backends.wiley].tdm_token`，免费申请）：走 `api.wiley.com`，不经过 Cloudflare，只放行机构已订阅的文章；
 `europepmc.org` 的网页在 Cloudflare challenge 后面，所以走 EBI 的 REST；
 DOAB 的 `/rest` 拒绝无 JS 客户端，所以走它的 Atom feed；DOAB 详情页、Sci-Hub、Z-Library 用可解的工作量证明，
 litcli 在本地做题后复用 cookie，不改写、不绕过。知网与豆瓣的滑块交你在可见浏览器手动完成。
@@ -190,7 +193,7 @@ base = "http://localhost:23119/api"     # 写库 key 由 `litcli backends author
 - 专利检索要有 USPTO 免费 key：免 key 的公开源里专利记录趋近于 0。
 - Europe PMC 的 OA 全文是**文本（JATS XML）不是排版 PDF**；Unpaywall 只给落地页时会退到链末，输出 `HTML` 提示浏览器打开。
 - Sci-Hub 只按 DOI 解析，不能关键词检索；Z-Library 匿名下载有每日配额，可在配置里填 `email`/`password` 登录放宽。
-- ScienceDirect 的 PDF 另有**第二道验收关**（`craft/challenge/pdf`），页面能开也未必能直取：`fetch` 走后端会话下载，被拦时明确报因并给出 PDF 链接，让你在已授权的浏览器里打开。
+- ScienceDirect 的 PDF 另有**第二道验收关**（`craft/challenge/pdf`），页面能开也未必能直取：`fetch` 走后端会话下载，被拦时明确报因并给出 PDF 链接，让你在已授权的浏览器里打开。Wiley 的 PDF 端点对未订阅会话返回的是跳转后的 HTML 摘要页而非 403，`fetch` 会明说"未获授权或会话已失效"并给链接。两者下载失败都会先把链的尾部（合法落地页、`--scihub`）走完再报错。
 - 二进制安装器不含 Chromium：知网 / 豆瓣要先 `litcli backends install-browser`，否则报错并给出该命令。
 - 配置里的 `api_key` 与 zlibrary 凭据是明文：`backends authorize` 会把配置 chmod 0600，手填凭据不会；
   Windows 上 chmod 只等于只读位，真正的隔离来自 `%APPDATA%` 的用户目录 ACL。

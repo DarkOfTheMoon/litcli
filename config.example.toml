@@ -1,7 +1,7 @@
 # litcli 配置示例(复制到 ~/.config/litcli/config.toml;Windows 为 %APPDATA%\litcli\config.toml)。
 # 文件存在就**整体以文件为准**;只有文件不存在时才用内置默认(本机 Zotero + arXiv + Crossref + OpenAlex)。
-# 所以复制本文件 = 启用下面全部后端:openlibrary、uspto、cnki、douban、sciencedirect、scihub、
-# zlibrary 与四个开放获取源(doaj / europepmc / doab / zenodo);不想用的段整段删掉。
+# 所以复制本文件 = 启用下面全部后端:openlibrary、uspto、cnki、douban、sciencedirect、wiley、
+# scihub、zlibrary 与四个开放获取源(doaj / europepmc / doab / zenodo);不想用的段整段删掉。
 
 [backends.zotero]
 type = "zotero_local"
@@ -68,6 +68,23 @@ type = "sciencedirect"
 # cookie = "…(浏览器 Cookie 头,原样粘贴)"
 # cookie_file = "~/.config/litcli/sciencedirect-cookies.txt"   # 或 Netscape cookies.txt 路径
 # user_agent = "…(与 Cookie 同源浏览器的 User-Agent;Cloudflare 清关 Cookie 与 UA 绑定,须一致)"
+# timeout = 30
+
+# 可选:Wiley Online Library 文章读取(出版社站点,无需 key,只按 DOI / 文章 URL 解析,无关键词检索)。
+# 与 ScienceDirect 同型:Cloudflare 托管挑战 + 按会话判权限。同样需要**已认证**会话的
+# cookie + user_agent 成对配置(绑 UA+出口 IP,服务端随时可能失效);未获授权时链继续往下,不阻断。
+# 未订阅的会话会被 PDF 端点静默跳到摘要页,litcli 会在取不到字节时明说。
+# 更省事的是 TDM token(api.wiley.com,不经过 Cloudflare,直连下载):在 Wiley 站点登录后于
+# https://onlinelibrary.wiley.com/library-info/resources/text-and-datamining 申请(免费)。
+# 它只放行你机构已订阅的文章(否则 403,litcli 会明说)。只配 token 也能下载:页面被挑战拦下时
+# 该次题录留空,但下载照走 TDM,不再因此丢掉整篇文章。
+[backends.wiley]
+type = "wiley"
+# cookie = "…(浏览器 Cookie 头,原样粘贴)"
+# cookie_file = "~/.config/litcli/wiley-cookies.txt"   # 或 Netscape cookies.txt 路径
+# user_agent = "…(与 Cookie 同源浏览器的 User-Agent)"
+# tdm_token = "…(Wiley TDM Client Token;配置后 PDF 走 api.wiley.com,优先于页面路径)"
+# delay = 10.0        # 请求间隔(秒);Wiley 限 3 篇/秒且 60 请求/10 分钟
 # timeout = 30
 
 # 可选:Sci-Hub 全文兜底(盗版镜像,只按 DOI 解析 PDF,无关键词检索)。

@@ -30,6 +30,9 @@ from urllib.parse import urlparse
 from ..errors import BadInput, NotFound, Unavailable, for_status
 from ..models import AcademicItem, extract_year, normalize_author_name
 from ..transport import HttpError
+from ._cf_gate import CHALLENGE_MARKERS, gate_message, is_challenge_page, session_cookie
+from ._cf_gate import load_cookie as _load_cookie
+from ._cf_gate import parse_cookie as _parse_cookie
 from .http import HttpBackend
 
 _SITE = "https://www.sciencedirect.com"
@@ -39,19 +42,10 @@ _ARTICLE = f"{_SITE}/science/article"
 _UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
        "Chrome/120.0 Safari/537.36 (litcli)")
 
-#: Markers on the pages ScienceDirect serves to a client it does not let through: Cloudflare's
-#: managed challenge ("Are you a robot", ``__cf_chl``, ``challenge-platform``,
-#: ``cf-mitigated: challenge``, "Enable JavaScript and cookies to continue") and the older
-#: entitlement block (``CPE00001``). A plain HTTP client can hit either one.
-_BLOCK_MARKERS = ("CPE00001", "cf-mitigated", "Enable JavaScript and cookies to continue",
-                  "Are you a robot", "__cf_chl", "challenge-platform")
-_BLOCK_MSG = ("ScienceDirect served its bot/entitlement gate instead of the article "
-              "(CPE00001 / Cloudflare challenge): open the article once in an authenticated "
-              "browser tab on your off-campus session, then copy that session's cookies into "
-              "[backends.sciencedirect] cookie / cookie_file — with the browser's own "
-              "user_agent, and from the same machine: the clearance cookie is bound to both "
-              "the UA and the egress IP and expires in minutes to an hour (or retry from an "
-              "entitled network)")
+#: Markers of the pages ScienceDirect serves to a client it does not let through — shared
+#: with the other Cloudflare-gated readers (see ``_cf_gate``).
+_BLOCK_MARKERS = CHALLENGE_MARKERS
+_BLOCK_MSG = gate_message("ScienceDirect", "sciencedirect")
 
 _DOI_PREFIX_RE = re.compile(r"^(?:https?://(?:dx\.)?doi\.org/|doi:\s*)", re.I)
 _DOI_RE = re.compile(r"^10\.\d{4,9}/\S+$")
@@ -128,11 +122,8 @@ def normalize_key(key: str) -> str:
     raise BadInput(f"[sciencedirect] not a DOI, PII or ScienceDirect URL: {key!r}")
 
 
-def is_block_page(page_html: str, status: int = 200) -> bool:
-    """True when the body is one of ScienceDirect's gates, or the status is a plain 403."""
-    if status == 403:
-        return True
-    return any(marker in (page_html or "") for marker in _BLOCK_MARKERS)
+#: The module-local name for the shared gate predicate (kept: callers and tests use it).
+is_block_page = is_challenge_page
 
 
 def _unescaped_when_safe(url: str) -> str:
@@ -336,43 +327,18 @@ def page_to_item(page_html: str, key: str) -> AcademicItem:
     )
 
 
-def parse_cookie(raw: str) -> dict[str, str]:
-    """Parse a browser ``Cookie`` header (``k=v; k2=v2``) into an ordered dict.
+#: Hosts of the session cookies that are worth carrying (a browser cookie export lists others).
+_COOKIE_HOSTS = ("elsevier", "sciencedirect")
 
-    Tolerates a leading ``Cookie:`` and lines of a Netscape ``cookies.txt`` export (only the
-    host contains ``sciencedirect``); blank lines and ``#`` comments are skipped.
-    """
-    found: dict[str, str] = {}
-    for line in (raw or "").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.lower().startswith("cookie:"):
-            line = line[len("cookie:"):]
-        if "\t" in line:  # Netscape: domain, include_subdomains, path, secure, expiry, k, v
-            parts = line.split("\t")
-            host = parts[0].lower()
-            if len(parts) >= 7 and ("elsevier" in host or "sciencedirect" in host):
-                found.setdefault(parts[5].strip(), parts[6].strip())
-            continue
-        for pair in line.split(";"):
-            key, sep, value = pair.partition("=")
-            if sep and key.strip():
-                found.setdefault(key.strip(), value.strip())
-    return found
+
+def parse_cookie(raw: str) -> dict[str, str]:
+    """Parse a cookie header / Netscape export, keeping only Elsevier/sciencedirect rows."""
+    return _parse_cookie(raw, _COOKIE_HOSTS)
 
 
 def load_cookie(cookie: str = "", cookie_file: str = "") -> str:
     """The ``Cookie`` header value from an inline string and/or a cookie file (both merged)."""
-    merged = parse_cookie(cookie)
-    if cookie_file:
-        try:
-            with open(cookie_file, encoding="utf-8", errors="replace") as f:
-                merged.update({k: v for k, v in parse_cookie(f.read()).items()
-                               if k not in merged})
-        except OSError as e:
-            raise RuntimeError(f"[sciencedirect] cannot read cookie_file {cookie_file}: {e}") from e
-    return "; ".join(f"{k}={v}" for k, v in merged.items())
+    return _load_cookie(cookie, cookie_file, _COOKIE_HOSTS, "sciencedirect")
 
 
 class ScienceDirectBackend(HttpBackend):
@@ -397,18 +363,13 @@ class ScienceDirectBackend(HttpBackend):
 
     def __init__(self, name: str = "sciencedirect", timeout: float = 30.0,
                  cookie: str = "", cookie_file: str = "", user_agent: str = "", **_unused):
-        # Fail early: a bad cookie_file is a config error worth naming at construction.
-        self.cookie = load_cookie(cookie, cookie_file)
+        # Fail early: a bad cookie_file, or a cookie without its UA, is a config error.
+        self.cookie = session_cookie(cookie, cookie_file, user_agent, _COOKIE_HOSTS, name)
         if user_agent:
-            # Cloudflare's clearance cookie is bound to the UA that earned it: a copied cookie
-            # only works alongside the browser's own User-Agent (verbatim, no "litcli" suffix).
+            # The clearance cookie is bound to the UA that earned it: requests must look like
+            # that browser (verbatim UA, no "litcli" suffix).
             self.UA = user_agent.strip()
         if self.cookie:
-            if not user_agent:
-                raise RuntimeError(
-                    "[sciencedirect] a session cookie needs the browser's user_agent as well: "
-                    "Cloudflare's clearance cookie is bound to the User-Agent (and the egress "
-                    "IP) that earned it, so both must be copied from the same browser")
             self.headers = {**type(self).headers, "Cookie": self.cookie}
         self._last_pii = self._last_page = ""
         super().__init__(name=name, timeout=timeout)

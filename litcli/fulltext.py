@@ -5,8 +5,9 @@ Priorities (per user requirements):
      locate an item by DOI and take its attachment — local store wins, no network.
   2. **Public OA sources**: Unpaywall (best_oa_location.pdf) → OpenAlex (best_oa_location.pdf_url),
      then the legal corpus endpoints: Europe PMC (open-access JATS XML) → Zenodo (open files),
-     then **ScienceDirect** (an entitled subscription copy through the user's institution),
-     and finally Unpaywall's landing page (HTML, no bytes) so a legal page is still reported
+     then the publisher readers **ScienceDirect / Wiley** (entitled subscription copies
+     through the user's institution), and finally Unpaywall's landing page (HTML, no bytes) so
+     a legal page is still reported
      when no file exists.
   3. **Sci-Hub (opt-in, last)**: a copyright-evading library, so it is only consulted after the
      legitimate channels — including the landing page — and its hits are labelled with
@@ -16,7 +17,7 @@ Priorities (per user requirements):
 
 Decoupled from backends: ``resolve_fulltext`` accepts an injectable resolver list for offline
 stubbing; the default resolvers are local/unpaywall/openalex (+ the corpus endpoints) +
-sciencedirect + landing page + scihub when injected.
+sciencedirect/wiley + landing page + scihub when injected.
 """
 from __future__ import annotations
 
@@ -177,6 +178,30 @@ def _from_sciencedirect(doi: str, backend) -> dict | None:
             "status": "institutional access (not open access)", "access": "entitled"}
 
 
+def _from_wiley(doi: str, backend) -> dict | None:
+    """A Wiley PDF the user is entitled to through their institution (not open access).
+
+    Mirrors ``_from_sciencedirect``: only a backend that reports an attachment is taken.
+    """
+    if backend is None:
+        return None
+    try:
+        item: AcademicItem = backend.get(doi)
+    except (LitcliError, OSError, KeyError):
+        return None
+    # A gate/entitlement RuntimeError is left to propagate: the chain records it, and it is
+    # the one message that tells the user what to do (log in, supply a session cookie).
+    if not item.attachments:
+        return None
+    # The attachment drives the backend download; the URL is what a human opens, and the TDM
+    # API endpoint answers 400 in a browser without the token header, so point at the page.
+    url = item.attachments[0]
+    if getattr(item, "extra", {}).get("tdm_url") and item.url:
+        url = item.url
+    return {"kind": "wiley", "url": url, "title": item.title,
+            "status": "institutional access (not open access)", "access": "entitled"}
+
+
 def _from_scihub(doi: str, backend) -> dict | None:
     """Sci-Hub fallback via an injected backend (last in the chain; opt-in)."""
     if backend is None:
@@ -194,7 +219,8 @@ def _from_scihub(doi: str, backend) -> dict | None:
 def _default_resolvers(email: str, backends: dict | None = None,
                        openalex_backend=None, scihub_backend=None,
                        europepmc_backend=None, zenodo_backend=None,
-                       sciencedirect_backend=None) -> list[Resolver]:
+                       sciencedirect_backend=None, wiley_backend=None,
+                       tail_only: bool = False) -> list[Resolver]:
     cache: dict[str, dict | None] = {}
 
     def _oa(doi: str):
@@ -206,6 +232,15 @@ def _default_resolvers(email: str, backends: dict | None = None,
                 cache[doi] = None
         return cache[doi]
 
+    # The legal landing page outranks the shadow-library copy, which stays last. ``tail_only``
+    # is for a publisher hit whose download then failed: that answer is already in hand, so the
+    # chain resumes at the tail instead of re-asking every source.
+    tail = [
+        lambda d: _from_unpaywall_landing(d, email, _oa),
+        lambda d: _from_scihub(d, scihub_backend),
+    ]
+    if tail_only:
+        return tail
     return [
         lambda d: _from_local(d, backends),
         lambda d: _from_unpaywall(d, email, _oa),
@@ -214,9 +249,8 @@ def _default_resolvers(email: str, backends: dict | None = None,
         lambda d: _from_zenodo(d, zenodo_backend),
         # An entitled subscription PDF outranks a landing page (bytes beat a page).
         lambda d: _from_sciencedirect(d, sciencedirect_backend),
-        # The legal landing page outranks the shadow-library copy, which stays last.
-        lambda d: _from_unpaywall_landing(d, email, _oa),
-        lambda d: _from_scihub(d, scihub_backend),
+        lambda d: _from_wiley(d, wiley_backend),
+        *tail,
     ]
 
 
@@ -261,17 +295,21 @@ def resolve_fulltext(doi: str, email: str = unpaywall.DEFAULT_EMAIL,
                      europepmc_backend=None,
                      zenodo_backend=None,
                      sciencedirect_backend=None,
-                     resolvers: list[Resolver] | None = None) -> dict:
+                     wiley_backend=None,
+                     resolvers: list[Resolver] | None = None,
+                     tail_only: bool = False) -> dict:
     """Find fulltext by DOI, priority: local store → OA sources → Sci-Hub (when injected).
 
     Returns a dict: on a hit ``{"has_fulltext": True, "kind", ...}`` (data for local, url for OA
     and Sci-Hub); when nothing works, ``{"has_fulltext": False}`` (with per-step failure
-    reasons, for the CLI to point the user elsewhere).
+    reasons, for the CLI to point the user elsewhere). ``tail_only`` starts at the landing page,
+    i.e. skips every source that already answered earlier in the same run.
     """
     if resolvers is None:
         resolvers = _default_resolvers(email, backends, openalex_backend, scihub_backend,
                                        europepmc_backend, zenodo_backend,
-                                       sciencedirect_backend)
+                                       sciencedirect_backend, wiley_backend,
+                                       tail_only=tail_only)
     errors: list[str] = []
     for r in resolvers:
         try:

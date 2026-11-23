@@ -55,6 +55,8 @@ def cmd_backends_status(cfg, args) -> int:
         elif hasattr(b, "cookie"):  # a session-carrying backend: say whether one is configured
             auth = ("session cookie configured" if b.cookie
                     else "no session cookie (entitled/login session needed)")
+            if getattr(b, "tdm_token", ""):
+                auth += ", TDM token configured"
         else:
             auth = "read-only backend, no auth needed"
         # Lightweight reachability probe only for backends providing ping() (zotero local); non-fatal if it fails.

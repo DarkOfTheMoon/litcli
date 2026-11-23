@@ -135,7 +135,7 @@ How each backend maps a filter (a backend without the field folds it into free t
 | `litcli search "X" [--all] [--backend B] [--type T] [--limit N] [--format table\|json\|csl]` | candidate search; field filters and sorting below |
 | `litcli refs <key>` / `citing <key>` / `related <key>` (all take `--limit N`, `--sort cited`) | cited works / citing works / semantic neighbours (OpenAlex graph; with no neighbour list it falls back to a title-term search and says so) |
 | `litcli export <key>... [--format csljson\|bibtex\|ris\|text] [--no-cite]` | citations; `csljson` feeds `pandoc --citeproc`. arXiv keys normalise to a DOI only with `--backend openalex\|crossref` |
-| `litcli fetch <doi\|arXiv id\|ScienceDirect URL/PII> [--out DIR] [--no-download] [--scihub]` (the old `fetch fulltext <doi>` and the `--download` flag are still accepted) | save the fulltext: local store → Unpaywall → OpenAlex → Europe PMC → Zenodo → ScienceDirect (Elsevier DOIs / article URLs) → landing page |
+| `litcli fetch <doi\|arXiv id\|ScienceDirect URL/PII\|Wiley URL> [--out DIR] [--no-download] [--scihub]` (the old `fetch fulltext <doi>` and the `--download` flag are still accepted) | save the fulltext: local store → Unpaywall → OpenAlex → Europe PMC → Zenodo → ScienceDirect (Elsevier DOIs / article URLs) → Wiley → landing page |
 | `litcli fetch --book "title\|ISBN" [--backend zlibrary\|doab\|openlibrary] [--pick N]` | book candidates → pick → full metadata → save the file (an ISBN takes this path automatically) |
 | `litcli backends authorize zotero` | one-off write authorization (local dialog) |
 | `litcli data add --title "..." --creator "Family, Given" [--year ..] [--doi ..] [--force]` / `data add --pdf|--csl <file>` | ingest metadata (dedupe gate, `--force` skips), heuristics from page 1 (y/N), or CSL JSON |
@@ -170,6 +170,7 @@ without any config. The keyless OA corpora (`doaj`/`europepmc`/`doab`/`zenodo`) 
 | `cnki` | CNKI web index | public metadata only, never paywalled full text; visible browser + manual slider |
 | `douban` | Douban web | public bibliographic data; headless |
 | `sciencedirect` | subscription content via your institution's entitlement (not OA) | fulltext PDF for Elsevier DOIs; tried automatically for the `10.1016`-style prefixes |
+| `wiley` | subscription content via your institution's entitlement (not OA) | fulltext PDF for Wiley DOIs; tried automatically for the `10.1002`-style prefixes |
 | `scihub` | public copy (non-OA), DOI only | PDF, opt-in via `--scihub` |
 | `zlibrary` | public copy (non-OA) | records + PDF; anonymous daily quota |
 
@@ -177,13 +178,18 @@ without any config. The keyless OA corpora (`doaj`/`europepmc`/`doab`/`zenodo`) 
 manual slider; Douban runs headless by default (its search page ships the records server-side) and only
 drops to a visible browser if it flags your traffic. Neither is needed for the international sources.
 A 403 from `europepmc.org` or DOAB means "no JS client", not "your IP is banned" — the CLI routes those
-two around the wall; DOAJ has no wall at all. `www.sciencedirect.com` is different: a Cloudflare check
+two around the wall; DOAJ has no wall at all. `www.sciencedirect.com` and
+`onlinelibrary.wiley.com` (`[backends.wiley]`) are different: a Cloudflare check
 plus a per-session entitlement decision (`CPE00001`), so it is not plug-and-play. Open the article once in
 an **authenticated** browser tab (institutional login / campus network), then put that session's cookies and
 the browser's own User-Agent into `[backends.sciencedirect]` (`cookie` / `cookie_file` + `user_agent` — both
-are required: the clearance cookie is bound to the UA *and the egress IP*, and lives minutes to an hour, so
-replaying it from another machine fails). A tab that was not authenticated only offers "Purchase PDF", and
-`/pii/` is silently rewritten to `/abs/`.
+are required: the clearance cookie is bound to the UA *and the egress IP*, and the server may drop it at any
+time, so replaying it from another machine fails). A tab that was not authenticated only offers "Purchase PDF",
+and `/pii/` is silently rewritten to `/abs/`. Wiley is the same mechanism and the same setup
+(`[backends.wiley]`; its clearance cookie may live a year yet is revoked with the session, and an unentitled
+PDF URL is silently redirected to the abstract page). Wiley also offers a free **TDM token**
+(`[backends.wiley].tdm_token`): that route uses `api.wiley.com`, bypasses Cloudflare entirely and only serves
+what your institution subscribes to.
 
 ## Configuration
 
@@ -208,9 +214,11 @@ base = "http://localhost:23119/api"     # the write key is written by `litcli ba
 - arXiv may answer 406 in constrained sandboxes; `--all` skips failing backends and continues.
 - Sci-Hub resolves DOIs only (no keyword search); Z-Library has an anonymous daily download quota, relaxed by
   setting `email`/`password`.
-- ScienceDirect's PDF sits behind a **second acceptance gate** (`craft/challenge/pdf`): a page that opens does not
-  guarantee the bytes. `fetch` downloads through the backend's session and, when gated, says so and prints the
-  PDF link to open in your entitled browser.
+- ScienceDirect's PDF sits behind a **second acceptance gate** (`craft/challenge/pdf`): a page that opens does
+  not guarantee the bytes. `fetch` downloads through the backend's session and, when gated, says so and prints
+  the PDF link to open in your entitled browser. Wiley's PDF endpoint answers an HTML abstract page (a silent
+  redirect) instead of 403 for unentitled sessions, and `fetch` reports "not entitled / session expired" with
+  the link. A failed download on either site first finishes the chain's tail (legal landing page, `--scihub`).
 - The binary installer ships no Chromium: CNKI/Douban need `litcli backends install-browser` first.
 - `api_key` and Z-Library credentials are stored in plain text; `backends authorize` chmods the config, hand-edited
   credentials are not covered. On Windows chmod only clears the read-only attribute — the `%APPDATA%`

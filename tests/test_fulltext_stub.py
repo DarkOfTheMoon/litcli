@@ -124,7 +124,7 @@ class CorpusResolverTest(unittest.TestCase):
         # ScienceDirect sits after the free corpora but before the landing page: bytes beat a page.
         order = [self._target(r) for r in ft._default_resolvers("a@b.c")]
         self.assertEqual(order, ["_from_local", "_from_unpaywall", "_from_openalex",
-                                 "_from_europepmc", "_from_zenodo", "_from_sciencedirect",
+                                 "_from_europepmc", "_from_zenodo", "_from_sciencedirect", "_from_wiley",
                                  "_from_unpaywall_landing", "_from_scihub"])
 
     def test_sciencedirect_candidate_is_entitled(self):
@@ -137,6 +137,34 @@ class CorpusResolverTest(unittest.TestCase):
         self.assertIsNone(ft._from_sciencedirect("10.1/x", self.FakeBackend([])))
         self.assertIsNone(ft._from_sciencedirect("10.1/x", self.Missing()))
         self.assertIsNone(ft._from_sciencedirect("10.1/x", None))
+
+    def test_wiley_candidate_is_entitled(self):
+        cand = ft._from_wiley("10.1002/x", self.FakeBackend(["https://w/x.pdf"]))
+        self.assertEqual(cand["kind"], "wiley")
+        self.assertEqual(cand["access"], "entitled")
+        self.assertNotIn("format", cand)
+
+    def test_wiley_without_a_pdf_falls_through(self):
+        self.assertIsNone(ft._from_wiley("10.1002/x", self.FakeBackend([])))
+        self.assertIsNone(ft._from_wiley("10.1002/x", self.Missing()))
+        self.assertIsNone(ft._from_wiley("10.1002/x", None))
+
+    def test_wiley_tdm_fallback_shows_the_page_not_the_api_url(self):
+        class TdmOnly:
+            def get(self, key):
+                item = type("I", (), {
+                    "title": "T", "url": "https://onlinelibrary.wiley.com/doi/10.1002/x",
+                    "attachments": ["https://api.wiley.com/onlinelibrary/tdm/v1/articles/x"],
+                    "extra": {"tdm_url": "https://api.wiley.com/onlinelibrary/tdm/v1/articles/x"},
+                })
+                return item
+
+        cand = ft._from_wiley("10.1002/x", TdmOnly())
+        self.assertEqual(cand["url"], "https://onlinelibrary.wiley.com/doi/10.1002/x")
+
+    def test_tail_only_skips_everything_already_answered(self):
+        self.assertEqual([self._target(r) for r in ft._default_resolvers("a@b.c", tail_only=True)],
+                         ["_from_unpaywall_landing", "_from_scihub"])
 
     def test_entitled_pdf_beats_the_landing_page(self):
         with mock.patch.object(ft.unpaywall, "resolve_oa",

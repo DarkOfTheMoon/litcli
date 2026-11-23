@@ -379,15 +379,20 @@ class FetchFulltextTest(unittest.TestCase):
         self.addCleanup(out_ctx.__exit__, None, None, None)
         self.addCleanup(err_ctx.__exit__, None, None, None)
 
-    def _run(self, argv, info, download=None, sciencedirect=None):
+    def _run(self, argv, info, download=None, sciencedirect=None, tail=None):
         import contextlib
         from unittest import mock
 
         import litcli.cli as cli
 
         with contextlib.ExitStack() as stack:
-            stack.enter_context(mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext",
-                                           return_value=info))
+            if tail is None:
+                stack.enter_context(mock.patch(
+                    "litcli.commands.fetch.fulltext_mod.resolve_fulltext", return_value=info))
+            else:  # the tail-only retry after a publisher download failed
+                stack.enter_context(mock.patch(
+                    "litcli.commands.fetch.fulltext_mod.resolve_fulltext",
+                    side_effect=[info, tail]))
             if download is not None:
                 stack.enter_context(mock.patch("litcli.commands.fetch.pdfutil.download",
                                                return_value=download))
@@ -466,6 +471,88 @@ class FetchFulltextTest(unittest.TestCase):
     def test_another_publisher_does_not_pay_a_sciencedirect_probe(self):
         self.assertIsNone(self._probe_kwarg("10.1038/s41598-024-80509-9"))
 
+    def _wiley_probe(self, target):
+        from unittest import mock
+
+        import litcli.cli as cli
+
+        sentinel = object()
+        with mock.patch("litcli.commands.fetch._optional_backend", return_value=sentinel), \
+             mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext",
+                        return_value={"has_fulltext": False}) as resolve:
+            cli.main(["fetch", target])
+        return resolve.call_args.kwargs["wiley_backend"]
+
+    def test_a_wiley_doi_probes_wiley_even_unconfigured(self):
+        self.assertIsNotNone(self._wiley_probe("10.1002/nme.1628"))
+
+    def test_another_publisher_does_not_pay_a_wiley_probe(self):
+        self.assertIsNone(self._wiley_probe("10.1038/s41598-024-80509-9"))
+
+    def test_a_wiley_url_normalizes_to_its_doi(self):
+        from unittest import mock
+
+        import litcli.cli as cli
+
+        with mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext",
+                        return_value={"has_fulltext": False}) as resolve:
+            cli.main(["fetch", "https://onlinelibrary.wiley.com/doi/abs/10.1002/nme.1628"])
+        self.assertEqual(resolve.call_args.args[0], "10.1002/nme.1628")
+
+    def test_a_jphysiol_doi_probes_wiley_too(self):
+        self.assertIsNotNone(self._wiley_probe("10.1113/JP280000"))
+
+    def test_a_malformed_wiley_key_exits_2_instead_of_drifting_down_the_chain(self):
+        rc, _out, err, _files = self._run(["fetch", "wiley:"], {"has_fulltext": False})
+        self.assertEqual(rc, 2)
+        self.assertIn("[error] [wiley] not a DOI", err)
+
+    def test_a_failed_publisher_download_falls_through_to_the_tail(self):
+        # An unentitled Wiley page still answers and names a PDF URL, so the chain stops there;
+        # its failed download must not cost the landing page or Sci-Hub their turn.
+        from unittest import mock
+
+        import litcli.cli as cli
+
+        class Pub:
+            def get_attachment(self, key):
+                raise RuntimeError("[wiley] not entitled")
+
+        head = {"has_fulltext": True, "kind": "wiley", "url": "https://w/article",
+                "access": "entitled"}
+        tail = {"has_fulltext": True, "kind": "scihub", "url": "https://sci/x.pdf",
+                "access": "public"}
+        with mock.patch("litcli.commands.fetch.get_all_backends",
+                        return_value={"wiley": Pub()}), \
+             mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext",
+                        side_effect=[head, tail]) as resolve, \
+             mock.patch("litcli.commands.fetch.pdfutil.download", return_value=b"%PDF-1.4 sci"):
+            rc = cli.main(["fetch", "10.1002/x", "--lines", "0"])
+        self.assertEqual(rc, 0)
+        self.assertTrue(resolve.call_args.kwargs.get("tail_only"))
+        self.assertIn("public copy", self.err.getvalue())
+        self.assertEqual(os.listdir(self.dir), ["10.1002_x.pdf"])
+
+    def test_an_empty_tail_after_a_failed_publisher_download_gives_the_link(self):
+        from unittest import mock
+
+        import litcli.cli as cli
+
+        class Pub:
+            def get_attachment(self, key):
+                raise RuntimeError("[wiley] not entitled")
+
+        head = {"has_fulltext": True, "kind": "wiley", "url": "https://w/article",
+                "access": "entitled"}
+        with mock.patch("litcli.commands.fetch.get_all_backends",
+                        return_value={"wiley": Pub()}), \
+             mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext",
+                        side_effect=[head, {"has_fulltext": False}]):
+            rc = cli.main(["fetch", "10.1002/x"])
+        self.assertEqual(rc, 1)
+        self.assertIn("open the PDF in your entitled browser: https://w/article",
+                      self.err.getvalue())
+
     def test_a_blocked_sciencedirect_leaves_its_reason_and_the_cookie_hint(self):
         info = {"has_fulltext": False, "errors": ["<lambda>: ScienceDirect served its gate"]}
         from unittest import mock
@@ -539,7 +626,8 @@ class FetchFulltextTest(unittest.TestCase):
             "[sciencedirect] the PDF sits behind a second ScienceDirect acceptance gate")
         info = {"has_fulltext": True, "kind": "sciencedirect", "access": "entitled",
                 "format": "pdf", "url": "https://sd/x.pdf"}
-        rc, out, err, files = self._run(["fetch", "10.1016/x"], info, sciencedirect=backend)
+        rc, out, err, files = self._run(["fetch", "10.1016/x"], info, sciencedirect=backend,
+                                        tail={"has_fulltext": False})
         self.assertEqual((rc, out, files), (1, "", []))
         self.assertIn("acceptance gate", err)
         self.assertIn("https://sd/x.pdf", err)

@@ -110,6 +110,12 @@ def _registry() -> dict[str, type[Backend]]:
     except ImportError:
         pass
     try:
+        from .backends import wiley
+
+        reg["wiley"] = wiley.WileyBackend
+    except ImportError:
+        pass
+    try:
         from .backends import zlibrary
 
         reg["zlibrary"] = zlibrary.ZlibraryBackend

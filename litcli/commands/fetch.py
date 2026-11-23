@@ -20,6 +20,7 @@ from .. import pdf as pdfutil
 from .. import provenance, unpaywall
 from ..backends.base import Backend, NotSupportedError
 from ..backends.sciencedirect import normalize_key as sciencedirect_key
+from ..backends.wiley import normalize_key as wiley_key
 from ..config import get_all_backends, get_backend
 from ..errors import LitcliError, Unavailable
 from ..paths import target_path
@@ -29,6 +30,13 @@ _ISBN_RE = re.compile(r"^(?:97[89][\d-]{10,17}|\d{9}[\dXx])$")
 
 #: DOI prefixes owned by Elsevier (ScienceDirect, incl. the 10.1006/10.1053/10.1067 legacy ones).
 ELSEVIER_DOI_RE = ("10.1016/", "10.1006/", "10.1053/", "10.1067/")
+
+#: DOI prefixes owned by Wiley (the Online Library, incl. the 10.1046/10.1096 legacy ones and
+#: the Physiological Society's 10.1113/10.1114).
+WILEY_DOI_RE = ("10.1002/", "10.1111/", "10.1113/", "10.1114/", "10.1046/", "10.1096/")
+
+#: Targets that are Wiley by shape: a ``wiley:`` key, or a Wiley / doi.org URL.
+_WILEY_LIKE_RE = re.compile(r"^(?:wiley:|https?://(?:[\w-]+\.)*(?:wiley\.com|doi\.org)/)", re.I)
 
 #: A target that already is a DOI (an arXiv id has been turned into one by normalization).
 _DOI_LIKE_RE = re.compile(r"^10\.\d{4,9}/")
@@ -139,6 +147,12 @@ def _sciencedirect_hint() -> None:
          " (or cookie_file) from your browser's off-campus session")
 
 
+def _wiley_hint() -> None:
+    note("  Wiley needs a logged-in session: set [backends.wiley] cookie"
+         " (or cookie_file) and user_agent from your browser's off-campus session,"
+         " or set a free tdm_token (its PDF route skips Cloudflare)")
+
+
 def _fetch_fulltext(cfg, args, target: str) -> int:
     """Walk the legitimate fulltext chain for ``target`` and save the file (or print the link).
 
@@ -146,6 +160,12 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
     it is a public copy without an open licence, so its hits say so.
     """
     key = normalize_related_key(target)
+    try:
+        key = wiley_key(key)[4:]  # a pasted Wiley URL / wiley:<DOI> form normalizes to the DOI
+    except LitcliError as e:
+        if _WILEY_LIKE_RE.match(target.strip()):  # a Wiley-shaped target must normalize
+            note(f"[error] {e}")
+            return 2
     email = _resolve_oa_email(cfg, args)
     backends = get_all_backends(cfg)
     scihub_backend = backends.get("scihub")
@@ -164,6 +184,13 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
             sciencedirect_backend = _optional_backend("sciencedirect", cfg)
         except RuntimeError as e:  # a broken section must not sink the rest of the chain
             sd_error = str(e)
+    wiley_backend = backends.get("wiley")
+    wiley_error = ""
+    if wiley_backend is None and key.lower().startswith(WILEY_DOI_RE):
+        try:
+            wiley_backend = _optional_backend("wiley", cfg)
+        except RuntimeError as e:  # a broken section must not sink the rest of the chain
+            wiley_error = str(e)
     info = None
     if pii_key and sciencedirect_backend is not None:
         # The URL/PII is the identifier the user has; its DOI (when the page carries one)
@@ -196,15 +223,20 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
                                              europepmc_backend=corpus["europepmc"],
                                              zenodo_backend=corpus["zenodo"],
                                              sciencedirect_backend=sciencedirect_backend,
+                                             wiley_backend=wiley_backend,
                                              scihub_backend=scihub_backend)
     if not info.get("has_fulltext"):
         note(f"DOI {key}  no such work in the local store or open OA sources")
         if sd_error:
             note(f"  [skipped] {sd_error}")
+        if wiley_error:
+            note(f"  [skipped] {wiley_error}")
         for reason in info.get("errors") or []:
             note(f"  [skipped] {reason}")
         if sciencedirect_backend is not None and (pii_key or key.lower().startswith(ELSEVIER_DOI_RE)):
             _sciencedirect_hint()
+        if wiley_backend is not None and key.lower().startswith(WILEY_DOI_RE):
+            _wiley_hint()
         if not scihub_backend:
             note("  add --scihub to also try Sci-Hub, or use institutional access / interlibrary loan")
         else:
@@ -246,16 +278,40 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
         out(info["url"])
         return 0
 
-    if kind == "sciencedirect" and sciencedirect_backend is not None:
-        # The PDF needs the same entitled session as the page (and a second acceptance gate),
-        # so downloading it through a plain client would only collect a challenge page.
+    raw = None
+    publisher = {"sciencedirect": sciencedirect_backend, "wiley": wiley_backend}.get(kind)
+    if publisher is not None:
+        # The PDF needs the same entitled session as the page (and may sit behind a second
+        # gate), so downloading it through a plain client would only collect a challenge page.
         try:
-            raw = sciencedirect_backend.get_attachment(key)
+            raw = publisher.get_attachment(key)
         except (LitcliError, RuntimeError) as e:
             note(f"  [skipped] {e}")
-            note(f"  open the PDF in your entitled browser: {info['url']}")
-            return 1
-    else:
+            # The publisher page answered (hence the chain stopped there) but the bytes did
+            # not come — a link that always exists, e.g. Wiley's unentitled ``pdfdirect``.
+            # The rest of the chain still deserves its turn before this is a failure.
+            tail = fulltext_mod.resolve_fulltext(key, email, tail_only=True,
+                                                 scihub_backend=scihub_backend)
+            hit = tail.get("has_fulltext") and tail.get("url")
+            for reason in tail.get("errors") or []:
+                note(f"  [skipped] {reason}")
+            if not hit:
+                note(f"  open the PDF in your entitled browser: {info['url']}")
+                return 1
+            info = tail
+            kind = info["kind"]
+            fmt = info.get("format") or "pdf"
+            if info.get("access") == provenance.PUBLIC:
+                note(f"  note: {kind} copy — public copy, not an open-access licence")
+            if info.get("title"):
+                note(f"  title: {info['title'][:70]}")
+            note(f"  source={kind}  {'PDF' if fmt == 'pdf' else fmt.upper()}: {info['url']}")
+            if fmt == "html":
+                note("  note: landing page, not a file — open it in a browser")
+            if args.no_download or fmt == "html":
+                out(info["url"])
+                return 0
+    if raw is None:
         raw = pdfutil.download(info["url"])
     _verify(raw, fmt, info["url"])
     path = target_path(args.out, key, fmt)
