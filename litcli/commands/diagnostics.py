@@ -52,6 +52,9 @@ def cmd_backends_status(cfg, args) -> int:
         if has_write:
             auth = ("authorized (has write key)" if _cfg_write_key(cfg, name)
                     else "unauthorized (write needs `backends authorize`)")
+        elif hasattr(b, "cookie"):  # a session-carrying backend: say whether one is configured
+            auth = ("session cookie configured" if b.cookie
+                    else "no session cookie (entitled/login session needed)")
         else:
             auth = "read-only backend, no auth needed"
         # Lightweight reachability probe only for backends providing ping() (zotero local); non-fatal if it fails.

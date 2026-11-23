@@ -379,17 +379,23 @@ class FetchFulltextTest(unittest.TestCase):
         self.addCleanup(out_ctx.__exit__, None, None, None)
         self.addCleanup(err_ctx.__exit__, None, None, None)
 
-    def _run(self, argv, info, download=None):
+    def _run(self, argv, info, download=None, sciencedirect=None):
+        import contextlib
         from unittest import mock
 
         import litcli.cli as cli
 
-        with mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext", return_value=info):
-            if download is None:
-                rc = cli.main(argv)
-            else:
-                with mock.patch("litcli.commands.fetch.pdfutil.download", return_value=download):
-                    rc = cli.main(argv)
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext",
+                                           return_value=info))
+            if download is not None:
+                stack.enter_context(mock.patch("litcli.commands.fetch.pdfutil.download",
+                                               return_value=download))
+            if sciencedirect is not None:
+                stack.enter_context(mock.patch(
+                    "litcli.commands.fetch.get_all_backends",
+                    return_value={"sciencedirect": sciencedirect}))
+            rc = cli.main(argv)
         return rc, self.out.getvalue(), self.err.getvalue(), os.listdir(self.dir)
 
     def test_a_missing_fulltext_exits_1_with_the_scihub_hint(self):
@@ -441,6 +447,102 @@ class FetchFulltextTest(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertTrue(out.endswith(".xml\n"))
         self.assertEqual(files, [f"{out.strip().rsplit(os.sep, 1)[-1]}"])
+
+    def _probe_kwarg(self, target):
+        from unittest import mock
+
+        import litcli.cli as cli
+
+        sentinel = object()
+        with mock.patch("litcli.commands.fetch._optional_backend", return_value=sentinel), \
+             mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext",
+                        return_value={"has_fulltext": False}) as resolve:
+            cli.main(["fetch", target])
+        return resolve.call_args.kwargs["sciencedirect_backend"]
+
+    def test_an_elsevier_doi_probes_sciencedirect_even_unconfigured(self):
+        self.assertIsNotNone(self._probe_kwarg("10.1016/j.cma.2004.11.019"))
+
+    def test_another_publisher_does_not_pay_a_sciencedirect_probe(self):
+        self.assertIsNone(self._probe_kwarg("10.1038/s41598-024-80509-9"))
+
+    def test_a_blocked_sciencedirect_leaves_its_reason_and_the_cookie_hint(self):
+        info = {"has_fulltext": False, "errors": ["<lambda>: ScienceDirect served its gate"]}
+        from unittest import mock
+
+        import litcli.cli as cli
+
+        sentinel = object()
+        with mock.patch("litcli.commands.fetch._optional_backend", return_value=sentinel), \
+             mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext", return_value=info):
+            rc = cli.main(["fetch", "10.1016/x"])
+        err = self.err.getvalue()
+        self.assertEqual(rc, 1)
+        self.assertIn("ScienceDirect served its gate", err)
+        self.assertIn("cookie_file", err)
+
+    def test_a_sciencedirect_url_is_resolved_and_continues_with_its_doi(self):
+        from unittest import mock
+
+        import litcli.cli as cli
+
+        item = type("I", (), {"doi": "10.1016/x", "title": "T", "attachments": []})()
+        backend = mock.Mock()
+        backend.get.return_value = item
+        chain = {"has_fulltext": True, "kind": "openalex", "url": "https://oa/x.pdf"}
+        with mock.patch("litcli.commands.fetch.get_all_backends",
+                        return_value={"sciencedirect": backend}), \
+             mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext",
+                        return_value=chain) as resolve:
+            rc = cli.main(["fetch", "https://www.sciencedirect.com/science/article/pii/S0045782505000733",
+                           "--no-download"])
+        self.assertEqual(rc, 0)
+        backend.get.assert_called_once_with("pii:S0045782505000733")
+        self.assertEqual(resolve.call_args.args[0], "10.1016/x")
+
+    def test_a_blocked_sciencedirect_url_reports_the_gate_without_the_chain(self):
+        from unittest import mock
+
+        import litcli.cli as cli
+
+        backend = mock.Mock()
+        backend.get.side_effect = RuntimeError("[sciencedirect] gate: supply a cookie")
+        with mock.patch("litcli.commands.fetch.get_all_backends",
+                        return_value={"sciencedirect": backend}), \
+             mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext") as resolve:
+            rc = cli.main(["fetch", "S0045782505000733"])
+        self.assertEqual(rc, 1)
+        resolve.assert_not_called()
+        self.assertIn("supply a cookie", self.err.getvalue())
+
+    def test_an_entitled_copy_says_it_is_not_open_access(self):
+        from unittest import mock
+
+        # The PDF must come through the backends's own session, not a plain client.
+        backend = mock.Mock()
+        backend.get_attachment.return_value = b"%PDF-1.4 sd"
+        info = {"has_fulltext": True, "kind": "sciencedirect", "access": "entitled",
+                "format": "pdf", "url": "https://sd/x.pdf"}
+        rc, _out, err, files = self._run(["fetch", "10.1016/x"], info, sciencedirect=backend)
+        self.assertEqual(rc, 0)
+        self.assertEqual(files, ["10.1016_x.pdf"])
+        self.assertIn("subscription copy via your institution", err)
+        backend.get_attachment.assert_called_once_with("10.1016/x")
+
+    def test_a_gated_sciencedirect_pdf_reports_the_gate_and_the_link(self):
+        from unittest import mock
+
+        from litcli.errors import Unavailable
+
+        backend = mock.Mock()
+        backend.get_attachment.side_effect = Unavailable(
+            "[sciencedirect] the PDF sits behind a second ScienceDirect acceptance gate")
+        info = {"has_fulltext": True, "kind": "sciencedirect", "access": "entitled",
+                "format": "pdf", "url": "https://sd/x.pdf"}
+        rc, out, err, files = self._run(["fetch", "10.1016/x"], info, sciencedirect=backend)
+        self.assertEqual((rc, out, files), (1, "", []))
+        self.assertIn("acceptance gate", err)
+        self.assertIn("https://sd/x.pdf", err)
 
 
 class MainCatchTest(unittest.TestCase):

@@ -39,6 +39,25 @@ class TestConfig(unittest.TestCase):
     def test_registry_contains_douban(self):
         self.assertIn("douban", config._registry())
 
+    def test_a_configured_backend_that_failed_does_not_fall_back_silently(self):
+        # `get` on a broken section must not hand back a default instance that ignores it.
+        class _B:
+            capabilities: ClassVar[set[str]] = {"read"}
+
+        def fake(name, bcfg):
+            if "cookie_file" in bcfg:
+                raise RuntimeError("cannot read cookie_file")
+            return _B()
+
+        config.failed_backends.clear()
+        with mock.patch.object(config, "_make_backend", fake):
+            config.discover_backends({"backends": {"sd": {"type": "sciencedirect",
+                                                          "cookie_file": "/nope"}}})
+            with self.assertRaises(RuntimeError) as ctx:
+                config.get_backend("sd", config={"backends": {"sd": {"type": "sciencedirect",
+                                                                     "cookie_file": "/nope"}}})
+        self.assertIn("cookie_file", str(ctx.exception))
+
     def test_get_backend_falls_back_to_registry(self):
         # A registered-but-unconfigured optional backend (douban) can be requested directly,
         # without being enabled in config: `search --backend douban` works out of the box.

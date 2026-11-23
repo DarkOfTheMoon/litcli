@@ -1,7 +1,7 @@
 # litcli 配置示例(复制到 ~/.config/litcli/config.toml;Windows 为 %APPDATA%\litcli\config.toml)。
 # 文件存在就**整体以文件为准**;只有文件不存在时才用内置默认(本机 Zotero + arXiv + Crossref + OpenAlex)。
-# 所以复制本文件 = 启用下面全部后端:openlibrary、uspto、cnki、douban、scihub、zlibrary 与四个开放
-# 获取源(doaj / europepmc / doab / zenodo);不想用的段整段删掉。
+# 所以复制本文件 = 启用下面全部后端:openlibrary、uspto、cnki、douban、sciencedirect、scihub、
+# zlibrary 与四个开放获取源(doaj / europepmc / doab / zenodo);不想用的段整段删掉。
 
 [backends.zotero]
 type = "zotero_local"
@@ -54,6 +54,21 @@ type = "cnki"
 type = "douban"
 # user_data_dir = "~/.config/litcli/douban-chrome"  # 独立浏览器 profile(默认仅用于偶发登录/cookie 持久化);Windows 默认在 %APPDATA%\litcli\douban-chrome
 # headless = true                                   # 默认无头;豆瓣无需人工滑验证码,仅风控时降级
+
+# 可选:ScienceDirect 文章读取(出版社站点,无需 key,只按 DOI / PII / 文章 URL 解析,无关键词检索)。
+# 不登录也能取到题录,但 PDF 只在**有权限的会话**下给出(机构 IP、校园网或已登录),匿名访问会拿到
+# CPE00001 拦截页并明确提示。它排在 OA 全文链之后,非 OA 授权,命中标注为机构访问副本。
+# 机构 IP 不够时,在用已认证(机构登录)的浏览器标签里打开一次文章、把该会话的 Cookie 贴进来(或指向导出的 cookies.txt)。
+# cookie 与 user_agent 必须成对给:cookie 单独配置会直接报错(清关 Cookie 绑 UA + 出口 IP,寿命分钟~小时级,
+# 换机器回放即失效)。未认证的标签页只会给 "Purchase PDF",且 /pii/ 会被静默改写成 /abs/。
+# PDF 本身另有一道 Elsevier 验收关(craft/challenge/pdf),页面通了也不一定直取;被拦时 fetch 会报因并给出
+# 链接,在已授权的浏览器里打开即可。
+[backends.sciencedirect]
+type = "sciencedirect"
+# cookie = "…(浏览器 Cookie 头,原样粘贴)"
+# cookie_file = "~/.config/litcli/sciencedirect-cookies.txt"   # 或 Netscape cookies.txt 路径
+# user_agent = "…(与 Cookie 同源浏览器的 User-Agent;Cloudflare 清关 Cookie 与 UA 绑定,须一致)"
+# timeout = 30
 
 # 可选:Sci-Hub 全文兜底(盗版镜像,只按 DOI 解析 PDF,无关键词检索)。
 # 默认不内置。启用后 `fetch fulltext` 会在本地库/Unpaywall/OpenAlex 都无果时再试 Sci-Hub,

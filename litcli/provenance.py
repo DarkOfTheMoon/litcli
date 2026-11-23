@@ -7,19 +7,23 @@ label travels with the item instead of being guessed from the backend's name.
 
 Values are deliberately about the copy, not about a site:
 
-``oa``      openly licensed (arXiv, DOAB, Europe PMC, Zenodo, DOAJ, OpenAlex)
-``public``  a copy published on a public site without an open licence (Sci-Hub, Z-Library)
-``local``   the user's own library
-``""``      records or metadata only — no copy
+``oa``       openly licensed (arXiv, DOAB, Europe PMC, Zenodo, DOAJ, OpenAlex)
+``entitled`` a subscription copy reached through the user's own institutional access
+             (ScienceDirect): legitimate, but not open access
+``public``   a copy published on a public site without an open licence (Sci-Hub, Z-Library)
+``local``    the user's own library
+``""``       records or metadata only — no copy
 """
 from __future__ import annotations
 
 OA = "oa"
+ENTITLED = "entitled"
 PUBLIC = "public"
 LOCAL = "local"
 
-LABELS = {OA: "open access", PUBLIC: "public copy", LOCAL: "your library"}
-TAGS = {OA: "oa", PUBLIC: "public", LOCAL: "local"}
+LABELS = {OA: "open access", ENTITLED: "institutional access",
+          PUBLIC: "public copy", LOCAL: "your library"}
+TAGS = {OA: "oa", ENTITLED: "entitled", PUBLIC: "public", LOCAL: "local"}
 
 
 def label(access: str) -> str:

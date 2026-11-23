@@ -121,10 +121,30 @@ class CorpusResolverTest(unittest.TestCase):
         return next(n for n in resolver.__code__.co_names if n.startswith("_from_"))
 
     def test_resolver_order_keeps_scihub_last(self):
+        # ScienceDirect sits after the free corpora but before the landing page: bytes beat a page.
         order = [self._target(r) for r in ft._default_resolvers("a@b.c")]
         self.assertEqual(order, ["_from_local", "_from_unpaywall", "_from_openalex",
-                                 "_from_europepmc", "_from_zenodo",
+                                 "_from_europepmc", "_from_zenodo", "_from_sciencedirect",
                                  "_from_unpaywall_landing", "_from_scihub"])
+
+    def test_sciencedirect_candidate_is_entitled(self):
+        cand = ft._from_sciencedirect("10.1/x", self.FakeBackend(["https://sd/x.pdf"]))
+        self.assertEqual(cand["kind"], "sciencedirect")
+        self.assertEqual(cand["access"], "entitled")
+        self.assertNotIn("format", cand)
+
+    def test_sciencedirect_without_a_pdf_falls_through(self):
+        self.assertIsNone(ft._from_sciencedirect("10.1/x", self.FakeBackend([])))
+        self.assertIsNone(ft._from_sciencedirect("10.1/x", self.Missing()))
+        self.assertIsNone(ft._from_sciencedirect("10.1/x", None))
+
+    def test_entitled_pdf_beats_the_landing_page(self):
+        with mock.patch.object(ft.unpaywall, "resolve_oa",
+                               return_value={"best_pdf": "", "best_landing": "https://legal/page"}):
+            out = ft.resolve_fulltext("10.1/x",
+                                      sciencedirect_backend=self.FakeBackend(["https://sd/x.pdf"]))
+        self.assertEqual(out["kind"], "sciencedirect")
+        self.assertEqual(out["url"], "https://sd/x.pdf")
 
     def test_legal_landing_page_beats_scihub(self):
         class Sci:

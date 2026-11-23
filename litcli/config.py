@@ -104,6 +104,12 @@ def _registry() -> dict[str, type[Backend]]:
     except ImportError:
         pass
     try:
+        from .backends import sciencedirect
+
+        reg["sciencedirect"] = sciencedirect.ScienceDirectBackend
+    except ImportError:
+        pass
+    try:
         from .backends import zlibrary
 
         reg["zlibrary"] = zlibrary.ZlibraryBackend
@@ -175,6 +181,10 @@ def get_backend(name: str = "zotero", config: dict | None = None) -> Backend:
     backends = discover_backends(config)
     if name in backends:
         return backends[name]
+    # It is configured but its section could not be built (a bad cookie_file, say): say so
+    # instead of silently handing back a default instance that ignores the section.
+    if name in failed_backends:
+        raise RuntimeError(f"backend '{name}' failed to build: {failed_backends[name]}")
     # Allow a registered-but-unconfigured optional backend to be requested directly (e.g.
     # `search --backend douban` / `--backend cnki`) with default kwargs, rather than requiring
     # it to be enabled in config. Optional backends have type == canonical name; the built-in

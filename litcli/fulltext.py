@@ -5,6 +5,7 @@ Priorities (per user requirements):
      locate an item by DOI and take its attachment — local store wins, no network.
   2. **Public OA sources**: Unpaywall (best_oa_location.pdf) → OpenAlex (best_oa_location.pdf_url),
      then the legal corpus endpoints: Europe PMC (open-access JATS XML) → Zenodo (open files),
+     then **ScienceDirect** (an entitled subscription copy through the user's institution),
      and finally Unpaywall's landing page (HTML, no bytes) so a legal page is still reported
      when no file exists.
   3. **Sci-Hub (opt-in, last)**: a copyright-evading library, so it is only consulted after the
@@ -14,8 +15,8 @@ Priorities (per user requirements):
      institutional access / interlibrary loan / a proxy.
 
 Decoupled from backends: ``resolve_fulltext`` accepts an injectable resolver list for offline
-stubbing; the default resolvers are local/unpaywall/openalex (+ the corpus endpoints) + landing
-page + scihub when injected.
+stubbing; the default resolvers are local/unpaywall/openalex (+ the corpus endpoints) +
+sciencedirect + landing page + scihub when injected.
 """
 from __future__ import annotations
 
@@ -156,6 +157,26 @@ def _from_zenodo(doi: str, backend) -> dict | None:
             "status": "open access", "access": "oa"}
 
 
+def _from_sciencedirect(doi: str, backend) -> dict | None:
+    """An Elsevier PDF the user is entitled to through their institution (not open access).
+
+    Only a backend that reports an attachment is taken; a page without a ``pdfUrl`` (anonymous
+    visitor, or the 403 block) simply yields None and the chain moves on.
+    """
+    if backend is None:
+        return None
+    try:
+        item: AcademicItem = backend.get(doi)
+    except (LitcliError, OSError, KeyError):
+        return None
+    # A gate/entitlement RuntimeError is left to propagate: the chain records it, and it is
+    # the one message that tells the user what to do (log in, supply a session cookie).
+    if not item.attachments:
+        return None
+    return {"kind": "sciencedirect", "url": item.attachments[0], "title": item.title,
+            "status": "institutional access (not open access)", "access": "entitled"}
+
+
 def _from_scihub(doi: str, backend) -> dict | None:
     """Sci-Hub fallback via an injected backend (last in the chain; opt-in)."""
     if backend is None:
@@ -172,7 +193,8 @@ def _from_scihub(doi: str, backend) -> dict | None:
 
 def _default_resolvers(email: str, backends: dict | None = None,
                        openalex_backend=None, scihub_backend=None,
-                       europepmc_backend=None, zenodo_backend=None) -> list[Resolver]:
+                       europepmc_backend=None, zenodo_backend=None,
+                       sciencedirect_backend=None) -> list[Resolver]:
     cache: dict[str, dict | None] = {}
 
     def _oa(doi: str):
@@ -190,6 +212,8 @@ def _default_resolvers(email: str, backends: dict | None = None,
         lambda d: _from_openalex(d, openalex_backend),
         lambda d: _from_europepmc(d, europepmc_backend),
         lambda d: _from_zenodo(d, zenodo_backend),
+        # An entitled subscription PDF outranks a landing page (bytes beat a page).
+        lambda d: _from_sciencedirect(d, sciencedirect_backend),
         # The legal landing page outranks the shadow-library copy, which stays last.
         lambda d: _from_unpaywall_landing(d, email, _oa),
         lambda d: _from_scihub(d, scihub_backend),
@@ -236,6 +260,7 @@ def resolve_fulltext(doi: str, email: str = unpaywall.DEFAULT_EMAIL,
                      scihub_backend=None,
                      europepmc_backend=None,
                      zenodo_backend=None,
+                     sciencedirect_backend=None,
                      resolvers: list[Resolver] | None = None) -> dict:
     """Find fulltext by DOI, priority: local store → OA sources → Sci-Hub (when injected).
 
@@ -245,7 +270,8 @@ def resolve_fulltext(doi: str, email: str = unpaywall.DEFAULT_EMAIL,
     """
     if resolvers is None:
         resolvers = _default_resolvers(email, backends, openalex_backend, scihub_backend,
-                                       europepmc_backend, zenodo_backend)
+                                       europepmc_backend, zenodo_backend,
+                                       sciencedirect_backend)
     errors: list[str] = []
     for r in resolvers:
         try:

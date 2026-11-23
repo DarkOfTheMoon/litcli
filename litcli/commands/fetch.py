@@ -1,7 +1,8 @@
 """``fetch``: save the fulltext behind an id, or a book by title/ISBN. Read-only, nothing is stored.
 
-One command, one target. ``fetch <doi|arxiv-id|isbn>`` walks the legitimate chain (local store →
-Unpaywall/OpenAlex → Europe PMC/Zenodo → landing page) and **saves the file by default**, printing
+One command, one target. ``fetch <doi|arxiv-id|sciencedirect-url|isbn>`` walks the legitimate chain (local store →
+Unpaywall/OpenAlex → Europe PMC/Zenodo → ScienceDirect when entitled → landing page) and
+**saves the file by default**, printing
 exactly one line on stdout: the path. Everything else (what source answered, notes, previews) goes
 to stderr so ``f=$(litcli fetch <id>)`` stays clean. Exit codes: 0 file saved, 1 nothing found,
 2 error.
@@ -18,12 +19,28 @@ from .. import fulltext as fulltext_mod
 from .. import pdf as pdfutil
 from .. import provenance, unpaywall
 from ..backends.base import Backend, NotSupportedError
+from ..backends.sciencedirect import normalize_key as sciencedirect_key
 from ..config import get_all_backends, get_backend
 from ..errors import LitcliError, Unavailable
 from ..paths import target_path
 from .keys import normalize_related_key
 
 _ISBN_RE = re.compile(r"^(?:97[89][\d-]{10,17}|\d{9}[\dXx])$")
+
+#: DOI prefixes owned by Elsevier (ScienceDirect, incl. the 10.1006/10.1053/10.1067 legacy ones).
+ELSEVIER_DOI_RE = ("10.1016/", "10.1006/", "10.1053/", "10.1067/")
+
+#: A target that already is a DOI (an arXiv id has been turned into one by normalization).
+_DOI_LIKE_RE = re.compile(r"^10\.\d{4,9}/")
+
+
+def _sciencedirect_key(target: str) -> str:
+    """``pii:<ID>`` when the target is a ScienceDirect article URL or bare PII, else ``""``."""
+    try:
+        normalized = sciencedirect_key(target)
+    except LitcliError:
+        return ""
+    return normalized if normalized.startswith("pii:") else ""
 
 
 def out(text: str) -> None:
@@ -117,6 +134,11 @@ def cmd_fetch(cfg, args) -> int:
     return _fetch_fulltext(cfg, args, target)
 
 
+def _sciencedirect_hint() -> None:
+    note("  ScienceDirect needs a logged-in session: set [backends.sciencedirect] cookie"
+         " (or cookie_file) from your browser's off-campus session")
+
+
 def _fetch_fulltext(cfg, args, target: str) -> int:
     """Walk the legitimate fulltext chain for ``target`` and save the file (or print the link).
 
@@ -132,13 +154,57 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
     # The legal corpus sources are keyless: consult them even when not enabled in config.
     corpus = {name: backends.get(name) or _optional_backend(name, cfg)
               for name in ("europepmc", "zenodo")}
-    info = fulltext_mod.resolve_fulltext(key, email, backends=backends,
-                                         openalex_backend=backends.get("openalex"),
-                                         europepmc_backend=corpus["europepmc"],
-                                         zenodo_backend=corpus["zenodo"],
-                                         scihub_backend=scihub_backend)
+    # ScienceDirect is worth a probe for its own identifiers (a pasted article URL or PII) and
+    # for Elsevier DOIs, even unconfigured; other publishers would only 403 or lack a pdfUrl.
+    pii_key = "" if _DOI_LIKE_RE.match(key) else _sciencedirect_key(target)
+    sciencedirect_backend = backends.get("sciencedirect")
+    sd_error = ""
+    if sciencedirect_backend is None and (pii_key or key.lower().startswith(ELSEVIER_DOI_RE)):
+        try:
+            sciencedirect_backend = _optional_backend("sciencedirect", cfg)
+        except RuntimeError as e:  # a broken section must not sink the rest of the chain
+            sd_error = str(e)
+    info = None
+    if pii_key and sciencedirect_backend is not None:
+        # The URL/PII is the identifier the user has; its DOI (when the page carries one)
+        # lets the rest of the chain run if this step is blocked.
+        try:
+            item = sciencedirect_backend.get(pii_key)
+        except (LitcliError, RuntimeError) as e:
+            sd_error = str(e)
+        else:
+            if item.doi:
+                key = item.doi
+            if item.attachments:
+                info = {"has_fulltext": True, "kind": "sciencedirect",
+                        "url": item.attachments[0], "title": item.title, "access": "entitled"}
+    if info is None and pii_key and not _DOI_LIKE_RE.match(key):
+        # A ScienceDirect URL/PII whose page never gave a DOI: the chain has nothing to key
+        # on, so report the gate instead of probing every backend with a URL.
+        if sciencedirect_backend is None:
+            note(f"ScienceDirect {pii_key}  {sd_error or 'backend unavailable'}")
+        else:
+            note(f"ScienceDirect {pii_key}  the article page did not load and gave no DOI")
+            if sd_error:
+                note(f"  [skipped] {sd_error}")
+            else:
+                _sciencedirect_hint()
+        return 1
+    if info is None:
+        info = fulltext_mod.resolve_fulltext(key, email, backends=backends,
+                                             openalex_backend=backends.get("openalex"),
+                                             europepmc_backend=corpus["europepmc"],
+                                             zenodo_backend=corpus["zenodo"],
+                                             sciencedirect_backend=sciencedirect_backend,
+                                             scihub_backend=scihub_backend)
     if not info.get("has_fulltext"):
         note(f"DOI {key}  no such work in the local store or open OA sources")
+        if sd_error:
+            note(f"  [skipped] {sd_error}")
+        for reason in info.get("errors") or []:
+            note(f"  [skipped] {reason}")
+        if sciencedirect_backend is not None and (pii_key or key.lower().startswith(ELSEVIER_DOI_RE)):
+            _sciencedirect_hint()
         if not scihub_backend:
             note("  add --scihub to also try Sci-Hub, or use institutional access / interlibrary loan")
         else:
@@ -149,6 +215,8 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
     access = info.get("access", "")
     if access == provenance.PUBLIC:
         note(f"  note: {kind} copy — public copy, not an open-access licence")
+    elif access == provenance.ENTITLED:
+        note("  note: subscription copy via your institution, not an open-access licence")
     if info.get("format") == "xml":
         note("  note: open-access JATS XML (text without a PDF; not a rendered article)")
     if info.get("title"):
@@ -178,7 +246,17 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
         out(info["url"])
         return 0
 
-    raw = pdfutil.download(info["url"])
+    if kind == "sciencedirect" and sciencedirect_backend is not None:
+        # The PDF needs the same entitled session as the page (and a second acceptance gate),
+        # so downloading it through a plain client would only collect a challenge page.
+        try:
+            raw = sciencedirect_backend.get_attachment(key)
+        except (LitcliError, RuntimeError) as e:
+            note(f"  [skipped] {e}")
+            note(f"  open the PDF in your entitled browser: {info['url']}")
+            return 1
+    else:
+        raw = pdfutil.download(info["url"])
     _verify(raw, fmt, info["url"])
     path = target_path(args.out, key, fmt)
     _save(raw, path, args.lines, extract=_TEXT_EXTRACTORS.get(fmt, pdfutil.extract_text))
