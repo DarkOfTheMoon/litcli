@@ -15,15 +15,23 @@ import os
 import re
 import sys
 import tempfile
+from collections.abc import Callable
+from typing import NamedTuple
 
 from .. import fulltext as fulltext_mod
 from .. import pdf as pdfutil
 from .. import provenance, unpaywall
+from ..backends.acm import normalize_key as acm_key
+from ..backends.aiaa import normalize_key as aiaa_key
 from ..backends.aip import normalize_key as aip_key
+from ..backends.aps import normalize_key as aps_key
 from ..backends.base import Backend, NotSupportedError
 from ..backends.cambridge import normalize_key as cambridge_key
+from ..backends.ieee import normalize_key as ieee_key
+from ..backends.iop import normalize_key as iop_key
 from ..backends.sciencedirect import normalize_key as sciencedirect_key
 from ..backends.springer import normalize_key as springer_key
+from ..backends.tandf import normalize_key as tandf_key
 from ..backends.wiley import normalize_key as wiley_key
 from ..config import get_all_backends, get_backend
 from ..errors import LitcliError, Unavailable
@@ -65,6 +73,25 @@ _AIP_LIKE_RE = re.compile(
 #: Targets that are Cambridge by shape: a ``cambridge:`` key, or a Cambridge Core URL.
 _CAMBRIDGE_LIKE_RE = re.compile(r"^(?:cambridge[:\/]|https?://(?:[\w-]+\.)*cambridge\.org/)", re.I)
 
+#: DOI prefixes owned by the guarded publishers added in 2026-11 (ACM, APS, IOP, Taylor &
+#: Francis, AIAA, IEEE Xplore). Each sits behind a bot challenge, so its step only starts for
+#: its own prefixes or a pasted page URL.
+ACM_DOI_RE = ("10.1145/",)
+APS_DOI_RE = ("10.1103/",)
+IOP_DOI_RE = ("10.1088/",)
+TANDF_DOI_RE = ("10.1080/",)
+AIAA_DOI_RE = ("10.2514/",)
+IEEE_DOI_RE = ("10.1109/",)
+
+_SCIENCEDIRECT_LIKE_RE = re.compile(
+    r"^(?:sciencedirect[\:/]|https?://(?:[\w-]+\.)*sciencedirect\.com/)", re.I)
+_ACM_LIKE_RE = re.compile(r"^(?:acm[:\/]|https?://(?:[\w-]+\.)*dl\.acm\.org/)", re.I)
+_APS_LIKE_RE = re.compile(r"^(?:aps[:\/]|https?://(?:[\w-]+\.)*link\.aps\.org/)", re.I)
+_IOP_LIKE_RE = re.compile(r"^(?:iop[:\/]|https?://(?:[\w-]+\.)*iopscience\.iop\.org/)", re.I)
+_TANDF_LIKE_RE = re.compile(r"^(?:tandf[:\/]|https?://(?:[\w-]+\.)*tandfonline\.com/)", re.I)
+_AIAA_LIKE_RE = re.compile(r"^(?:aiaa[:\/]|https?://(?:[\w-]+\.)*arc\.aiaa\.org/)", re.I)
+_IEEE_LIKE_RE = re.compile(r"^(?:ieee[:\/]|https?://(?:[\w-]+\.)*ieeexplore\.ieee\.org/)", re.I)
+
 #: A target that already is a DOI (an arXiv id has been turned into one by normalization).
 _DOI_LIKE_RE = re.compile(r"^10\.\d{4,9}/")
 
@@ -78,26 +105,25 @@ def _sciencedirect_key(target: str) -> str:
     return normalized if normalized.startswith("pii:") else ""
 
 
-def _cambridge_url(target: str) -> str:
-    """``url:<URL>`` when the target is a Cambridge Core page, else ``""``.
+class _PublisherSpec(NamedTuple):
+    """One guarded publisher step: how its targets are recognised and how it is reported."""
 
-    A Cambridge URL carries an internal product id, not the DOI, so it stays a URL until the
-    page names its own DOI (``citation_doi``).
-    """
-    try:
-        normalized = cambridge_key(target)
-    except LitcliError:
-        return ""
-    return normalized if normalized.startswith("url:") else ""
+    name: str
+    label: str
+    normalize: Callable[[str], str]
+    like: re.Pattern
+    doi_re: tuple[str, ...]
+    hint: Callable[[], None]
+    #: The key kind a pasted page URL yields (``pii:`` on ScienceDirect, else ``url:``); the
+    #: page step is what turns it into a DOI the rest of the chain can key on.
+    page_prefix: str = "url:"
 
-
-def _aip_url(target: str) -> str:
-    """``url:<URL>`` when the target is an AIP page with no DOI in it, else ``""``."""
-    try:
-        normalized = aip_key(target)
-    except LitcliError:
-        return ""
-    return normalized if normalized.startswith("url:") else ""
+    def page_key(self, target: str) -> str:
+        try:
+            normalized = self.normalize(target)
+        except LitcliError:
+            return ""
+        return normalized if normalized.startswith(self.page_prefix) else ""
 
 
 def out(text: str) -> None:
@@ -108,6 +134,37 @@ def out(text: str) -> None:
 def note(text: str) -> None:
     """Diagnostics, sources and notes — stderr, so stdout stays a single value."""
     print(text, file=sys.stderr)
+
+def _acm_hint() -> None:
+    note("  ACM is behind a Cloudflare challenge: set [backends.acm] cookie"
+         " (or cookie_file) and user_agent from a browser tab that cleared it")
+
+
+def _aps_hint() -> None:
+    note("  APS is behind a Cloudflare challenge: set [backends.aps] cookie"
+         " (or cookie_file) and user_agent from a browser tab that cleared it")
+
+
+def _iop_hint() -> None:
+    note("  IOPscience is behind a Cloudflare challenge: set [backends.iop] cookie"
+         " (or cookie_file) and user_agent from a browser tab that cleared it"
+         " (the gate covers open-access items too)")
+
+
+def _tandf_hint() -> None:
+    note("  Taylor & Francis is behind a Cloudflare challenge: set [backends.tandf] cookie"
+         " (or cookie_file) and user_agent from a browser tab that cleared it")
+
+
+def _aiaa_hint() -> None:
+    note("  AIAA is behind a Cloudflare challenge: set [backends.aiaa] cookie"
+         " (or cookie_file) and user_agent from a browser tab that cleared it")
+
+
+def _ieee_hint() -> None:
+    note("  IEEE Xplore is behind an AWS WAF challenge: set [backends.ieee] cookie"
+         " (or cookie_file) and user_agent from a browser tab that passed it")
+
 
 #: Preview extractor per fulltext format (PDF falls through to pdftotext).
 _TEXT_EXTRACTORS = {"html": fulltext_mod.html_to_text, "xml": fulltext_mod.xml_to_text}
@@ -219,6 +276,40 @@ def _aip_hint() -> None:
          " (or cookie_file) and user_agent from a browser tab that cleared it")
 
 
+#: Every guarded/entitled publisher, in chain order (a subscription copy outranks a page).
+_PUBLISHER_SPECS = (
+    _PublisherSpec("sciencedirect", "ScienceDirect", _sciencedirect_key, _SCIENCEDIRECT_LIKE_RE,
+                   ELSEVIER_DOI_RE, _sciencedirect_hint, page_prefix="pii:"),
+    _PublisherSpec("wiley", "Wiley", wiley_key, _WILEY_LIKE_RE, WILEY_DOI_RE, _wiley_hint),
+    _PublisherSpec("springer", "SpringerLink", springer_key, _SPRINGER_LIKE_RE, SPRINGER_DOI_RE,
+                   _springer_hint),
+    _PublisherSpec("cambridge", "Cambridge Core", cambridge_key, _CAMBRIDGE_LIKE_RE,
+                   CAMBRIDGE_DOI_RE, _cambridge_hint),
+    _PublisherSpec("aip", "AIP", aip_key, _AIP_LIKE_RE, AIP_DOI_RE, _aip_hint),
+    _PublisherSpec("acm", "ACM Digital Library", acm_key, _ACM_LIKE_RE, ACM_DOI_RE, _acm_hint),
+    _PublisherSpec("aps", "APS", aps_key, _APS_LIKE_RE, APS_DOI_RE, _aps_hint),
+    _PublisherSpec("iop", "IOPscience", iop_key, _IOP_LIKE_RE, IOP_DOI_RE, _iop_hint),
+    _PublisherSpec("tandf", "Taylor & Francis Online", tandf_key, _TANDF_LIKE_RE, TANDF_DOI_RE,
+                   _tandf_hint),
+    _PublisherSpec("aiaa", "AIAA", aiaa_key, _AIAA_LIKE_RE, AIAA_DOI_RE, _aiaa_hint),
+    _PublisherSpec("ieee", "IEEE Xplore", ieee_key, _IEEE_LIKE_RE, IEEE_DOI_RE, _ieee_hint),
+)
+
+
+def _publisher_for_url(publishers: dict, url: str):
+    """The configured publisher whose site ``url`` lives on, if any.
+
+    An OA link resolved elsewhere (Unpaywall) often points at the publisher's own PDF endpoint,
+    which answers a plain client with a challenge: it still needs that publisher's session, so
+    the host decides whose session to use when the hit's kind names no backend.
+    """
+    for backend in publishers.values():
+        matches = getattr(backend, "matches_url", None)
+        if matches is not None and matches(url):
+            return backend
+    return None
+
+
 def _fetch_fulltext(cfg, args, target: str) -> int:
     """Walk the legitimate fulltext chain for ``target`` and save the file (or print the link).
 
@@ -226,19 +317,23 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
     it is a public copy without an open licence, so its hits say so.
     """
     key = normalize_related_key(target)
-    # A pasted publisher URL / ``wiley:<DOI>`` / ``springer:<DOI>`` / ``cambridge:<DOI>`` form
-    # normalizes to the DOI; a target shaped like one of those sites must normalize or it would
-    # drift down the chain.
-    for _normalize, _like in ((wiley_key, _WILEY_LIKE_RE), (springer_key, _SPRINGER_LIKE_RE),
-                              (cambridge_key, _CAMBRIDGE_LIKE_RE), (aip_key, _AIP_LIKE_RE)):
+    # A pasted publisher URL, or a ``wiley:<DOI>`` / ``cambridge:<DOI>`` form, normalizes to the
+    # DOI; a target shaped like one of those sites must normalize or it would drift down the
+    # chain. The publisher whose own shape it is reports the error — so the site the URL lives
+    # on is asked first: a generic ``/article/<DOI>`` shape (SpringerLink's) would otherwise
+    # swallow another publisher's URL and leave a sub-page (``/pdf``) on the DOI.
+    owned = sorted(_PUBLISHER_SPECS, key=lambda s: 0 if s.like.match(target.strip()) else 1)
+    for spec in owned:
         try:
-            normalized = _normalize(key)
-            key = normalized[len("url:"):] if normalized.startswith("url:") else normalized[4:]
-            break
+            normalized = spec.normalize(key)
         except LitcliError as e:
-            if _like.match(target.strip()):
+            if spec.like.match(target.strip()):
                 note(f"[error] {e}")
                 return 2
+            continue
+        if normalized:  # an empty answer means this publisher does not own the shape
+            key = normalized[len("url:"):] if normalized.startswith("url:") else normalized[4:]
+            break
     email = _resolve_oa_email(cfg, args)
     backends = get_all_backends(cfg)
     scihub_backend = backends.get("scihub")
@@ -247,160 +342,85 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
     # The legal corpus sources are keyless: consult them even when not enabled in config.
     corpus = {name: backends.get(name) or _optional_backend(name, cfg)
               for name in ("europepmc", "zenodo")}
-    # ScienceDirect is worth a probe for its own identifiers (a pasted article URL or PII) and
-    # for Elsevier DOIs, even unconfigured; other publishers would only 403 or lack a pdfUrl.
-    pii_key = "" if _DOI_LIKE_RE.match(key) else _sciencedirect_key(target)
-    sciencedirect_backend = backends.get("sciencedirect")
-    sd_error = ""
-    if sciencedirect_backend is None and (pii_key or key.lower().startswith(ELSEVIER_DOI_RE)):
-        try:
-            sciencedirect_backend = _optional_backend("sciencedirect", cfg)
-        except RuntimeError as e:  # a broken section must not sink the rest of the chain
-            sd_error = str(e)
-    wiley_backend = backends.get("wiley")
-    wiley_error = ""
-    if wiley_backend is None and key.lower().startswith(WILEY_DOI_RE):
-        try:
-            wiley_backend = _optional_backend("wiley", cfg)
-        except RuntimeError as e:  # a broken section must not sink the rest of the chain
-            wiley_error = str(e)
-    springer_backend = backends.get("springer")
-    springer_error = ""
-    if springer_backend is None and key.lower().startswith(SPRINGER_DOI_RE):
-        try:
-            springer_backend = _optional_backend("springer", cfg)
-        except RuntimeError as e:  # a broken section must not sink the rest of the chain
-            springer_error = str(e)
-    aip_url = "" if _DOI_LIKE_RE.match(key) else _aip_url(target)
-    aip_backend = backends.get("aip")
-    aip_error = ""
-    if aip_backend is None and (aip_url or key.lower().startswith(AIP_DOI_RE)):
-        try:
-            aip_backend = _optional_backend("aip", cfg)
-        except RuntimeError as e:  # a broken section must not sink the rest of the chain
-            aip_error = str(e)
-    cambridge_url = "" if _DOI_LIKE_RE.match(key) else _cambridge_url(target)
-    cambridge_backend = backends.get("cambridge")
-    cambridge_error = ""
-    if cambridge_backend is None and (cambridge_url or key.lower().startswith(CAMBRIDGE_DOI_RE)):
-        try:
-            cambridge_backend = _optional_backend("cambridge", cfg)
-        except RuntimeError as e:  # a broken section must not sink the rest of the chain
-            cambridge_error = str(e)
+    # A publisher step starts for its own identifiers (a pasted page, or its DOI prefix) even
+    # unconfigured: an unentitled or unconfigured run still has to say *why* it stopped.
+    pages: dict[str, str] = {}
+    publishers: dict[str, Backend] = {}
+    pub_errors: dict[str, str] = {}
+    for spec in _PUBLISHER_SPECS:
+        page = "" if _DOI_LIKE_RE.match(key) else spec.page_key(target)
+        backend = backends.get(spec.name)
+        if backend is None and (page or key.lower().startswith(spec.doi_re)):
+            try:
+                backend = _optional_backend(spec.name, cfg)
+            except RuntimeError as e:  # a broken section must not sink the rest of the chain
+                pub_errors[spec.name] = str(e)
+        pages[spec.name] = page
+        if backend is not None:
+            publishers[spec.name] = backend
     info = None
-    if pii_key and sciencedirect_backend is not None:
-        # The URL/PII is the identifier the user has; its DOI (when the page carries one)
-        # lets the rest of the chain run if this step is blocked.
-        try:
-            item = sciencedirect_backend.get(pii_key)
-        except (LitcliError, RuntimeError) as e:
-            sd_error = str(e)
-        else:
-            if item.doi:
-                key = item.doi
-            if item.attachments:
-                info = {"has_fulltext": True, "kind": "sciencedirect",
-                        "url": item.attachments[0], "title": item.title, "access": "entitled"}
-    cambridge_page = False
-    if info is None and cambridge_url and cambridge_backend is not None:
-        # The URL is the identifier the user has; its DOI (when the page carries one) lets the
+    unresolved: list[tuple[_PublisherSpec, bool]] = []
+    for spec in _PUBLISHER_SPECS:
+        if info is not None:
+            break
+        page = pages[spec.name]
+        if not page:
+            continue
+        backend = publishers.get(spec.name)
+        if backend is None:
+            unresolved.append((spec, False))
+            continue
+        # The page is the identifier the user has; its DOI (when the page carries one) lets the
         # rest of the chain run if this step is blocked.
+        got_page = False
         try:
-            item = cambridge_backend.get(cambridge_url)
+            item = backend.get(page)
         except (LitcliError, RuntimeError) as e:
-            cambridge_error = str(e)
+            pub_errors[spec.name] = str(e)
         else:
-            cambridge_page = True
+            got_page = True
             if item.doi:
                 key = item.doi
-                cambridge_url = ""
+                pages[spec.name] = ""
             if item.attachments:
-                info = {"has_fulltext": True, "kind": "cambridge",
-                        "url": item.attachments[0], "title": item.title,
+                info = {"has_fulltext": True, "kind": spec.name, "url": item.attachments[0],
+                        "title": item.title,
                         "access": getattr(item, "access", "") or provenance.ENTITLED}
-    if info is None and cambridge_url:
-        # A Cambridge URL whose page gave no DOI: the chain has nothing to key on, so report
-        # that instead of probing every backend with a URL.
-        if cambridge_backend is None:
-            note(f"Cambridge Core {cambridge_url[len('url:'):]}  "
-                 f"{cambridge_error or 'backend unavailable'}")
-        else:
-            note(f"Cambridge Core {cambridge_url[len('url:'):]}  "
-                 f"{'the item page gave no DOI' if cambridge_page else 'the item page did not load'}")
-            if cambridge_error:
-                note(f"  [skipped] {cambridge_error}")
+        if info is None and pages[spec.name]:
+            unresolved.append((spec, got_page))
+    if info is None and unresolved:
+        # A pasted page the chain could not key on: report that instead of probing every
+        # backend with a URL.
+        for spec, got_page in unresolved:
+            page = pages[spec.name]
+            if publishers.get(spec.name) is None:
+                note(f"{spec.label} {page[len(spec.page_prefix):]}  "
+                     f"{pub_errors.get(spec.name) or 'backend unavailable'}")
             else:
-                _cambridge_hint()
-        return 1
-    if info is None and aip_url and aip_backend is not None:
-        try:
-            item = aip_backend.get(aip_url)
-        except (LitcliError, RuntimeError) as e:
-            aip_error = str(e)
-        else:
-            if item.doi:
-                key = item.doi
-                aip_url = ""
-            if item.attachments:
-                info = {"has_fulltext": True, "kind": "aip", "url": item.attachments[0],
-                        "title": item.title, "access": provenance.ENTITLED}
-    if info is None and aip_url:
-        if aip_backend is None:
-            note(f"AIP {aip_url[len('url:'):]}  {aip_error or 'backend unavailable'}")
-        else:
-            note(f"AIP {aip_url[len('url:'):]}  the article page did not load and gave no DOI")
-            if aip_error:
-                note(f"  [skipped] {aip_error}")
-            else:
-                _aip_hint()
-        return 1
-    if info is None and pii_key and not _DOI_LIKE_RE.match(key):
-        # A ScienceDirect URL/PII whose page never gave a DOI: the chain has nothing to key
-        # on, so report the gate instead of probing every backend with a URL.
-        if sciencedirect_backend is None:
-            note(f"ScienceDirect {pii_key}  {sd_error or 'backend unavailable'}")
-        else:
-            note(f"ScienceDirect {pii_key}  the article page did not load and gave no DOI")
-            if sd_error:
-                note(f"  [skipped] {sd_error}")
-            else:
-                _sciencedirect_hint()
+                note(f"{spec.label} {page[len(spec.page_prefix):]}  "
+                     f"{'the item page gave no DOI' if got_page else 'the item page did not load'}")
+                if pub_errors.get(spec.name):
+                    note(f"  [skipped] {pub_errors[spec.name]}")
+                else:
+                    spec.hint()
         return 1
     if info is None:
         info = fulltext_mod.resolve_fulltext(key, email, backends=backends,
                                              openalex_backend=backends.get("openalex"),
                                              europepmc_backend=corpus["europepmc"],
                                              zenodo_backend=corpus["zenodo"],
-                                             sciencedirect_backend=sciencedirect_backend,
-                                             wiley_backend=wiley_backend,
-                                             springer_backend=springer_backend,
-                                             cambridge_backend=cambridge_backend,
-                                             aip_backend=aip_backend,
+                                             publishers=publishers,
                                              scihub_backend=scihub_backend)
     if not info.get("has_fulltext"):
         note(f"DOI {key}  no such work in the local store or open OA sources")
-        if sd_error:
-            note(f"  [skipped] {sd_error}")
-        if wiley_error:
-            note(f"  [skipped] {wiley_error}")
-        if springer_error:
-            note(f"  [skipped] {springer_error}")
-        if cambridge_error:
-            note(f"  [skipped] {cambridge_error}")
-        if aip_error:
-            note(f"  [skipped] {aip_error}")
+        for spec in _PUBLISHER_SPECS:
+            if pub_errors.get(spec.name):
+                note(f"  [skipped] {pub_errors[spec.name]}")
         for reason in info.get("errors") or []:
             note(f"  [skipped] {reason}")
-        if sciencedirect_backend is not None and (pii_key or key.lower().startswith(ELSEVIER_DOI_RE)):
-            _sciencedirect_hint()
-        if wiley_backend is not None and key.lower().startswith(WILEY_DOI_RE):
-            _wiley_hint()
-        if springer_backend is not None and key.lower().startswith(SPRINGER_DOI_RE):
-            _springer_hint()
-        if cambridge_backend is not None and key.lower().startswith(CAMBRIDGE_DOI_RE):
-            _cambridge_hint()
-        if aip_backend is not None and key.lower().startswith(AIP_DOI_RE):
-            _aip_hint()
+        for spec in _PUBLISHER_SPECS:
+            if key.lower().startswith(spec.doi_re):
+                spec.hint()
         if not scihub_backend:
             note("  add --scihub to also try Sci-Hub, or use institutional access / interlibrary loan")
         else:
@@ -443,9 +463,7 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
         return 0
 
     raw = None
-    publisher = {"sciencedirect": sciencedirect_backend, "wiley": wiley_backend,
-                 "springer": springer_backend, "cambridge": cambridge_backend,
-                 "aip": aip_backend}.get(kind)
+    publisher = publishers.get(kind) or _publisher_for_url(publishers, info["url"])
     if publisher is not None:
         # The PDF needs the same entitled session as the page (and may sit behind a second
         # gate), so downloading it through a plain client would only collect a challenge page.

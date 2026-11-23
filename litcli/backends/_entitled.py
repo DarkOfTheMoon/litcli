@@ -1,7 +1,7 @@
 """The shared shape of the entitled publisher readers.
 
-ScienceDirect, Wiley, SpringerLink, Cambridge and AIP serve an article only to a session the
-user entitled in their own browser, so they share everything around that: the cookie-plus-``user_agent`` pair
+Every publisher reader here serves an article only to a session the user entitled in their
+own browser, so they share everything around that: the cookie-plus-``user_agent`` pair
 (the entitlement is bound to the UA that earned it), the read-only capability, the "not a local
 attachment" contract, and the one message a gate turns into.
 
@@ -13,6 +13,7 @@ entry point a page helper needs — a challenge (in the status, the body, or a
 from __future__ import annotations
 
 from typing import ClassVar
+from urllib.parse import urlparse
 
 from ..transport import HttpError
 from ._cf_gate import is_challenge_page, session_cookie
@@ -25,8 +26,11 @@ class EntitledBackend(HttpBackend):
     access = "entitled"  # a subscription copy through the user's institution, not an OA licence
     #: The page is session/IP state, so it must not sit in the metadata cache.
     cacheable = False
-    #: Hosts a cookie export may carry; a subclass sets its publisher's own.
+    #: Hosts a cookie export may carry; a subclass sets its publisher's own (empty means
+    #: :attr:`ALLOWED_HOSTS`).
     COOKIE_HOSTS: ClassVar[tuple[str, ...]] = ()
+    #: Hosts a PDF link may legitimately live on; a subclass sets its publisher's own.
+    ALLOWED_HOSTS: ClassVar[tuple[str, ...]] = ()
     #: How the cookie is named in the construction error (a site without Cloudflare says so).
     GATE_NAME = "the session cookie"
     #: The one message raised whenever a gate meets a request.
@@ -35,21 +39,34 @@ class EntitledBackend(HttpBackend):
     def __init__(self, name: str = "", timeout: float | None = None,
                  delay: float | None = None, cookie: str = "", cookie_file: str = "",
                  user_agent: str = "", **_unused):
-        # Fail early: a bad cookie_file, or a cookie without its UA, is a config error.
-        self.cookie = session_cookie(cookie, cookie_file, user_agent, self.COOKIE_HOSTS,
-                                     name, gate=self.GATE_NAME)
+        # Fail early: a bad cookie_file, or a cookie without its UA, is a config error. A site
+        # that sets only ALLOWED_HOSTS still keeps its rows instead of silently keeping none.
+        hosts = self.COOKIE_HOSTS or self.ALLOWED_HOSTS
+        self.cookie = session_cookie(cookie, cookie_file, user_agent, hosts, name,
+                                     gate=self.GATE_NAME)
         if user_agent:
             # The entitlement is bound to the UA that earned it: send it verbatim.
             self.UA = user_agent.strip()
-        if self.cookie:
-            self.headers = {**type(self).headers, "Cookie": self.cookie}
-        super().__init__(name=name, timeout=timeout, min_interval=delay)
+        # The cookie goes into the jar for the site's own hosts, not into a header: httpx drops
+        # a header on every redirect, and every DOI key starts at ``doi.org``.
+        pairs = dict(p.strip().partition("=")[::2] for p in self.cookie.split(";") if "=" in p)
+        seeds: list[str] = []
+        for host in hosts:  # the exact host only: a jar entry on its parent zone is sent twice
+            if not any(h == host or h.endswith("." + host) for h in seeds):
+                seeds.append(host)
+        super().__init__(name=name, timeout=timeout, min_interval=delay, seed_cookies=pairs,
+                         seed_hosts=seeds)
 
     @property
     def capabilities(self) -> set[str]:
         # Read-only, and deliberately not "attachment": the fulltext chain must treat a hit as
         # a remote source, never as a local-store attachment.
         return {"read"}
+
+    def matches_url(self, url: str) -> bool:
+        """True when ``url`` lives on this site (a hit found elsewhere may still need us)."""
+        host = (urlparse(url).hostname or "").lower()
+        return any(host == s or host.endswith("." + s) for s in self.ALLOWED_HOSTS)
 
     @property
     def has_session(self) -> bool:

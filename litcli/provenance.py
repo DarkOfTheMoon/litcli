@@ -9,7 +9,7 @@ Values are deliberately about the copy, not about a site:
 
 ``oa``       openly licensed (arXiv, DOAB, Europe PMC, Zenodo, DOAJ, OpenAlex)
 ``entitled`` a subscription copy reached through the user's own institutional access
-             (ScienceDirect, Wiley, SpringerLink): legitimate, but not open access
+             (the publisher readers): legitimate, but not open access
 ``public``   a copy published on a public site without an open licence (Sci-Hub, Z-Library)
 ``local``    the user's own library
 ``""``       records or metadata only — no copy

@@ -72,6 +72,11 @@ description: 用 litcli 与用户的学术资料互操作——检索、读取�
 - **ScienceDirect / Wiley 走你的机构订阅**：`fetch` 对 `10.1016`、`10.1002` 等 Elsevier / Wiley DOI 各自动试一次，拿到的是订阅全文（不是 OA 授权，输出标注 `entitled`）。需要机构会话：校内 IP 直接可用；校外则在**已认证**的浏览器标签里取 Cookie 与其 UA 配进 `[backends.sciencedirect]` / `[backends.wiley]`（`cookie`/`cookie_file` + `user_agent` 必须成对，绑 UA+出口 IP、服务端随时可能失效；未认证页只给 Purchase PDF）。未获授权时给 Cloudflare 挑战页（`CPE00001` 等），链条继续往下走，不阻断；PDF 另有验收关（SD 走 `craft/challenge/pdf`，Wiley 未订阅时 PDF 端点跳摘要页），被拦时 `fetch` 先走完链尾（落地页、`--scihub`）再报因给链接。Wiley 可另配 `tdm_token`（免费申请）：走 `api.wiley.com` 不过 Cloudflare，只放行机构已订阅文章，否则 403，但页面路径仍会照试。
 - **SpringerLink 没有 Cloudflare**：文章页匿名可读、题录恒在，金 OA 的 PDF 匿名直取；只有付费文章的 PDF 要会话（端点先 303 到 `idp.springer.com` 换身份 cookie，未订阅会落回文章页），同样配 `[backends.springer]` 的 `cookie` + `user_agent` 成对使用。
 - **Cambridge / AIP 同样走机构订阅**：`fetch` 对 `10.1017`（Cambridge）、`10.1063` / `10.1121`（AIP）各自动试一次。Cambridge 无 Cloudflare，匿名页题录恒在、CC 许可 OA 的 PDF 匿名直取，付费条目只到 `/abs/` 短页、PDF 端点回跳条目页；AIP 在 Cloudflare 挑战后，几乎必须配 `[backends.aip]` 的 `cookie` + `user_agent`。两者都只取机构已订阅或 OA 的正文，单 DOI、低频。
+- **ACM / APS / IOP / Taylor & Francis / AIAA / IEEE 同属一道闸**：前五家与 AIP 一样在 Cloudflare 托管挑战后（`fetch` 分别对
+  `10.1145` / `10.1103` / `10.1088` / `10.1080` / `10.2514` 自动试一次），IEEE（`10.1109`）是 AWS WAF JS 挑战、靠 `aws-waf-token`。
+  六家都必须成对配 `cookie` + `user_agent`，未配会话时报的就是这道门。清关 cookie 是 HttpOnly（`cf_clearance` /
+  `aws-waf-token`），**手抄 Cookie 头很容易漏掉**：更稳的是用浏览器扩展/`curl` 导出 Netscape `cookies.txt` 原样指给
+  `cookie_file`，导出里的 `#HttpOnly_` 行 litcli 会读。
 - **Sci-Hub 是可选兜底、默认不介入**：`fetch` 仍先走本地库/Unpaywall/OpenAlex，只有加 `--scihub`（或配置启用）才试公开副本；输出标 `source=scihub` 且注明非 OA 授权。镜像用 ALTCHA 验人，litcli 用本地 `hashlib` 解同一道题（不绕过），每次单 DOI、低频。
 - **Z-Library 给的是公开副本（非 OA 授权）**：`fetch --book` 用来找 Sci-Hub 没有的图书（Sci-Hub 只按 DOI 解析论文）。无需 Playwright，但用前要过站点“Checking your browser”工作量证明——litcli 用本地 `hashlib` 解同一道题（不绕过）。**匿名每日下载有配额**，超限会明确提示，可在 `[backends.zlibrary]` 配 `email`/`password` 登录放宽。只取公开书目元数据与公开 PDF 直链。
 - **豆瓣只取公开书目元数据、不绕过反爬**：豆瓣无公开 API；`search --backend douban` 也需 `install.sh --with-douban` 装 Playwright + Chromium，但**默认无头**——搜索页 SSR 直接给书卡 JSON，无需登录/滑块。仅当被风控时手动在可见浏览器处理，脚本不程序化绕过。图书以 ISBN 为身份键（无 DOI），`search --all` 聚合时与期刊/论文的 DOI 身份键并行。

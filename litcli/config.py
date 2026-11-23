@@ -134,6 +134,42 @@ def _registry() -> dict[str, type[Backend]]:
     except ImportError:
         pass
     try:
+        from .backends import acm
+
+        reg["acm"] = acm.AcmBackend
+    except ImportError:
+        pass
+    try:
+        from .backends import aps
+
+        reg["aps"] = aps.ApsBackend
+    except ImportError:
+        pass
+    try:
+        from .backends import iop
+
+        reg["iop"] = iop.IopBackend
+    except ImportError:
+        pass
+    try:
+        from .backends import tandf
+
+        reg["tandf"] = tandf.TandfBackend
+    except ImportError:
+        pass
+    try:
+        from .backends import aiaa
+
+        reg["aiaa"] = aiaa.AiaaBackend
+    except ImportError:
+        pass
+    try:
+        from .backends import ieee
+
+        reg["ieee"] = ieee.IeeeBackend
+    except ImportError:
+        pass
+    try:
         from .backends import zlibrary
 
         reg["zlibrary"] = zlibrary.ZlibraryBackend

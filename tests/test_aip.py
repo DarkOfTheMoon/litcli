@@ -278,7 +278,7 @@ class BackendTest(unittest.TestCase):
         stub(self.be, (200, CITATION_PAGE), (200, "<html>the article page</html>"))
         with self.assertRaises(Unavailable) as ctx:
             self.be.get_attachment(f"url:{URL}")
-        self.assertIn("no cleared Cloudflare cookie", str(ctx.exception))
+        self.assertIn("holds no clearance cookie", str(ctx.exception))
 
     def test_an_html_answer_with_a_session_names_the_entitlement(self):
         be = AipBackend(cookie="cf_clearance=abc", user_agent="UA/1")

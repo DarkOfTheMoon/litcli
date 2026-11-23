@@ -37,6 +37,11 @@ class Recorder(httpx.BaseTransport):
     def urls(self) -> list[str]:
         return [str(r.url) for r in self.requests]
 
+    @property
+    def cookies(self) -> list[str | None]:
+        """The ``Cookie`` header of every request (``None`` when it carried none)."""
+        return [r.headers.get("cookie") for r in self.requests]
+
     def header(self, name: str) -> str:
         """A header value of the most recent request."""
         return self.requests[-1].headers.get(name, "")

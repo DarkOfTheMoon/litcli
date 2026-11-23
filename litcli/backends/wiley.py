@@ -44,7 +44,7 @@ _UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
 _BLOCK_MSG = gate_message("Wiley", "wiley")
 
 #: Hosts the session cookies come from and the PDF may legitimately live on.
-_COOKIE_HOSTS = ("wiley",)
+_COOKIE_HOSTS = ("onlinelibrary.wiley.com", "wiley.com")
 _ALLOWED_HOSTS = ("wiley.com",)
 
 _DOI_PREFIX_RE = re.compile(r"^(?:https?://(?:dx\.)?doi\.org/|doi:\s*|wiley:\s*)", re.I)
@@ -363,14 +363,14 @@ def parse_cookie(raw: str) -> dict[str, str]:
 
 
 def load_cookie(cookie: str = "", cookie_file: str = "") -> str:
-    """The ``Cookie`` header value from an inline string and/or a cookie file (both merged)."""
+    """The cookie string from an inline string and/or a cookie file (both merged)."""
     return _load_cookie(cookie, cookie_file, _COOKIE_HOSTS, "wiley")
 
 
 class WileyBackend(EntitledBackend):
     """Resolve a DOI / Wiley article URL to one item and, when entitled, its PDF link.
 
-    A session you already entitled in your own browser is carried in as a ``Cookie`` header
+    A session you already entitled in your own browser is carried in as a cookie string
     (``[backends.wiley] .cookie``/``.cookie_file``) together with that browser's
     ``user_agent``, and requests look like that browser's session. With a ``tdm_token`` the
     PDF goes through the TDM API instead, so no browser session is needed for the bytes.
@@ -385,6 +385,7 @@ class WileyBackend(EntitledBackend):
     min_interval = 10.0
     rate = 3
     COOKIE_HOSTS = _COOKIE_HOSTS
+    ALLOWED_HOSTS = _ALLOWED_HOSTS
     GATE_NAME = "the Wiley clearance cookie"
     BLOCK_MSG = _BLOCK_MSG
 

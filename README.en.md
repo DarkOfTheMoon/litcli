@@ -135,7 +135,7 @@ How each backend maps a filter (a backend without the field folds it into free t
 | `litcli search "X" [--all] [--backend B] [--type T] [--limit N] [--format table\|json\|csl]` | candidate search; field filters and sorting below |
 | `litcli refs <key>` / `citing <key>` / `related <key>` (all take `--limit N`, `--sort cited`) | cited works / citing works / semantic neighbours (OpenAlex graph; with no neighbour list it falls back to a title-term search and says so) |
 | `litcli export <key>... [--format csljson\|bibtex\|ris\|text] [--no-cite]` | citations; `csljson` feeds `pandoc --citeproc`. arXiv keys normalise to a DOI only with `--backend openalex\|crossref` |
-| `litcli fetch <doi\|arXiv id\|ScienceDirect URL/PII\|Wiley URL\|Springer URL> [--out DIR] [--no-download] [--scihub]` (the old `fetch fulltext <doi>` and the `--download` flag are still accepted) | save the fulltext: local store → Unpaywall → OpenAlex → Europe PMC → Zenodo → ScienceDirect (Elsevier DOIs / article URLs) → Wiley → Springer (Springer Nature DOIs; open access downloads without config) → landing page |
+| `litcli fetch <DOI or publisher article URL> [--out DIR] [--no-download] [--scihub]` (the old `fetch fulltext <doi>` and the `--download` flag are still accepted) | save the fulltext: local store → Unpaywall → OpenAlex → Europe PMC → Zenodo → each publisher's subscription copy (tried automatically for its DOI prefixes, see the table) → landing page |
 | `litcli fetch --book "title\|ISBN" [--backend zlibrary\|doab\|openlibrary] [--pick N]` | book candidates → pick → full metadata → save the file (an ISBN takes this path automatically) |
 | `litcli backends authorize zotero` | one-off write authorization (local dialog) |
 | `litcli data add --title "..." --creator "Family, Given" [--year ..] [--doi ..] [--force]` / `data add --pdf|--csl <file>` | ingest metadata (dedupe gate, `--force` skips), heuristics from page 1 (y/N), or CSL JSON |
@@ -174,6 +174,12 @@ without any config. The keyless OA corpora (`doaj`/`europepmc`/`doab`/`zenodo`) 
 | `springer` | subscription content via your institution's entitlement (not OA); open-access articles need no config | fulltext PDF for Springer Nature DOIs; tried automatically for the `10.1007`-style prefixes |
 | `cambridge` | subscription content via your institution's entitlement (not OA); CC-licensed open-access articles need no config | fulltext PDF for Cambridge DOIs; tried automatically for the `10.1017` prefix |
 | `aip` | subscription content via your institution's entitlement (not OA); the site sits behind a Cloudflare challenge | fulltext PDF for AIP DOIs; tried automatically for the `10.1063` / `10.1121` prefixes |
+| `acm` | subscription content via your institution's entitlement (not OA); Cloudflare challenge | fulltext PDF for ACM DOIs; tried automatically for the `10.1145` prefix |
+| `aps` | subscription content via your institution's entitlement (not OA); Cloudflare challenge | fulltext PDF for APS DOIs; tried automatically for the `10.1103` prefix |
+| `iop` | subscription content via your institution's entitlement (not OA); Cloudflare challenge | fulltext PDF for IOPscience DOIs; tried automatically for the `10.1088` prefix |
+| `tandf` | subscription content via your institution's entitlement (not OA); Cloudflare challenge | fulltext PDF for Taylor & Francis DOIs; tried automatically for the `10.1080` prefix |
+| `aiaa` | subscription content via your institution's entitlement (not OA); Cloudflare challenge | fulltext PDF for AIAA DOIs; tried automatically for the `10.2514` prefix |
+| `ieee` | subscription content via your institution's entitlement (not OA); AWS WAF challenge | fulltext PDF for IEEE Xplore items; tried automatically for the `10.1109` prefix |
 | `scihub` | public copy (non-OA), DOI only | PDF, opt-in via `--scihub` |
 | `zlibrary` | public copy (non-OA) | records + PDF; anonymous daily quota |
 
@@ -209,6 +215,13 @@ page and the `article-pdf` endpoint answer a JS-less client with `403` and `cf-m
 therefore configured near-mandatorily with `[backends.aip]` `cookie` + `user_agent` (the `cf_clearance` cookie is
 bound to both the UA and the egress IP; refresh it when it expires) — an unconfigured run reports that gate, not
 a blocked IP.
+
+ACM (`dl.acm.org`), APS (`link.aps.org`), IOPscience (`iopscience.iop.org`), Taylor & Francis
+(`tandfonline.com`) and AIAA (`arc.aiaa.org`) share that Cloudflare shape, cookie plus `user_agent` included.
+IEEE Xplore (`ieeexplore.ieee.org`, `[backends.ieee]`) sits behind a different gate — an AWS WAF JS challenge
+(an empty `202` body carrying `gokuProps`, cleared by `aws-waf-token`) — and an unentitled session's PDF endpoint
+redirects to `/Xplore/login.jsp?…&authDecision=…`. All six take only institutionally subscribed or OA fulltext,
+one DOI at a time, at low frequency.
 
 ## Configuration
 

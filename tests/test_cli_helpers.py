@@ -463,7 +463,7 @@ class FetchFulltextTest(unittest.TestCase):
              mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext",
                         return_value={"has_fulltext": False}) as resolve:
             cli.main(["fetch", target])
-        return resolve.call_args.kwargs["sciencedirect_backend"]
+        return resolve.call_args.kwargs["publishers"].get("sciencedirect")
 
     def test_an_elsevier_doi_probes_sciencedirect_even_unconfigured(self):
         self.assertIsNotNone(self._probe_kwarg("10.1016/j.cma.2004.11.019"))
@@ -481,7 +481,7 @@ class FetchFulltextTest(unittest.TestCase):
              mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext",
                         return_value={"has_fulltext": False}) as resolve:
             cli.main(["fetch", target])
-        return resolve.call_args.kwargs["wiley_backend"]
+        return resolve.call_args.kwargs["publishers"].get("wiley")
 
     def test_a_wiley_doi_probes_wiley_even_unconfigured(self):
         self.assertIsNotNone(self._wiley_probe("10.1002/nme.1628"))
@@ -512,7 +512,7 @@ class FetchFulltextTest(unittest.TestCase):
              mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext",
                         return_value={"has_fulltext": False}) as resolve:
             cli.main(["fetch", target])
-        return resolve.call_args.kwargs["springer_backend"]
+        return resolve.call_args.kwargs["publishers"].get("springer")
 
     def test_a_springer_doi_probes_springer_even_unconfigured(self):
         self.assertIsNotNone(self._springer_probe("10.1007/s11831-021-09587-6"))
@@ -554,7 +554,7 @@ class FetchFulltextTest(unittest.TestCase):
              mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext",
                         return_value={"has_fulltext": False}) as resolve:
             cli.main(["fetch", target])
-        return resolve.call_args.kwargs["cambridge_backend"]
+        return resolve.call_args.kwargs["publishers"].get("cambridge")
 
     def test_a_cambridge_doi_probes_cambridge_even_unconfigured(self):
         self.assertIsNotNone(self._cambridge_probe("10.1017/jfm.2016.10"))
@@ -604,7 +604,7 @@ class FetchFulltextTest(unittest.TestCase):
              mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext",
                         return_value={"has_fulltext": False}) as resolve:
             cli.main(["fetch", target])
-        return resolve.call_args.kwargs["aip_backend"]
+        return resolve.call_args.kwargs["publishers"].get("aip")
 
     def test_an_aip_doi_probes_aip_even_unconfigured(self):
         self.assertIsNotNone(self._aip_probe("10.1063/1.870872"))
@@ -624,6 +624,86 @@ class FetchFulltextTest(unittest.TestCase):
                         return_value={"has_fulltext": False}) as resolve:
             cli.main(["fetch", "https://aip.scitation.org/doi/abs/10.1063/1.870872"])
         self.assertEqual(resolve.call_args.args[0], "10.1063/1.870872")
+
+    def _guarded_probe(self, name, target):
+        from unittest import mock
+
+        import litcli.cli as cli
+
+        sentinel = object()
+        with mock.patch("litcli.commands.fetch._optional_backend", return_value=sentinel), \
+             mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext",
+                        return_value={"has_fulltext": False}) as resolve:
+            cli.main(["fetch", target])
+        return resolve.call_args.kwargs["publishers"].get(name)
+
+    def test_each_guarded_doi_probes_its_own_backend(self):
+        for name, doi in (("acm", "10.1145/3290605.3300233"),
+                          ("aps", "10.1103/PhysRevLett.116.061102"),
+                          ("iop", "10.1088/1742-6596/1382/1/012030"),
+                          ("tandf", "10.1080/17460441.2026.2762809"),
+                          ("aiaa", "10.2514/6.2018-1756"),
+                          ("ieee", "10.1109/20.951156")):
+            with self.subTest(name):
+                self.assertIsNotNone(self._guarded_probe(name, doi))
+
+    def test_a_guarded_doi_does_not_pay_the_other_guards(self):
+        probe = self._guarded_probe
+        for other in ("acm", "iop", "tandf", "aiaa", "ieee"):
+            with self.subTest(other):
+                self.assertIsNone(probe(other, "10.1103/PhysRevLett.116.061102"))
+
+    def test_a_guarded_page_url_normalizes_to_its_doi(self):
+        from unittest import mock
+
+        import litcli.cli as cli
+
+        with mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext",
+                        return_value={"has_fulltext": False}) as resolve:
+            cli.main(["fetch", "https://link.aps.org/doi/10.1103/PhysRevLett.116.061102"])
+        self.assertEqual(resolve.call_args.args[0], "10.1103/PhysRevLett.116.061102")
+
+    def test_the_site_the_url_lives_on_normalizes_it_first(self):
+        # SpringerLink's generic ``/article/<DOI>`` shape would otherwise eat an IOP URL and
+        # leave its sub-page on the DOI, which is not the registered form.
+        from unittest import mock
+
+        import litcli.cli as cli
+
+        url = "https://iopscience.iop.org/article/10.1088/1674-1137/aea10c/pdf"
+        with mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext",
+                        return_value={"has_fulltext": False}) as resolve:
+            cli.main(["fetch", url])
+        self.assertEqual(resolve.call_args.args[0], "10.1088/1674-1137/aea10c")
+
+    def test_an_ieee_document_url_stays_a_url_for_the_page_step(self):
+        # The path carries an internal arnumber, so only the page can name the DOI.
+        from unittest import mock
+
+        import litcli.cli as cli
+
+        class Pub:
+            def get(self, key):
+                self.key = key
+                return type("I", (), {"doi": "10.1109/20.951156", "title": "T",
+                                      "attachments": ("https://e/x.pdf",), "access": ""})()
+
+        pub = Pub()
+        url = "https://ieeexplore.ieee.org/document/11682754/"
+        with mock.patch("litcli.commands.fetch._optional_backend", return_value=pub), \
+             mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext",
+                        return_value={"has_fulltext": False}):
+            rc = cli.main(["fetch", url, "--no-download"])
+        self.assertEqual((rc, self.out.getvalue().strip()), (0, "https://e/x.pdf"))
+        self.assertEqual(pub.key, f"url:{url}")
+
+    def test_a_malformed_guarded_key_exits_2(self):
+        for name in ("acm", "aps", "iop", "tandf", "aiaa", "ieee"):
+            with self.subTest(name):
+                rc, _out, err, _files = self._run(["fetch", f"{name}:"], {"has_fulltext": False})
+                self.assertEqual(rc, 2)
+                self.assertIn(f"[error] [{name}] empty key", err)
+                self.assertIn(f"{name}:<DOI>", err)
 
     def test_a_malformed_aip_key_exits_2_instead_of_drifting_down_the_chain(self):
         rc, _out, err, _files = self._run(["fetch", "aip:"], {"has_fulltext": False})
@@ -653,6 +733,31 @@ class FetchFulltextTest(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertTrue(resolve.call_args.kwargs.get("tail_only"))
         self.assertIn("public copy", self.err.getvalue())
+
+    def test_an_oa_link_on_a_publisher_host_downloads_through_that_session(self):
+        # Unpaywall often answers with the publisher's own PDF endpoint, which still challenges
+        # a bare client: the host, not the hit's kind, decides whose session carries the fetch.
+        from unittest import mock
+
+        import litcli.cli as cli
+
+        class Pub:
+            def matches_url(self, url):
+                return url.startswith("https://iopscience.iop.org/")
+
+            def get_attachment(self, key):
+                return b"%PDF-1.4 session"
+
+        head = {"has_fulltext": True, "kind": "unpaywall", "access": "oa",
+                "url": "https://iopscience.iop.org/article/10.1088/x/pdf"}
+        with mock.patch("litcli.commands.fetch.get_all_backends",
+                        return_value={"iop": Pub()}), \
+             mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext",
+                        return_value=head), \
+             mock.patch("litcli.commands.fetch.pdfutil.download") as plain:
+            rc = cli.main(["fetch", "10.1088/x", "--lines", "0"])
+        self.assertEqual(rc, 0)
+        self.assertFalse(plain.called)
 
     def test_a_malformed_springer_key_exits_2_instead_of_drifting_down_the_chain(self):
         rc, _out, err, _files = self._run(["fetch", "springer:"], {"has_fulltext": False})

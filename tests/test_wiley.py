@@ -433,8 +433,10 @@ class CookieTest(unittest.TestCase):
         speed_up(be)
         rec = stub(be, (200, JSONLD_PAGE))
         be.get(DOI)
-        self.assertEqual(rec.requests[0].headers.get("cookie"), "cf_clearance=abc")
-        self.assertIn("Mine", rec.requests[0].headers.get("user-agent", ""))
+        # The first hop is ``doi.org`` (no cookie of its own); the publisher hop carries it.
+        self.assertEqual(rec.cookies[-1], "cf_clearance=abc")
+        self.assertIn("wiley.com", rec.urls[-1])
+        self.assertIn("Mine", rec.requests[-1].headers.get("user-agent", ""))
 
     def test_a_cookie_without_a_user_agent_is_rejected(self):
         with self.assertRaises(RuntimeError) as ctx:

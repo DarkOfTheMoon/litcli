@@ -408,7 +408,9 @@ class CookieTest(unittest.TestCase):
         speed_up(be)
         rec = stub(be, (200, JSONLD_PAGE))
         be.get(PII)
-        self.assertEqual(rec.requests[0].headers.get("cookie"), "cf_clearance=abc")
+        # The first hop is ``doi.org`` (no cookie of its own); the publisher hop carries it.
+        self.assertEqual(rec.cookies[-1], "cf_clearance=abc")
+        self.assertIn("sciencedirect.com", rec.urls[-1])
 
     def test_cookie_file_is_read_and_merged_below_the_inline_value(self):
         import tempfile

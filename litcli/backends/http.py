@@ -89,7 +89,7 @@ class HttpBackend(Session, Backend):
     cacheable = True
 
     def __init__(self, name: str | None = None, timeout: float | None = None,
-                 rate: int | None = None, min_interval: float | None = None):
+                 rate: int | None = None, min_interval: float | None = None, **session_kw):
         if name is not None:
             self.name = name
         if timeout is not None:
@@ -99,7 +99,7 @@ class HttpBackend(Session, Backend):
         if min_interval is not None:
             self.min_interval = min_interval
         super().__init__(timeout=self.timeout, ua=self.UA, headers=self.headers,
-                         follow_redirects=self.follow_redirects, http2=self.http2)
+                         follow_redirects=self.follow_redirects, http2=self.http2, **session_kw)
         self._send = None
         self._limiter: Limiter | None = None  # built on first use; many backends never send
         self._bucket = f"{self.name or type(self).__name__}-{id(self)}"

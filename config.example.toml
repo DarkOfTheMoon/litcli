@@ -1,7 +1,7 @@
 # litcli 配置示例(复制到 ~/.config/litcli/config.toml;Windows 为 %APPDATA%\litcli\config.toml)。
 # 文件存在就**整体以文件为准**;只有文件不存在时才用内置默认(本机 Zotero + arXiv + Crossref + OpenAlex)。
 # 所以复制本文件 = 启用下面全部后端:openlibrary、uspto、cnki、douban、sciencedirect、wiley、springer、cambridge、aip、
-# scihub、zlibrary 与四个开放获取源(doaj / europepmc / doab / zenodo);不想用的段整段删掉。
+# acm、aps、iop、tandf、aiaa、ieee、scihub、zlibrary 与四个开放获取源(doaj / europepmc / doab / zenodo);不想用的段整段删掉。
 
 [backends.zotero]
 type = "zotero_local"
@@ -125,6 +125,44 @@ type = "aip"
 # user_agent = "…(与 Cookie 同源浏览器的 User-Agent)"
 # delay = 1.0         # 请求间隔(秒)
 # timeout = 30
+
+# 可选:以下六家同为「订阅全文、只按 DOI / 页面 URL 解析、无关键词检索」的出版社阅读器。
+# 与 AIP 一样**全部在机器人闸后面**（ACM/APS/IOP/Taylor & Francis/AIAA 是 Cloudflare 托管挑战,
+# IEEE Xplore 是 AWS WAF 挑战),页面与 PDF 端点对裸客户端一律 403/202,未配已清关的 cookie +
+# user_agent 基本取不到;OA 条目同样先过闸,配了会话后可直接下。doi.org 上的假 DOI 一律
+# 404,可直接验证连通。清关 cookie 是 HttpOnly,手抄 Cookie 头容易漏:更稳的是把浏览器导出
+# 的 Netscape cookies.txt 原样指给 cookie_file(导出里的 #HttpOnly_ 行会被读),user_agent 仍
+# 须配同源浏览器的值。
+[backends.acm]
+type = "acm"
+# cookie = "…(浏览器 Cookie 头,原样粘贴)"
+# cookie_file = "~/.config/litcli/acm-cookies.txt"
+# user_agent = "…(与 Cookie 同源浏览器的 User-Agent)"
+
+[backends.aps]
+type = "aps"
+# cookie_file = "~/.config/litcli/aps-cookies.txt"
+# user_agent = "…"
+
+[backends.iop]
+type = "iop"
+# cookie_file = "~/.config/litcli/iop-cookies.txt"
+# user_agent = "…"
+
+[backends.tandf]
+type = "tandf"
+# cookie_file = "~/.config/litcli/tandf-cookies.txt"
+# user_agent = "…"
+
+[backends.aiaa]
+type = "aiaa"
+# cookie_file = "~/.config/litcli/aiaa-cookies.txt"
+# user_agent = "…"
+
+[backends.ieee]
+type = "ieee"
+# cookie_file = "~/.config/litcli/ieee-cookies.txt"
+# user_agent = "…"
 
 # 可选:Sci-Hub 全文兜底(盗版镜像,只按 DOI 解析 PDF,无关键词检索)。
 # 默认不内置。启用后 `fetch fulltext` 会在本地库/Unpaywall/OpenAlex 都无果时再试 Sci-Hub,

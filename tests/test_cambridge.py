@@ -100,9 +100,14 @@ class NormalizeKeyTest(unittest.TestCase):
     def test_an_already_normalized_url_key_round_trips(self):
         self.assertEqual(normalize_key(f"url:{URL}"), f"url:{URL}")
 
-    def test_other_hosts_are_rejected(self):
+    def test_another_sites_url_still_yields_its_doi(self):
+        # ``fetch`` asks the site the URL lives on first, so the DOI is right on its own too.
+        self.assertEqual(normalize_key("https://onlinelibrary.wiley.com/doi/10.1002/x"),
+                         "doi:10.1002/x")
+
+    def test_another_sites_url_without_a_doi_is_rejected(self):
         with self.assertRaises(BadInput):
-            normalize_key("https://onlinelibrary.wiley.com/doi/10.1002/x")
+            normalize_key("https://example.com/hello")
 
     def test_empty_key(self):
         with self.assertRaises(BadInput):
@@ -137,9 +142,9 @@ class ExtractPdfUrlTest(unittest.TestCase):
         other = "/core/services/aop-cambridge-core/content/view/" + "A" * 32 + "/S111a.pdf"
         page = f'<a href="{other}">other</a>'
         # A match wins; with no match at all the first anchor is still better than nothing.
-        self.assertEqual(extract_pdf_url(page + f'<a href="{PDF_PATH}">own</a>', ID), PDF)
-        self.assertTrue(extract_pdf_url(page, ID).endswith("/S111a.pdf"))
-        self.assertEqual(extract_pdf_url(page), extract_pdf_url(page, ID))
+        self.assertEqual(extract_pdf_url(page + f'<a href="{PDF_PATH}">own</a>', "", ID), PDF)
+        self.assertTrue(extract_pdf_url(page, "", ID).endswith("/S111a.pdf"))
+        self.assertEqual(extract_pdf_url(page), extract_pdf_url(page, "", ID))
 
     def test_an_off_host_link_raises(self):
         page = '<meta name="citation_pdf_url" content="https://evil.example.com/x.pdf">'

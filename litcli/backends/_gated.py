@@ -1,0 +1,503 @@
+"""The shared shape of the *guarded* publisher readers.
+
+ACM, APS, IOP, Taylor & Francis, AIAA (Cloudflare managed challenge) and IEEE Xplore (AWS WAF
+challenge) serve the article only to a session that got past the site's bot gate — and, beyond
+it, only to a session the user entitled in their own browser. They share one body of logic:
+the key shapes, the Highwire ``citation_*`` page parse, the PDF link pick, the OA marker, the
+"what actually happened" refusal message, and the gate that turns any challenge (a status, a
+page body, a ``cf-mitigated`` header) into one clear error.
+
+What stays with a subclass is only what is site-specific: its host, its URL shapes, its PDF
+path, its title suffix, and — where a site differs — a hook override. The page parse and the
+PDF pick are module-level pure functions so a site module can expose them under its own name
+(some are bound with the site's constants) and every branch stays testable offline.
+"""
+from __future__ import annotations
+
+import html as html_mod
+import re
+import urllib.parse
+from typing import ClassVar
+from urllib.parse import urlparse
+
+from .. import provenance
+from ..errors import BadInput, NotFound, Unavailable
+from ..models import AcademicItem, extract_year, normalize_author_name
+from ..transport import HttpError
+from ._cf_gate import gate_message, is_challenge_page, waf_gate_message
+from ._cf_gate import load_cookie as _load_cookie
+from ._cf_gate import parse_cookie as _parse_cookie
+from ._entitled import EntitledBackend
+
+#: A browser-ish default UA: a challenge is bound to the UA that cleared it.
+_DEFAULT_UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+               "Chrome/131.0 Safari/537.36")
+
+#: The cookie that actually carries the clearance, named in the construction error.
+_GATE_NAMES = {
+    "cf": "the Cloudflare clearance cookie (cf_clearance)",
+    "waf": "the AWS WAF token cookie (aws-waf-token)",
+}
+
+_META_TAG_RE = re.compile(r"<meta\b[^>]*>", re.I)
+_META_NAME_RE = re.compile(r"\bname=[\"']([^\"']+)[\"']", re.I)
+_META_CONTENT_RE = re.compile(r"\bcontent=[\"']([^\"']*)[\"']", re.I)
+_TITLE_TAG_RE = re.compile(r"<title\b[^>]*>(.*?)</title>", re.S | re.I)
+_TAG_RE = re.compile(r"<[^>]+>")
+_WS_RE = re.compile(r"\s+")
+
+#: A DOI after any of the accepted prefixes (``doi:``, a ``doi.org`` URL, the site's own
+#: ``name:``/``name/`` form), which may stack.
+_DOI_PREFIX_RE = re.compile(
+    r"^(?:(?:https?://(?:dx\.)?doi\.org/|doi:\s*|[a-z]+[:\/]\s*)\s*)+", re.I)
+_DOI_RE = re.compile(r"^10\.\d{4,9}/\S+$")
+
+
+def _unescaped_when_safe(url: str) -> str:
+    return html_mod.unescape((url or "").replace("\\/", "/")).strip()
+
+
+def _mentions(text: str, needle: str) -> bool:
+    """True when ``needle`` occurs in ``text`` as a whole token.
+
+    Used to tell this item's own PDF anchor from a related-item card's: both carry a DOI or an
+    internal id, and only the exact one matches. A dot *and more digits* after the match also
+    counts as "inside" a longer DOI (``10.1145/1`` must not match ``10.1145/1.2``), while a
+    dot before a suffix is a real boundary (``…/10.1063/5.0123456.pdf``).
+    """
+    start = text.find(needle)
+    while start != -1:
+        before = text[start - 1] if start else ""
+        end = start + len(needle)
+        after = text[end] if end < len(text) else ""
+        longer = after == "." and text[end + 1:end + 2].isdigit()
+        if not before.isalnum() and not after.isalnum() and not longer:
+            return True
+        start = text.find(needle, start + 1)
+    return False
+
+
+def _text(value) -> str:
+    """Strip tags/entities and collapse whitespace."""
+    return _WS_RE.sub(" ", html_mod.unescape(_TAG_RE.sub(" ", str(value or "")))).strip()
+
+
+def _metas(page_html: str) -> dict[str, list[str]]:
+    """Collect ``citation_*`` / ``dc.*`` meta values, keyed by lowercased name."""
+    found: dict[str, list[str]] = {}
+    for tag in _META_TAG_RE.findall(page_html or ""):
+        name = _META_NAME_RE.search(tag)
+        content = _META_CONTENT_RE.search(tag)
+        if not name or not content:
+            continue
+        key = name.group(1).lower()
+        if key.startswith(("citation_", "dc.")):
+            found.setdefault(key, []).append(content.group(1))
+    return found
+
+
+def _pages(first: str, last: str, single: str) -> str:
+    if first and last and first != last:
+        return f"{first}-{last}"
+    return single or first
+
+
+def _fields(metas: dict[str, list[str]]) -> dict:
+    """Read the item fields out of ``citation_*`` meta, falling back to ``dc.*``."""
+    def first(*names: str) -> str:
+        for name in names:
+            values = metas.get(name) or []
+            if values:
+                return values[0]
+        return ""
+
+    return {
+        "title": _text(first("citation_title", "dc.title")),
+        "creators": [a for a in (metas.get("citation_author")
+                                 or metas.get("dc.creator") or []) if a.strip()],
+        "container": _text(first("citation_journal_title", "citation_conference_title",
+                                 "citation_inbook_title", "citation_book_title", "dc.source")),
+        "volume": first("citation_volume"),
+        "issue": first("citation_issue"),
+        "page": _pages(first("citation_firstpage"), first("citation_lastpage"),
+                       first("citation_pages")),
+        "year": extract_year(first("citation_publication_date", "citation_online_date",
+                                   "citation_date", "dc.date")),
+        "doi": doi_from(first("citation_doi", "dc.identifier")),
+        "abstract": _text(first("citation_abstract", "dc.description")),
+        "publisher": _text(first("citation_publisher", "dc.publisher")),
+    }
+
+
+# --- key normalization (a pure function; the site passes its own shapes) ---
+
+def doi_from(key: str) -> str:
+    """Return a bare DOI from a DOI-shaped key (a ``doi.org``/``site:`` form included).
+
+    A plain page URL is searched too: the prefix strip leaves ``//host/...`` behind, which is
+    not DOI-shaped, yet the path may well carry the DOI the page names. Either way the DOI is
+    returned without a trailing separator.
+    """
+    k = _DOI_PREFIX_RE.sub("", (key or "").strip()).strip()
+    if _DOI_RE.match(k):
+        return k.rstrip("/.,;:")
+    found = re.search(r"10\.\d{4,9}/\S+", key or "")
+    return found.group(0).rstrip("/.,;:") if found else ""
+
+
+def normalize_key(key: str, *, tag: str, url_re: re.Pattern, forms: str,
+                  embedded_doi_re: re.Pattern | None = None) -> str:
+    """Classify a key and return ``doi:<DOI>`` or ``url:<item URL>``.
+
+    A pasted URL may embed the DOI (``/doi/<DOI>``) — the DOI is then the better key — or
+    percent-encode it, which the DOI shapes do not match; a failing key is retried decoded.
+    """
+    k = (key or "").strip()
+    if k.lower().startswith("url:"):  # an already-normalized key keeps its kind
+        k = k[len("url:"):].strip()
+    k = re.sub(rf"^(?:{tag}[:\/]\s*)+", "", k, flags=re.I).strip()
+    if not k:
+        raise BadInput(f"[{tag}] empty key (expected {forms})")
+    for candidate in ((k, urllib.parse.unquote(k)) if "%" in k else (k,)):
+        if url_re.match(candidate):
+            embedded = embedded_doi_re.search(candidate) if embedded_doi_re else None
+            if embedded:  # the URL carries the DOI in its path: that is the better key
+                return f"doi:{embedded.group(1).rstrip('/.,;:')}"
+            return f"url:{candidate.split('#', 1)[0]}"
+        doi = doi_from(candidate)
+        if doi:
+            return f"doi:{doi.rstrip('/.,;:')}"
+    raise BadInput(f"[{tag}] not a DOI, {forms}: {key!r}")
+
+
+# --- page parse (pure) ---
+
+def page_to_item(page_html: str, key: str, url: str = "", *, source: str, title_suffix: str,
+                 item_type=None) -> AcademicItem:
+    """Normalize an item page to an :class:`AcademicItem` (``citation_*`` → ``dc.*`` → title).
+
+    ``key`` is the normalized key; the page's own ``citation_doi`` is the truth for ``doi``
+    (a ``url:`` key names only an internal id). ``title_suffix`` is stripped off a title-tag
+    fallback, and ``item_type`` turns the landed URL into a type where the site distinguishes
+    one (a book chapter, say).
+    """
+    page = page_html or ""
+    fields = _fields(_metas(page))
+    if not fields["title"]:
+        title_tag = _TITLE_TAG_RE.search(page)
+        if title_tag:
+            title = _text(title_tag.group(1))
+            if title_suffix:
+                title = re.sub(rf"\s*[|—-]\s*{re.escape(title_suffix)}\s*$", "", title).strip()
+            fields["title"] = title
+    doi = fields["doi"] or doi_from(key.split(":", 1)[-1])
+    creators = [normalize_author_name(a) for a in fields["creators"]]
+    return AcademicItem(
+        source=source,
+        key=key,
+        title=fields["title"],
+        creators=[c for c in creators if c["family"] or c["given"]],
+        year=fields["year"],
+        abstract=fields["abstract"],
+        doi=doi,
+        url=url or (key[len("url:"):] if key.startswith("url:") else ""),
+        container_title=fields["container"],
+        volume=fields["volume"],
+        issue=fields["issue"],
+        page=fields["page"],
+        publisher=fields["publisher"],
+        item_type=item_type(url, key) if item_type else "article",
+    )
+
+
+class GatedBackend(EntitledBackend):
+    """Base for a reader on a bot-gated site the user clears in their own browser.
+
+    The clearance cookie is bound to the browser's ``user_agent`` and its egress IP, so the two
+    travel together and a missing one is a construction error. Every page request goes through
+    :meth:`_open`, which turns a challenge into :attr:`BLOCK_MSG`; the PDF download judges the
+    same way and reports it as :class:`Unavailable`.
+    """
+
+    #: ``cf`` (Cloudflare managed challenge) or ``waf`` (AWS WAF challenge).
+    GATE_KIND = "cf"
+    #: The cookie name in the construction error (derived from GATE_KIND if blank).
+    GATE_NAME = ""
+    #: The publisher's name in the gate message.
+    SITE_NAME = ""
+    #: The site base URL (for a redirect/check message and the PDF rewrite).
+    SITE = ""
+    #: Hosts the cookie export may carry (defaults to ``ALLOWED_HOSTS`` when left empty).
+    COOKIE_HOSTS: ClassVar[tuple[str, ...]] = ()
+    #: An item URL on this site; a DOI embedded in a ``/doi/`` path; an anchor path that is a PDF.
+    URL_RE: ClassVar[re.Pattern | None] = None
+    EMBEDDED_DOI_RE: ClassVar[re.Pattern | None] = None
+    PDF_PATH_RE: ClassVar[re.Pattern | None] = None
+    #: The last-resort PDF URL (``{site}``/``{doi}`` filled in).
+    PDF_URL_TEMPLATE = ""
+    #: The item id in a landed URL, for correlating the PDF anchor with this item.
+    ITEM_ID_RE: ClassVar[re.Pattern | None] = None
+    #: The open-access licence block / badge, which only open-access pages carry.
+    OA_RE: ClassVar[re.Pattern] = re.compile(
+        r"is an open access article|creative-commons__description", re.I)
+    #: The documented key forms, spelled into the bad-key message.
+    KEY_FORMS = "a DOI or an article URL"
+    #: The ``source``/prefix name (``acm:``, ``acm/``, ``doi:``).
+    KEY_PREFIX = ""
+    #: What the site calls itself in a page-title suffix.
+    TITLE_SUFFIX = ""
+    #: True where the page names its PDF link even without a session (SpringerLink, Cambridge).
+    ANONYMOUS_PAGES = False
+    #: The default backend name (the registry passes it, a bare construction does not).
+    DEFAULT_NAME = ""
+    UA = _DEFAULT_UA
+    headers: ClassVar[dict] = {
+        "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    #: A publisher page per second is polite enough; the limiter spaces them.
+    min_interval = 1.0
+    rate = 4
+
+    def __init__(self, name: str = "", timeout: float | None = None,
+                 delay: float | None = None, cookie: str = "", cookie_file: str = "",
+                 user_agent: str = "", **_unused):
+        name = name or self.DEFAULT_NAME
+        self.GATE_NAME = self.GATE_NAME or _GATE_NAMES.get(self.GATE_KIND, "") \
+            or "the session cookie"
+        if not self.BLOCK_MSG:
+            self.BLOCK_MSG = self._gate_message(name)
+        super().__init__(name=name, timeout=timeout, delay=delay, cookie=cookie,
+                         cookie_file=cookie_file, user_agent=user_agent)
+        self._last_key = self._last_alias = self._last_page = self._last_url = ""
+
+    def _gate_message(self, name: str) -> str:
+        if self.GATE_KIND == "waf":
+            return waf_gate_message(self.SITE_NAME, name)
+        return gate_message(self.SITE_NAME, name)
+
+    # -- gate detection --------------------------------------------------------
+
+    def _is_gate(self, body: str, status: int) -> bool:
+        if self.GATE_KIND == "waf":
+            # The WAF answers its JS challenge as an empty 202 carrying ``gokuProps``; the site
+            # never serves a real article on 202.
+            return status in (202, 403) or "gokuProps" in (body or "")
+        return is_challenge_page(body, status)
+
+    def _open(self, url: str, **kw):
+        """GET ``url``; a gate in the status, the body or a header becomes :attr:`BLOCK_MSG`."""
+        try:
+            response = self.fetch(url, **kw)
+        except HttpError as e:
+            if self._is_gate(e.body, e.status):
+                raise RuntimeError(self.BLOCK_MSG) from e
+            raise
+        if self._is_gate(response.text, response.status_code) \
+                or (self.GATE_KIND == "cf" and response.headers.get("cf-mitigated")):
+            raise RuntimeError(self.BLOCK_MSG)
+        return response
+
+    # -- pure-function bindings ------------------------------------------------
+
+    def _on_site(self, url: str) -> bool:
+        return self.matches_url(url)
+
+    def normalize_key(self, key: str) -> str:
+        return normalize_key(key, tag=self.KEY_PREFIX, url_re=self.URL_RE, forms=self.KEY_FORMS,
+                             embedded_doi_re=self.EMBEDDED_DOI_RE)
+
+    def item_id(self, url: str) -> str:
+        # The whole URL, not just its path: a site may carry the id in the query.
+        match = self.ITEM_ID_RE.search(url or "") if self.ITEM_ID_RE else None
+        return match.group(1) if match else ""
+
+    def is_open_access(self, page_html: str) -> bool:
+        return bool(self.OA_RE.search(page_html or ""))
+
+    def extract_pdf_url(self, page_html: str, doi: str = "", want_id: str = "") -> str:
+        return extract_pdf_url(page_html, doi=doi, want_id=want_id, site=self.SITE,
+                               pdf_path_re=self.PDF_PATH_RE, template=self.PDF_URL_TEMPLATE,
+                               on_site=self._on_site, tag=self.KEY_PREFIX)
+
+    def item_type(self, url: str, key: str = "") -> str:
+        """The item type for a landed URL (a site that has more than articles overrides it)."""
+        return "article"
+
+    def page_to_item(self, page_html: str, key: str, url: str = "") -> AcademicItem:
+        return page_to_item(page_html, key, url, source=self.name, title_suffix=self.TITLE_SUFFIX,
+                            item_type=lambda u, k: self.item_type(u, k))
+
+    # -- network ---------------------------------------------------------------
+
+    def _page(self, key: str) -> tuple[str, str]:
+        """Fetch the item page as ``(html, landed url)``, turning a gate into one clear error.
+
+        The page is memoized per key: the PDF download and the item read share one request. A
+        DOI goes through ``doi.org``; the landed URL is kept because the item id in it is not
+        derivable from the DOI.
+        """
+        normalized = self.normalize_key(key)
+        if self._last_page and normalized in (self._last_key, self._last_alias):
+            return self._last_page, self._last_url
+        if normalized.startswith("url:"):
+            url = normalized[len("url:"):]
+        else:
+            url = f"https://doi.org/{urllib.parse.quote(normalized[len('doi:'):], safe='/')}"
+        response = self._open(url)  # a gate is turned into BLOCK_MSG; 404 propagates
+        landed = str(response.url) or url
+        if not self._on_site(landed):
+            raise NotFound(f"[{self.name}] DOI does not resolve to an {self.SITE_NAME} item: "
+                           f"{normalized}")
+        self._last_key, self._last_alias = normalized, ""
+        self._last_page, self._last_url = response.text, landed
+        return self._last_page, landed
+
+    # -- Backend ---------------------------------------------------------------
+
+    def search(self, query: str, limit: int = 10, filters: dict | None = None) -> list[AcademicItem]:
+        """Resolve a DOI / URL query to one item; keyword queries return [].
+
+        There is no key-free search endpoint, so anything that is not already an identifier
+        cannot be looked up here. ``filters`` are not applied: there is at most one hit.
+        """
+        try:
+            self.normalize_key(query or "")
+        except BadInput:
+            return []
+        if limit < 1:
+            return []
+        try:
+            return [self.get(query)]
+        except (NotFound, KeyError):
+            return []
+
+    def _short_page(self, url: str) -> bool:
+        """True for a paywalled short page (a full page means OA or an entitled session)."""
+        return False
+
+    def get(self, key: str) -> AcademicItem:
+        """Fetch one item by DOI or URL and, when the page names one, its PDF link.
+
+        A 404 is turned into :class:`NotFound` so a search treating the key as a candidate
+        yields nothing instead of an error.
+        """
+        normalized = self.normalize_key(key)
+        try:
+            body, landed = self._page(normalized)
+        except HttpError as e:
+            if e.status in (404, 410):
+                raise NotFound(f"[{self.name}] no such item: {key}") from e
+            raise
+        item = self.page_to_item(body, normalized, landed)
+        if normalized.startswith("url:") and item.doi:
+            # The URL named only an internal id; the page named the real identity, which also
+            # becomes the memo key so the PDF download reuses this page.
+            item.key = f"doi:{item.doi}"
+            self._last_alias = f"doi:{item.doi}"
+        if not item.title:
+            raise RuntimeError(f"[{self.name}] could not parse the item page: {landed}")
+        try:
+            pdf_url = self.extract_pdf_url(body, item.doi, self.item_id(landed))
+        except RuntimeError:  # an odd host must not cost the metadata
+            pdf_url = ""
+        if pdf_url:
+            item.attachments = [pdf_url]
+        if self.is_open_access(body):
+            # The chain labels the hit from this: an open-access item is not a subscription
+            # copy, so its note and its "needs a session" advice would both be wrong.
+            item.extra = {**item.extra, "open_access": True}
+            item.access = provenance.OA
+        return item
+
+    def _refusal_reason(self, page: str, landed: str, response) -> str:
+        """Why the PDF endpoint answered something that is not a PDF."""
+        if self.is_open_access(page):
+            return "the item is open access but the endpoint answered an HTML page"
+        if not self.has_session:
+            return "the session holds no clearance cookie"
+        if self._short_page(landed):
+            return ("the item answers only its short page, so the session is not entitled to it "
+                    "(missing, expired, or not subscribed)")
+        return "the session is not entitled to this item (expired, or not subscribed)"
+
+    def get_attachment(self, key: str) -> bytes:
+        """Download the item PDF (only a session the site lets through serves it)."""
+        normalized = self.normalize_key(key)
+        page, landed = self._page(normalized)
+        url = self.extract_pdf_url(page, doi_from(normalized), self.item_id(landed))
+        if not url:
+            raise Unavailable(f"[{self.name}] the item page carries no PDF link: {landed}")
+        try:
+            response = self.fetch(url, headers={"Accept": "application/pdf"})
+        except HttpError as e:
+            if self._is_gate(e.body, e.status):
+                raise Unavailable(f"[{self.name}] PDF download was gated: {self.BLOCK_MSG}") from e
+            raise
+        if response.content.startswith(b"%PDF"):
+            return response.content
+        if self._is_gate(response.text, response.status_code):
+            # Cloudflare serves its interstitial with a 200 too: that is the gate, not a refusal.
+            raise Unavailable(f"[{self.name}] PDF download was gated: {self.BLOCK_MSG}")
+        landed_on = urlparse(str(response.url)).path or url
+        why = self._refusal_reason(page, landed, response)
+        raise Unavailable(
+            f"[{self.name}] no PDF bytes: {why} (landed on {landed_on}) — open {url} in your "
+            "entitled browser, or refresh the cookie+user_agent pair from a cleared tab")
+
+
+def extract_pdf_url(page_html: str, doi: str = "", want_id: str = "", *, site: str,
+                    pdf_path_re: re.Pattern | None, template: str, on_site, tag: str) -> str:
+    """Return the item's PDF link, or "" when the page carries none.
+
+    The page's own ``citation_pdf_url`` meta is authoritative; older markup carries a plain
+    anchor instead, and related-item cards on the same page carry the same shape — so an anchor
+    only counts when its path names this item's id (``want_id``) or its DOI (``doi``). ``doi``
+    is also the last-resort rewrite through ``template``. The result must stay on the site — a
+    third party here means the page handed back something unexpected; raising keeps that visible.
+    """
+    text = page_html or ""
+    # The item's own identity: its internal id where the site has one, else its DOI (which
+    # these anchors embed verbatim). A related-item card on the same page differs in it.
+    needles = [n for n in (want_id, doi) if n]
+    raw = _unescaped_when_safe((_metas(text).get("citation_pdf_url") or [""])[0])
+    if not raw and pdf_path_re:
+        first = ""
+        for candidate in pdf_path_re.findall(text):
+            first = first or candidate
+            if any(_mentions(candidate, n) for n in needles):
+                raw = candidate
+                break
+        raw = _unescaped_when_safe(raw or first)
+    if not raw and template:
+        if "{id}" in template and want_id:
+            raw = template.format(site=site, doi="", id=want_id)
+        elif doi and "{doi}" in template:
+            raw = template.format(site=site, doi=urllib.parse.quote(doi, safe="/"), id=want_id)
+    if not raw:
+        return ""
+    # Cut back to the canonical path unless the regex only stops short of the *query tail*: an
+    # endpoint like Xplore's stampPDF needs ``tag``/``isnumber`` beside ``arnumber``, while
+    # Cambridge's ``/div-class-title-…-div.pdf`` tail after the ``.pdf`` adds nothing.
+    match = pdf_path_re.search(raw) if pdf_path_re else None
+    if match and not raw[match.end():].startswith(("?", "&")):
+        raw = match.group(1)
+    if raw.startswith("//"):
+        raw = "https:" + raw
+    elif raw.startswith("/"):
+        raw = site + raw
+    if not on_site(raw):
+        host = urlparse(raw).hostname or raw
+        raise RuntimeError(f"[{tag}] PDF link is not on the site: {host}")
+    return raw
+
+
+def parse_cookie(raw: str, hosts: tuple[str, ...]) -> dict[str, str]:
+    """Parse a cookie header / Netscape export, keeping only the site's rows."""
+    return _parse_cookie(raw, hosts)
+
+
+def load_cookie(cookie: str = "", cookie_file: str = "", hosts: tuple[str, ...] = (),
+                name: str = "") -> str:
+    """The cookie string from an inline string and/or a cookie file (both merged)."""
+    return _load_cookie(cookie, cookie_file, hosts, name)

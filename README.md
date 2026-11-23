@@ -103,7 +103,7 @@ shell 补全只有 bash/zsh/fish（PowerShell 下可在 Git Bash 里生成）。
 | `litcli refs <key>` / `citing <key>` / `related <key>`（均可 `--limit N`、`--sort cited`） | 参考文献（回溯奠基）／引用该文的文献（前向跟进）／语义邻居（OpenAlex 图谱；该文没有邻居列表时退回按标题实词检索并标注） |
 | `litcli data get <key> [--format table\|json\|csl]` | 单条全字段 |
 | `litcli export <key>... [--format csljson\|bibtex\|ris\|text] [--no-cite]` | 导出引文；`csljson` 可喂 `pandoc --citeproc`；`--no-cite` 只对 `text` 生效。arXiv key 仅在 `--backend openalex\|crossref` 下归一为 DOI |
-| `litcli fetch <doi\|arXiv id\|ScienceDirect URL/PII\|Wiley URL\|Springer URL> [--out DIR] [--no-download] [--scihub]`（旧动词 `fetch fulltext <doi>`、旧旗标 `--download` 仍接受） | 保存全文：本地库 → Unpaywall → OpenAlex → Europe PMC → Zenodo → ScienceDirect（Elsevier DOI / 文章 URL）→ Wiley → Springer（Springer Nature DOI，金 OA 匿名可取）→ 落地页 |
+| `litcli fetch <DOI 或出版社文章 URL> [--out DIR] [--no-download] [--scihub]`（旧动词 `fetch fulltext <doi>`、旧旗标 `--download` 仍接受） | 保存全文：本地库 → Unpaywall → OpenAlex → Europe PMC → Zenodo → 各出版社订阅副本（按其 DOI 前缀自动尝试，见下表）→ 落地页 |
 | `litcli fetch --book "书名\|ISBN" [--backend zlibrary\|doab\|openlibrary] [--pick N]` | 图书候选 → 选定补全书目 → 保存文件（ISBN 自动走此路径） |
 
 **写库**（默认 Zotero；只读后端会报 `[skipped]` 并以退出码 2 结束）
@@ -162,6 +162,12 @@ CNKI / 豆瓣另需浏览器依赖。
 | `springer` | 读 | 订阅内容，凭你的机构授权（不是 OA）；金 OA 文章免配置 | Springer Nature DOI 的全文 PDF；只对 `10.1007` 等前缀自动尝试 |
 | `cambridge` | 读 | 订阅内容，凭你的机构授权（不是 OA）；CC 许可的 OA 文章免配置 | Cambridge DOI 的全文 PDF；只对 `10.1017` 前缀自动尝试 |
 | `aip` | 读 | 订阅内容，凭你的机构授权（不是 OA）；站点在 Cloudflare 挑战后 | AIP DOI 的全文 PDF；只对 `10.1063`、`10.1121` 前缀自动尝试 |
+| `acm` | 读 | 订阅内容，凭你的机构授权（不是 OA）；站点在 Cloudflare 挑战后 | ACM DOI 的全文 PDF；只对 `10.1145` 前缀自动尝试 |
+| `aps` | 读 | 订阅内容，凭你的机构授权（不是 OA）；站点在 Cloudflare 挑战后 | APS DOI 的全文 PDF；只对 `10.1103` 前缀自动尝试 |
+| `iop` | 读 | 订阅内容，凭你的机构授权（不是 OA）；站点在 Cloudflare 挑战后 | IOPscience DOI 的全文 PDF；只对 `10.1088` 前缀自动尝试 |
+| `tandf` | 读 | 订阅内容，凭你的机构授权（不是 OA）；站点在 Cloudflare 挑战后 | Taylor & Francis DOI 的全文 PDF；只对 `10.1080` 前缀自动尝试 |
+| `aiaa` | 读 | 订阅内容，凭你的机构授权（不是 OA）；站点在 Cloudflare 挑战后 | AIAA DOI 的全文 PDF；只对 `10.2514` 前缀自动尝试 |
+| `ieee` | 读 | 订阅内容，凭你的机构授权（不是 OA）；站点在 AWS WAF 挑战后 | IEEE Xplore 文章的全文 PDF；只对 `10.1109` 前缀自动尝试 |
 | `scihub` | 读 | 公开副本（非 OA 授权），只按 DOI | PDF；`--scihub` 才兜底 |
 | `zlibrary` | 读 | 公开副本（非 OA 授权） | 书目 + PDF；匿名每日有下载配额 |
 
@@ -178,6 +184,11 @@ Wiley 另有 **TDM token**（`[backends.wiley].tdm_token`，免费申请）：�
 付费条目经 `doi.org` 只落到 `/abs/` 短页，其 PDF 端点把匿名客户端 302 回条目页（静默降级），未获授权时 `fetch` 报因并给链接；
 `pubs.aip.org`（`[backends.aip]`）相反，**在 Cloudflare 托管挑战后面**：文章页与 `article-pdf` 端点对无 JS 客户端一律 403 + `cf-mitigated: challenge`，
 因此 AIP 基本必须配 `[backends.aip]` 的 `cookie` + `user_agent`（`cf_clearance` 绑 UA 与出口 IP，过期就重取），未配时报的是这道门而不是 IP 被封；
+ACM（`dl.acm.org`）、APS（`link.aps.org`）、IOPscience（`iopscience.iop.org`）、Taylor & Francis
+（`tandfonline.com`）、AIAA（`arc.aiaa.org`）与 AIP 同一形态：都在 Cloudflare 托管挑战后，页面与 PDF 端点对裸客户端一律 403，
+必须成对配置 `cookie` + `user_agent`；IEEE Xplore（`ieeexplore.ieee.org`，`[backends.ieee]`）换了一种闸——AWS WAF 的 JS 挑战
+（空 202 包体 + `gokuProps`，靠 `aws-waf-token` 清关），未授权会话的 PDF 端点会 302 到 `/Xplore/login.jsp?…&authDecision=…`；
+这六家同样只取机构已订阅或 OA 的正文，单 DOI、低频。
 `europepmc.org` 的网页在 Cloudflare challenge 后面，所以走 EBI 的 REST；
 DOAB 的 `/rest` 拒绝无 JS 客户端，所以走它的 Atom feed；DOAB 详情页、Sci-Hub、Z-Library 用可解的工作量证明，
 litcli 在本地做题后复用 cookie，不改写、不绕过。知网与豆瓣的滑块交你在可见浏览器手动完成。

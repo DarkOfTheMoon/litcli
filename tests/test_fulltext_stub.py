@@ -120,13 +120,19 @@ class CorpusResolverTest(unittest.TestCase):
         """The ``_from_*`` function a resolver lambda wraps (it is a global, so in co_names)."""
         return next(n for n in resolver.__code__.co_names if n.startswith("_from_"))
 
-    def test_resolver_order_keeps_scihub_last(self):
-        # ScienceDirect sits after the free corpora but before the landing page: bytes beat a page.
-        order = [self._target(r) for r in ft._default_resolvers("a@b.c")]
+    def test_resolver_order_keeps_the_tail_last(self):
+        # The publisher steps sit after the free corpora but before the landing page (bytes beat
+        # a page), in the canonical order whatever order they were handed in.
+        given = {name: object() for name in reversed(ft.PUBLISHER_ORDER)}
+        order = [self._target(r) for r in ft._default_resolvers("a@b.c", publishers=given)]
         self.assertEqual(order, ["_from_local", "_from_unpaywall", "_from_openalex",
-                                 "_from_europepmc", "_from_zenodo", "_from_sciencedirect", "_from_wiley",
-                                 "_from_springer", "_from_cambridge", "_from_aip",
-                                 "_from_unpaywall_landing", "_from_scihub"])
+                                 "_from_europepmc", "_from_zenodo"]
+                         + ["_from_publisher"] * len(ft.PUBLISHER_ORDER)
+                         + ["_from_unpaywall_landing", "_from_scihub"])
+
+    def test_an_unconfigured_publisher_step_is_absent(self):
+        order = [self._target(r) for r in ft._default_resolvers("a@b.c")]
+        self.assertNotIn("_from_publisher", order)
 
     def test_sciencedirect_candidate_is_entitled(self):
         cand = ft._from_sciencedirect("10.1/x", self.FakeBackend(["https://sd/x.pdf"]))
@@ -162,6 +168,22 @@ class CorpusResolverTest(unittest.TestCase):
 
         cand = ft._from_wiley("10.1002/x", TdmOnly())
         self.assertEqual(cand["url"], "https://onlinelibrary.wiley.com/doi/10.1002/x")
+
+    def test_the_tdm_page_url_survives_the_chain(self):
+        # Through the generic publisher step, not just the direct call: the chain must still
+        # hand a human the page rather than the token-less API endpoint.
+        class TdmOnly:
+            def get(self, key):
+                return type("I", (), {
+                    "title": "T", "url": "https://onlinelibrary.wiley.com/doi/10.1002/x",
+                    "attachments": ["https://api.wiley.com/onlinelibrary/tdm/v1/articles/x"],
+                    "extra": {"tdm_url": "https://api.wiley.com/onlinelibrary/tdm/v1/articles/x"},
+                })()
+
+        with mock.patch.object(ft.unpaywall, "resolve_oa", return_value=None):
+            out = ft.resolve_fulltext("10.1002/x", publishers={"wiley": TdmOnly()})
+        self.assertEqual(out["kind"], "wiley")
+        self.assertEqual(out["url"], "https://onlinelibrary.wiley.com/doi/10.1002/x")
 
     def test_springer_candidate_is_entitled(self):
         cand = ft._from_springer("10.1007/x", self.FakeBackend(["https://s/x.pdf"]))
@@ -276,6 +298,35 @@ class CorpusResolverTest(unittest.TestCase):
             out = ft.resolve_fulltext("10.1063/x",
                                       aip_backend=self.FakeBackend(["https://a/x.pdf"]))
         self.assertEqual(out["kind"], "aip")
+
+    def test_every_guarded_publisher_is_a_chain_step(self):
+        # Each publisher kind reaches the chain under its own name, ahead of the landing page.
+        for kind in ("acm", "aps", "iop", "tandf", "aiaa", "ieee"):
+            with self.subTest(kind):
+                with mock.patch.object(
+                        ft.unpaywall, "resolve_oa",
+                        return_value={"best_pdf": "", "best_landing": "https://legal/page"}):
+                    out = ft.resolve_fulltext("10.1/x",
+                                              publishers={kind: self.FakeBackend([f"https://{kind}/x.pdf"])})
+                self.assertEqual(out["kind"], kind)
+                self.assertEqual(out["access"], "entitled")
+
+    def test_a_guarded_hit_does_not_claim_a_missing_session(self):
+        # Its page is behind the gate, so a hit only happens with a session that got through.
+        cand = ft._from_publisher("10.1145/x", self.FakeBackend(["https://a/x.pdf"]), "acm")
+        self.assertNotIn("needs a configured session", cand["status"])
+
+    def test_a_skipped_step_is_named_after_its_source(self):
+        # The gate messages are the user's only pointer to the cookie setting: they must be
+        # labelled with the site, not with the lambda that happens to wrap it.
+        class Boom(self.FakeBackend):
+            def get(self, key):
+                raise RuntimeError("Taylor & Francis Online served its gate")
+
+        with mock.patch.object(ft.unpaywall, "resolve_oa", return_value=None):
+            out = ft.resolve_fulltext("10.1/x", publishers={"tandf": Boom([])})
+        self.assertFalse(out["has_fulltext"])
+        self.assertIn("tandf: Taylor & Francis Online served its gate", out["errors"])
 
     def test_tail_only_skips_everything_already_answered(self):
         self.assertEqual([self._target(r) for r in ft._default_resolvers("a@b.c", tail_only=True)],

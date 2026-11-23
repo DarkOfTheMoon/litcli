@@ -64,16 +64,24 @@ class Session:
     ``HttpBackend`` builds on it, and so do the bot-check backends (Sci-Hub, Z-Library),
     which read a status code as a page state and need the cookie jar across requests.
     The client itself is lazy so merely constructing a backend stays cheap.
+
+    A hand-supplied cookie belongs in the *jar*, not in a ``Cookie`` header: httpx drops the
+    header on every redirect (``Client._redirect_headers``) and rebuilds it from the jar, so a
+    header would be lost on the ``doi.org`` → publisher hop. Seeding the jar per host also
+    keeps a ``doi.org`` cookie from being sent to the publisher.
     """
 
     def __init__(self, timeout: float = 30.0, ua: str = UA,
                  transport: httpx.BaseTransport | None = None, headers: dict | None = None,
-                 follow_redirects: bool = True, http2: bool = False):
+                 follow_redirects: bool = True, http2: bool = False,
+                 seed_cookies: dict | None = None, seed_hosts: tuple[str, ...] = ()):
         self.timeout = timeout
         self.UA = ua
         self.headers = headers or {}
         self.follow_redirects = follow_redirects
         self.http2 = http2
+        self.seed_cookies = seed_cookies or {}
+        self.seed_hosts = tuple(seed_hosts)
         self._transport = transport
         self._client: httpx.Client | None = None
         self._client_lock = threading.Lock()
@@ -89,6 +97,9 @@ class Session:
                     timeout=httpx.Timeout(self.timeout), follow_redirects=self.follow_redirects,
                     http2=self.http2, proxy=proxy() or None, transport=self._transport,
                     event_hooks=hooks())
+                for host in self.seed_hosts:  # re-seeded: closing the client empties the jar
+                    for name, value in self.seed_cookies.items():
+                        self._client.cookies.set(name, value, domain=host, path="/")
             return self._client
 
     def has_cookie(self, suffix: str) -> bool:
@@ -100,8 +111,12 @@ class Session:
         host = httpx.URL(url).host
         self.client.cookies.set(name, value, domain=host, path="/")
 
-    def cookie(self, name: str) -> str:
-        """A cookie value from the jar ("" when absent)."""
+    def cookie_value(self, name: str) -> str:
+        """A cookie value from the jar ("" when absent).
+
+        Not named ``cookie``: :class:`~litcli.backends._entitled.EntitledBackend` keeps its
+        configured cookie string on ``self.cookie``, which would shadow the method.
+        """
         return next((c.value for c in self.client.cookies.jar if c.name == name), "")
 
     def close(self) -> None:

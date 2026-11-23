@@ -58,7 +58,9 @@ def _canonical_pii(raw: str) -> str:
     """A PII with the URL separators stripped (``S0045-7825(05)00073-3`` → ``S0045782505000733``)."""
     return _NON_ALNUM_RE.sub("", raw or "").upper()
 
-#: Hosts an Elsevier-hosted PDF may legitimately live on.
+#: Hosts an Elsevier-hosted PDF may legitimately live on. ``sciencedirectassets.com`` (the PDF
+#: CDN) stays out of ``_COOKIE_HOSTS``: a browser marks ``cf_clearance`` host-only too, so it
+#: gets no cookie there. Add it to both lists if the CDN ever checks the session.
 _ALLOWED_HOSTS = ("sciencedirect.com", "sciencedirectassets.com",
                   "elsevier.com", "elsevierhealth.com")
 
@@ -325,7 +327,8 @@ def page_to_item(page_html: str, key: str) -> AcademicItem:
 
 
 #: Hosts of the session cookies that are worth carrying (a browser cookie export lists others).
-_COOKIE_HOSTS = ("elsevier", "sciencedirect")
+_COOKIE_HOSTS = ("www.sciencedirect.com", "linkinghub.elsevier.com", "sciencedirect.com",
+                 "elsevier.com")
 
 
 def parse_cookie(raw: str) -> dict[str, str]:
@@ -334,7 +337,7 @@ def parse_cookie(raw: str) -> dict[str, str]:
 
 
 def load_cookie(cookie: str = "", cookie_file: str = "") -> str:
-    """The ``Cookie`` header value from an inline string and/or a cookie file (both merged)."""
+    """The cookie string from an inline string and/or a cookie file (both merged)."""
     return _load_cookie(cookie, cookie_file, _COOKIE_HOSTS, "sciencedirect")
 
 
@@ -343,8 +346,9 @@ class ScienceDirectBackend(EntitledBackend):
 
     The site gates content behind a Cloudflare check plus an entitlement decision, neither of
     which a plain HTTP client can answer alone. A session you already entitled in your own
-    browser is therefore carried in as a ``Cookie`` header (``[backends.sciencedirect]
-    .cookie``/``.cookie_file``), and requests look like that browser's session.
+    browser is therefore carried in as a cookie string (``[backends.sciencedirect]
+    .cookie``/``.cookie_file``) and planted in its own hosts' cookie jar, so requests look
+    like that browser's session — including after a redirect.
     """
 
     UA = _UA
@@ -355,6 +359,7 @@ class ScienceDirectBackend(EntitledBackend):
     min_interval = 0.5
     rate = 2
     COOKIE_HOSTS = _COOKIE_HOSTS
+    ALLOWED_HOSTS = _ALLOWED_HOSTS
     GATE_NAME = "the ScienceDirect clearance cookie"
     BLOCK_MSG = _BLOCK_MSG
 

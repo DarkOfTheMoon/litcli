@@ -300,7 +300,7 @@ class _Http(_ScihubHttp):
                                        "site_mode": "books", "action": "login",
                                        "redirectUrl": ""}).encode()
         self._retry(lambda u, _r: self._post(u, data), base + "/login", base + "/")
-        return bool(self.cookie("remix_userkey"))
+        return bool(self.cookie_value("remix_userkey"))
 
 
 def _base_of(url: str) -> str:

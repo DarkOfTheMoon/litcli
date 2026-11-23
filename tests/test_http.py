@@ -128,6 +128,30 @@ class TransportTest(unittest.TestCase):
         # a throttle that doesn't serialise finishes in well under 20 ms.
         self.assertGreaterEqual(time.monotonic() - start, 0.04)
 
+    def test_a_seeded_cookie_survives_a_redirect(self):
+        # httpx drops the ``Cookie`` header on every redirect and rebuilds it from the jar, so
+        # a hand-supplied cookie must live in the jar (a DOI key starts at ``doi.org``).
+        be = _Backend()
+        be.seed_cookies, be.seed_hosts = {"cf_clearance": "abc"}, ("x.test",)
+        rec: Recorder = stub(be, (302, "", {"location": "https://x.test/a"}), (200, ""))
+        be.fetch_text("https://doi.test/10.1/x")
+        self.assertEqual(rec.cookies, [None, "cf_clearance=abc"])
+
+    def test_a_seeded_cookie_is_scoped_to_its_hosts(self):
+        be = _Backend()
+        be.seed_cookies, be.seed_hosts = {"cf_clearance": "abc"}, ("x.test",)
+        rec: Recorder = stub(be, (200, ""))
+        be.fetch_text("https://elsewhere.test/a")
+        self.assertEqual(rec.cookies, [None])
+
+    def test_a_server_refresh_sticks_in_the_jar(self):
+        be = _Backend()
+        rec: Recorder = stub(be, (200, "", {"set-cookie": "fresh=1; Path=/"}),
+                             (200, "", {"set-cookie": "fresh=2; Path=/"}))
+        be.fetch_text("https://x/a")
+        be.fetch_text("https://x/b")
+        self.assertEqual(rec.cookies, [None, "fresh=1"])
+
     def test_recorder_records_urls(self):
         be = _Backend()
         rec: Recorder = stub(be, (200, {}))

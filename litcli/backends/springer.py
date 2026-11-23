@@ -55,7 +55,10 @@ _BLOCK_MSG = (
 #: Hosts the session cookies come from (the identity cookie lives on ``springer.com``; a
 #: Nature- or BMC-branded article keeps its own session on its own site) and the PDF may
 #: legitimately live on (those brands serve it from ``nature.com`` / ``biomedcentral.com``).
-_COOKIE_HOSTS = ("springer", "nature", "biomedcentral")
+_COOKIE_HOSTS = ("link.springer.com", "www.nature.com", "springer.com", "nature.com",
+                 "biomedcentral.com")
+#: ``springernature.com`` stays out of ``_COOKIE_HOSTS``: a browser marks ``cf_clearance``
+#: host-only too, so it gets no cookie there. Add it to both lists if it ever checks a session.
 _ALLOWED_HOSTS = ("springer.com", "springernature.com", "nature.com", "biomedcentral.com")
 
 #: ``springer:`` is the documented prefix; ``springer/`` is the ``source/key`` form the table
@@ -76,10 +79,11 @@ _PATH_KINDS = ("article", "chapter", "referenceworkentry")
 _URL_DOI_RE = re.compile(
     r"/(?:articles?|chapter|referenceworkentry)/(10\.\d{4,9}/[^?#\s]+)"
     r"|/content/pdf/(10\.\d{4,9}/[^?#\s]+)\.pdf", re.I)
-#: A sub-page hung off a DOI (``/figures/1``, ``/sections/…``): the DOI ends before it.
+#: A sub-page hung off a DOI (``/figures/1``, ``/sections/…``, IOP's ``/pdf`` and ``/meta``):
+#: the DOI ends before it.
 _SUBPAGE_RE = re.compile(
     r"/(?:figures|tables|media|metrics|statistics|sections|supplementary-material|"
-    r"supplementary-information)(?:/[^?#]*)?$", re.I)
+    r"supplementary-information|pdf|epdf|abs|meta|full|references|citedby)(?:/[^?#]*)?$", re.I)
 
 _LD_RE = re.compile(
     r'<script\b[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.S | re.I)
@@ -392,14 +396,14 @@ def parse_cookie(raw: str) -> dict[str, str]:
 
 
 def load_cookie(cookie: str = "", cookie_file: str = "") -> str:
-    """The ``Cookie`` header value from an inline string and/or a cookie file (both merged)."""
+    """The cookie string from an inline string and/or a cookie file (both merged)."""
     return _load_cookie(cookie, cookie_file, _COOKIE_HOSTS, "springer")
 
 
 class SpringerBackend(EntitledBackend):
     """Resolve a DOI / SpringerLink article URL to one item and its PDF link.
 
-    A session you already entitled in your own browser is carried in as a ``Cookie`` header
+    A session you already entitled in your own browser is carried in as a cookie string
     (``[backends.springer] .cookie``/``.cookie_file``) together with that browser's
     ``user_agent``. The page itself needs no session (metadata works anonymously); the PDF
     download does, and only for articles your institution subscribes to — open-access ones
@@ -414,7 +418,10 @@ class SpringerBackend(EntitledBackend):
     min_interval = 1.0
     rate = 4
     COOKIE_HOSTS = _COOKIE_HOSTS
+    ALLOWED_HOSTS = _ALLOWED_HOSTS
     GATE_NAME = "the SpringerLink identity cookie"
+    #: Its page (and PDF link) answers anonymously; only the bytes want a session.
+    ANONYMOUS_PAGES = True
     BLOCK_MSG = _BLOCK_MSG
 
     def __init__(self, name: str = "springer", timeout: float = 30.0, delay: float = 1.0,
