@@ -544,6 +544,116 @@ class FetchFulltextTest(unittest.TestCase):
             cli.main(["fetch", "https://www.nature.com/articles/s41598-024-80509-9"])
         self.assertEqual(resolve.call_args.args[0], "10.1038/s41598-024-80509-9")
 
+    def _cambridge_probe(self, target):
+        from unittest import mock
+
+        import litcli.cli as cli
+
+        sentinel = object()
+        with mock.patch("litcli.commands.fetch._optional_backend", return_value=sentinel), \
+             mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext",
+                        return_value={"has_fulltext": False}) as resolve:
+            cli.main(["fetch", target])
+        return resolve.call_args.kwargs["cambridge_backend"]
+
+    def test_a_cambridge_doi_probes_cambridge_even_unconfigured(self):
+        self.assertIsNotNone(self._cambridge_probe("10.1017/jfm.2016.10"))
+
+    def test_another_publisher_does_not_pay_a_cambridge_probe(self):
+        self.assertIsNone(self._cambridge_probe("10.1103/PhysRevLett.126.151601"))
+
+    def test_a_cambridge_url_is_resolved_and_its_doi_reaches_the_chain(self):
+        # The URL path carries Cambridge's own product id, so only the page can say the DOI.
+        from unittest import mock
+
+        import litcli.cli as cli
+
+        class Pub:
+            def get(self, key):
+                class Item:
+                    doi = "10.1017/jfm.2016.10"
+                    title = "T"
+                    attachments: tuple = ("https://c/x.pdf",)
+                    access = ""
+                return Item()
+
+        url = ("https://www.cambridge.org/core/journals/jfm/article/abs/cavity/"
+               "273B8416BB80A7AE23315B948FD7ACB9")
+        with mock.patch("litcli.commands.fetch._optional_backend", return_value=Pub()), \
+             mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext",
+                        return_value={"has_fulltext": False}):
+            rc = cli.main(["fetch", url, "--no-download"])
+        self.assertEqual(rc, 0)
+        # The page's own link is already in hand, so the chain is not consulted at all.
+        self.assertEqual(self.out.getvalue().strip(), "https://c/x.pdf")
+        self.assertIn("subscription copy via your institution", self.err.getvalue())
+
+    def test_a_malformed_cambridge_key_exits_2_instead_of_drifting_down_the_chain(self):
+        rc, _out, err, _files = self._run(["fetch", "cambridge:"], {"has_fulltext": False})
+        self.assertEqual(rc, 2)
+        self.assertIn("[error] [cambridge] empty key", err)
+        self.assertIn("cambridge:<DOI>", err)
+
+    def _aip_probe(self, target):
+        from unittest import mock
+
+        import litcli.cli as cli
+
+        sentinel = object()
+        with mock.patch("litcli.commands.fetch._optional_backend", return_value=sentinel), \
+             mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext",
+                        return_value={"has_fulltext": False}) as resolve:
+            cli.main(["fetch", target])
+        return resolve.call_args.kwargs["aip_backend"]
+
+    def test_an_aip_doi_probes_aip_even_unconfigured(self):
+        self.assertIsNotNone(self._aip_probe("10.1063/1.870872"))
+
+    def test_a_jasa_doi_probes_aip_too(self):
+        self.assertIsNotNone(self._aip_probe("10.1121/1.1902154"))
+
+    def test_another_publisher_does_not_pay_an_aip_probe(self):
+        self.assertIsNone(self._aip_probe("10.1103/PhysRevLett.126.151601"))
+
+    def test_a_legacy_aip_url_normalizes_to_its_doi(self):
+        from unittest import mock
+
+        import litcli.cli as cli
+
+        with mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext",
+                        return_value={"has_fulltext": False}) as resolve:
+            cli.main(["fetch", "https://aip.scitation.org/doi/abs/10.1063/1.870872"])
+        self.assertEqual(resolve.call_args.args[0], "10.1063/1.870872")
+
+    def test_a_malformed_aip_key_exits_2_instead_of_drifting_down_the_chain(self):
+        rc, _out, err, _files = self._run(["fetch", "aip:"], {"has_fulltext": False})
+        self.assertEqual(rc, 2)
+        self.assertIn("[error] [aip] empty key", err)
+        self.assertIn("aip:<DOI>", err)
+
+    def test_a_failed_aip_download_falls_through_to_the_tail(self):
+        from unittest import mock
+
+        import litcli.cli as cli
+
+        class Pub:
+            def get_attachment(self, key):
+                raise RuntimeError("[aip] no PDF bytes")
+
+        head = {"has_fulltext": True, "kind": "aip", "url": "https://a/article",
+                "access": "entitled"}
+        tail = {"has_fulltext": True, "kind": "scihub", "url": "https://sci/x.pdf",
+                "access": "public"}
+        with mock.patch("litcli.commands.fetch.get_all_backends",
+                        return_value={"aip": Pub()}), \
+             mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext",
+                        side_effect=[head, tail]) as resolve, \
+             mock.patch("litcli.commands.fetch.pdfutil.download", return_value=b"%PDF-1.4 sci"):
+            rc = cli.main(["fetch", "10.1063/x", "--lines", "0"])
+        self.assertEqual(rc, 0)
+        self.assertTrue(resolve.call_args.kwargs.get("tail_only"))
+        self.assertIn("public copy", self.err.getvalue())
+
     def test_a_malformed_springer_key_exits_2_instead_of_drifting_down_the_chain(self):
         rc, _out, err, _files = self._run(["fetch", "springer:"], {"has_fulltext": False})
         self.assertEqual(rc, 2)

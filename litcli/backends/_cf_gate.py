@@ -1,4 +1,5 @@
-"""Helpers shared by the entitled publisher readers (ScienceDirect, Wiley, SpringerLink).
+"""Helpers shared by the entitled publisher readers (ScienceDirect, Wiley, SpringerLink,
+Cambridge, AIP).
 
 These sites serve the article only to a session the user entitled in their browser, and the
 two Cloudflare-walled ones answer a plain HTTP client with a managed challenge instead of the

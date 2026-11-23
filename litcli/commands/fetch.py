@@ -1,8 +1,8 @@
 """``fetch``: save the fulltext behind an id, or a book by title/ISBN. Read-only, nothing is stored.
 
 One command, one target. ``fetch <doi|arxiv-id|publisher-url|isbn>`` walks the legitimate chain
-(local store → Unpaywall/OpenAlex → Europe PMC/Zenodo → ScienceDirect / Wiley / Springer when
-entitled → landing page) and
+(local store → Unpaywall/OpenAlex → Europe PMC/Zenodo → ScienceDirect / Wiley / Springer /
+Cambridge / AIP when entitled → landing page) and
 **saves the file by default**, printing
 exactly one line on stdout: the path. Everything else (what source answered, notes, previews) goes
 to stderr so ``f=$(litcli fetch <id>)`` stays clean. Exit codes: 0 file saved, 1 nothing found,
@@ -19,7 +19,9 @@ import tempfile
 from .. import fulltext as fulltext_mod
 from .. import pdf as pdfutil
 from .. import provenance, unpaywall
+from ..backends.aip import normalize_key as aip_key
 from ..backends.base import Backend, NotSupportedError
+from ..backends.cambridge import normalize_key as cambridge_key
 from ..backends.sciencedirect import normalize_key as sciencedirect_key
 from ..backends.springer import normalize_key as springer_key
 from ..backends.wiley import normalize_key as wiley_key
@@ -49,6 +51,20 @@ _SPRINGER_LIKE_RE = re.compile(
     r"^(?:springer[:\/]|https?://(?:[\w-]+\.)*(?:springer\.com|springernature\.com|nature\.com|"
     r"biomedcentral\.com|doi\.org)/)", re.I)
 
+#: DOI prefix owned by Cambridge University Press (Cambridge Core journals and books).
+CAMBRIDGE_DOI_RE = ("10.1017/",)
+
+#: DOI prefixes hosted on pubs.aip.org (AIP Publishing itself and the Acoustical Society of
+#: America, whose journals AIP serves).
+AIP_DOI_RE = ("10.1063/", "10.1121/")
+
+#: Targets that are AIP by shape: an ``aip:`` key, or a pubs.aip.org / aip.scitation.org URL.
+_AIP_LIKE_RE = re.compile(
+    r"^(?:aip[:/]|https?://(?:[\w-]+\.)*(?:pubs\.aip\.org|aip\.scitation\.org)/)", re.I)
+
+#: Targets that are Cambridge by shape: a ``cambridge:`` key, or a Cambridge Core URL.
+_CAMBRIDGE_LIKE_RE = re.compile(r"^(?:cambridge[:\/]|https?://(?:[\w-]+\.)*cambridge\.org/)", re.I)
+
 #: A target that already is a DOI (an arXiv id has been turned into one by normalization).
 _DOI_LIKE_RE = re.compile(r"^10\.\d{4,9}/")
 
@@ -60,6 +76,28 @@ def _sciencedirect_key(target: str) -> str:
     except LitcliError:
         return ""
     return normalized if normalized.startswith("pii:") else ""
+
+
+def _cambridge_url(target: str) -> str:
+    """``url:<URL>`` when the target is a Cambridge Core page, else ``""``.
+
+    A Cambridge URL carries an internal product id, not the DOI, so it stays a URL until the
+    page names its own DOI (``citation_doi``).
+    """
+    try:
+        normalized = cambridge_key(target)
+    except LitcliError:
+        return ""
+    return normalized if normalized.startswith("url:") else ""
+
+
+def _aip_url(target: str) -> str:
+    """``url:<URL>`` when the target is an AIP page with no DOI in it, else ``""``."""
+    try:
+        normalized = aip_key(target)
+    except LitcliError:
+        return ""
+    return normalized if normalized.startswith("url:") else ""
 
 
 def out(text: str) -> None:
@@ -170,6 +208,17 @@ def _springer_hint() -> None:
          " (open-access articles download without one)")
 
 
+def _cambridge_hint() -> None:
+    note("  Cambridge Core PDFs need a session: set [backends.cambridge] cookie"
+         " (or cookie_file) and user_agent from an authenticated browser tab"
+         " (open-access articles download without one)")
+
+
+def _aip_hint() -> None:
+    note("  AIP is behind a Cloudflare challenge: set [backends.aip] cookie"
+         " (or cookie_file) and user_agent from a browser tab that cleared it")
+
+
 def _fetch_fulltext(cfg, args, target: str) -> int:
     """Walk the legitimate fulltext chain for ``target`` and save the file (or print the link).
 
@@ -177,11 +226,14 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
     it is a public copy without an open licence, so its hits say so.
     """
     key = normalize_related_key(target)
-    # A pasted publisher URL / ``wiley:<DOI>`` / ``springer:<DOI>`` form normalizes to the DOI;
-    # a target shaped like one of those sites must normalize or it would drift down the chain.
-    for _normalize, _like in ((wiley_key, _WILEY_LIKE_RE), (springer_key, _SPRINGER_LIKE_RE)):
+    # A pasted publisher URL / ``wiley:<DOI>`` / ``springer:<DOI>`` / ``cambridge:<DOI>`` form
+    # normalizes to the DOI; a target shaped like one of those sites must normalize or it would
+    # drift down the chain.
+    for _normalize, _like in ((wiley_key, _WILEY_LIKE_RE), (springer_key, _SPRINGER_LIKE_RE),
+                              (cambridge_key, _CAMBRIDGE_LIKE_RE), (aip_key, _AIP_LIKE_RE)):
         try:
-            key = _normalize(key)[4:]
+            normalized = _normalize(key)
+            key = normalized[len("url:"):] if normalized.startswith("url:") else normalized[4:]
             break
         except LitcliError as e:
             if _like.match(target.strip()):
@@ -219,6 +271,22 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
             springer_backend = _optional_backend("springer", cfg)
         except RuntimeError as e:  # a broken section must not sink the rest of the chain
             springer_error = str(e)
+    aip_url = "" if _DOI_LIKE_RE.match(key) else _aip_url(target)
+    aip_backend = backends.get("aip")
+    aip_error = ""
+    if aip_backend is None and (aip_url or key.lower().startswith(AIP_DOI_RE)):
+        try:
+            aip_backend = _optional_backend("aip", cfg)
+        except RuntimeError as e:  # a broken section must not sink the rest of the chain
+            aip_error = str(e)
+    cambridge_url = "" if _DOI_LIKE_RE.match(key) else _cambridge_url(target)
+    cambridge_backend = backends.get("cambridge")
+    cambridge_error = ""
+    if cambridge_backend is None and (cambridge_url or key.lower().startswith(CAMBRIDGE_DOI_RE)):
+        try:
+            cambridge_backend = _optional_backend("cambridge", cfg)
+        except RuntimeError as e:  # a broken section must not sink the rest of the chain
+            cambridge_error = str(e)
     info = None
     if pii_key and sciencedirect_backend is not None:
         # The URL/PII is the identifier the user has; its DOI (when the page carries one)
@@ -233,6 +301,59 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
             if item.attachments:
                 info = {"has_fulltext": True, "kind": "sciencedirect",
                         "url": item.attachments[0], "title": item.title, "access": "entitled"}
+    cambridge_page = False
+    if info is None and cambridge_url and cambridge_backend is not None:
+        # The URL is the identifier the user has; its DOI (when the page carries one) lets the
+        # rest of the chain run if this step is blocked.
+        try:
+            item = cambridge_backend.get(cambridge_url)
+        except (LitcliError, RuntimeError) as e:
+            cambridge_error = str(e)
+        else:
+            cambridge_page = True
+            if item.doi:
+                key = item.doi
+                cambridge_url = ""
+            if item.attachments:
+                info = {"has_fulltext": True, "kind": "cambridge",
+                        "url": item.attachments[0], "title": item.title,
+                        "access": getattr(item, "access", "") or provenance.ENTITLED}
+    if info is None and cambridge_url:
+        # A Cambridge URL whose page gave no DOI: the chain has nothing to key on, so report
+        # that instead of probing every backend with a URL.
+        if cambridge_backend is None:
+            note(f"Cambridge Core {cambridge_url[len('url:'):]}  "
+                 f"{cambridge_error or 'backend unavailable'}")
+        else:
+            note(f"Cambridge Core {cambridge_url[len('url:'):]}  "
+                 f"{'the item page gave no DOI' if cambridge_page else 'the item page did not load'}")
+            if cambridge_error:
+                note(f"  [skipped] {cambridge_error}")
+            else:
+                _cambridge_hint()
+        return 1
+    if info is None and aip_url and aip_backend is not None:
+        try:
+            item = aip_backend.get(aip_url)
+        except (LitcliError, RuntimeError) as e:
+            aip_error = str(e)
+        else:
+            if item.doi:
+                key = item.doi
+                aip_url = ""
+            if item.attachments:
+                info = {"has_fulltext": True, "kind": "aip", "url": item.attachments[0],
+                        "title": item.title, "access": provenance.ENTITLED}
+    if info is None and aip_url:
+        if aip_backend is None:
+            note(f"AIP {aip_url[len('url:'):]}  {aip_error or 'backend unavailable'}")
+        else:
+            note(f"AIP {aip_url[len('url:'):]}  the article page did not load and gave no DOI")
+            if aip_error:
+                note(f"  [skipped] {aip_error}")
+            else:
+                _aip_hint()
+        return 1
     if info is None and pii_key and not _DOI_LIKE_RE.match(key):
         # A ScienceDirect URL/PII whose page never gave a DOI: the chain has nothing to key
         # on, so report the gate instead of probing every backend with a URL.
@@ -253,6 +374,8 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
                                              sciencedirect_backend=sciencedirect_backend,
                                              wiley_backend=wiley_backend,
                                              springer_backend=springer_backend,
+                                             cambridge_backend=cambridge_backend,
+                                             aip_backend=aip_backend,
                                              scihub_backend=scihub_backend)
     if not info.get("has_fulltext"):
         note(f"DOI {key}  no such work in the local store or open OA sources")
@@ -262,6 +385,10 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
             note(f"  [skipped] {wiley_error}")
         if springer_error:
             note(f"  [skipped] {springer_error}")
+        if cambridge_error:
+            note(f"  [skipped] {cambridge_error}")
+        if aip_error:
+            note(f"  [skipped] {aip_error}")
         for reason in info.get("errors") or []:
             note(f"  [skipped] {reason}")
         if sciencedirect_backend is not None and (pii_key or key.lower().startswith(ELSEVIER_DOI_RE)):
@@ -270,6 +397,10 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
             _wiley_hint()
         if springer_backend is not None and key.lower().startswith(SPRINGER_DOI_RE):
             _springer_hint()
+        if cambridge_backend is not None and key.lower().startswith(CAMBRIDGE_DOI_RE):
+            _cambridge_hint()
+        if aip_backend is not None and key.lower().startswith(AIP_DOI_RE):
+            _aip_hint()
         if not scihub_backend:
             note("  add --scihub to also try Sci-Hub, or use institutional access / interlibrary loan")
         else:
@@ -313,7 +444,8 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
 
     raw = None
     publisher = {"sciencedirect": sciencedirect_backend, "wiley": wiley_backend,
-                 "springer": springer_backend}.get(kind)
+                 "springer": springer_backend, "cambridge": cambridge_backend,
+                 "aip": aip_backend}.get(kind)
     if publisher is not None:
         # The PDF needs the same entitled session as the page (and may sit behind a second
         # gate), so downloading it through a plain client would only collect a challenge page.

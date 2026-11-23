@@ -15,7 +15,7 @@ import argparse
 
 # argparse does not encode these as ``choices``; supply the known values for completion.
 BACKENDS = ["zotero", "arxiv", "crossref", "openalex", "openlibrary", "uspto", "cnki",
-            "douban", "sciencedirect", "wiley", "springer", "scihub", "zlibrary", "doaj",
+            "douban", "sciencedirect", "wiley", "springer", "cambridge", "aip", "scihub", "zlibrary", "doaj",
             "europepmc", "doab", "zenodo"]
 TYPES = ["article", "book", "chapter", "thesis", "report", "preprint", "paper",
          "patent", "document", "dataset", "software", "conference"]

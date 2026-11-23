@@ -34,10 +34,10 @@ from .. import provenance
 from ..errors import BadInput, NotFound, Unavailable
 from ..models import AcademicItem, extract_year, normalize_author_name
 from ..transport import HttpError
-from ._cf_gate import is_challenge_page, session_cookie
+from ._cf_gate import is_challenge_page
 from ._cf_gate import load_cookie as _load_cookie
 from ._cf_gate import parse_cookie as _parse_cookie
-from .http import HttpBackend
+from ._entitled import EntitledBackend
 
 _SITE = "https://link.springer.com"
 
@@ -396,7 +396,7 @@ def load_cookie(cookie: str = "", cookie_file: str = "") -> str:
     return _load_cookie(cookie, cookie_file, _COOKIE_HOSTS, "springer")
 
 
-class SpringerBackend(HttpBackend):
+class SpringerBackend(EntitledBackend):
     """Resolve a DOI / SpringerLink article URL to one item and its PDF link.
 
     A session you already entitled in your own browser is carried in as a ``Cookie`` header
@@ -406,7 +406,6 @@ class SpringerBackend(HttpBackend):
     download without any session at all.
     """
 
-    access = "entitled"  # a subscription copy through the user's institution, not an OA licence
     UA = _UA
     headers: ClassVar[dict] = {
         "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
@@ -414,26 +413,15 @@ class SpringerBackend(HttpBackend):
     }
     min_interval = 1.0
     rate = 4
-    #: The article page is session/IP state, so it should not sit in the metadata cache.
-    cacheable = False
+    COOKIE_HOSTS = _COOKIE_HOSTS
+    GATE_NAME = "the SpringerLink identity cookie"
+    BLOCK_MSG = _BLOCK_MSG
 
     def __init__(self, name: str = "springer", timeout: float = 30.0, delay: float = 1.0,
                  cookie: str = "", cookie_file: str = "", user_agent: str = "", **_unused):
-        # Fail early: a bad cookie_file, or a cookie without its UA, is a config error.
-        self.cookie = session_cookie(cookie, cookie_file, user_agent, _COOKIE_HOSTS, name,
-                                     gate="the SpringerLink identity cookie")
-        if user_agent:
-            self.UA = user_agent.strip()
-        if self.cookie:
-            self.headers = {**type(self).headers, "Cookie": self.cookie}
+        super().__init__(name=name, timeout=timeout, delay=delay, cookie=cookie,
+                         cookie_file=cookie_file, user_agent=user_agent)
         self._last_doi = self._last_page = self._last_url = ""
-        super().__init__(name=name, timeout=timeout, min_interval=delay)
-
-    @property
-    def capabilities(self) -> set[str]:
-        # Read-only, and deliberately not "attachment": the fulltext chain must treat a Springer
-        # hit as a remote source, never as a local-store attachment.
-        return {"read"}
 
     def _page(self, doi: str) -> tuple[str, str]:
         """Fetch the item page as ``(html, url)``, turning a gate into one clear error.
@@ -451,18 +439,13 @@ class SpringerBackend(HttpBackend):
         for kind in _PATH_KINDS:
             url = f"{_SITE}/{kind}/{quoted}"
             try:
-                # Normal raise-for-status keeps the 5xx family on the retry path.
-                response = self.fetch(url)
+                # A gate becomes the backend's own message; a 5xx still retries.
+                body = self._open(url).text
             except HttpError as e:
-                if is_block_page(e.body, e.status):
-                    raise RuntimeError(_BLOCK_MSG) from e
                 if e.status == 404:
                     missing = missing or e
                     continue
                 raise
-            body = response.text
-            if is_block_page(body, response.status_code) or response.headers.get("cf-mitigated"):
-                raise RuntimeError(_BLOCK_MSG)
             self._last_doi, self._last_page, self._last_url = doi, body, url
             return body, url
         if missing is not None:  # every kind 404ed: the caller turns this into NotFound
@@ -519,11 +502,6 @@ class SpringerBackend(HttpBackend):
             item.extra = {**item.extra, "open_access": True}
             item.access = provenance.OA
         return item
-
-    @property
-    def has_session(self) -> bool:
-        """Whether a session cookie was configured at all (the site still decides entitlement)."""
-        return bool(self.cookie)
 
     def _entitled(self) -> bool:
         """Whether the session holds a filled-in Springer institution token.

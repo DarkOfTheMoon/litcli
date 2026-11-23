@@ -5,8 +5,8 @@ Priorities (per user requirements):
      locate an item by DOI and take its attachment — local store wins, no network.
   2. **Public OA sources**: Unpaywall (best_oa_location.pdf) → OpenAlex (best_oa_location.pdf_url),
      then the legal corpus endpoints: Europe PMC (open-access JATS XML) → Zenodo (open files),
-     then the publisher readers **ScienceDirect / Wiley / Springer** (entitled subscription copies
-     through the user's institution), and finally Unpaywall's landing page (HTML, no bytes) so
+     then the publisher readers **ScienceDirect / Wiley / Springer / Cambridge / AIP** (entitled
+     subscription copies through the user's institution), and finally Unpaywall's landing page (HTML, no bytes) so
      a legal page is still reported
      when no file exists.
   3. **Sci-Hub (opt-in, last)**: a copyright-evading library, so it is only consulted after the
@@ -17,7 +17,7 @@ Priorities (per user requirements):
 
 Decoupled from backends: ``resolve_fulltext`` accepts an injectable resolver list for offline
 stubbing; the default resolvers are local/unpaywall/openalex (+ the corpus endpoints) +
-sciencedirect/wiley/springer + landing page + scihub when injected.
+sciencedirect/wiley/springer/cambridge/aip + landing page + scihub when injected.
 """
 from __future__ import annotations
 
@@ -34,7 +34,8 @@ from .models import AcademicItem
 
 # A resolver: takes a doi, returns a candidate dict or None.
 # Candidate fields usable by the CLI:
-#   has_fulltext, kind ('local'|'unpaywall'|'openalex'|'europepmc'|'zenodo'|'scihub'),
+#   has_fulltext, kind ('local'|'unpaywall'|'openalex'|'europepmc'|'zenodo'|'sciencedirect'
+#   |'wiley'|'springer'|'cambridge'|'aip'|'scihub'),
 #   url (for the remote kinds), data (for local attachment bytes), title, status, key,
 #   format ('xml' when the payload is a JATS document rather than a PDF)
 Resolver = callable
@@ -229,6 +230,54 @@ def _from_springer(doi: str, backend) -> dict | None:
             "status": status, "access": provenance.ENTITLED}
 
 
+def _from_cambridge(doi: str, backend) -> dict | None:
+    """A Cambridge Core PDF through the user's institution, or an open-access one.
+
+    Like SpringerLink, a Cambridge page answers anonymously and always names its PDF endpoint,
+    so the item usually arrives with an attachment even without a session; the chain then lets
+    ``fetch`` find out whether the bytes come.
+    """
+    if backend is None:
+        return None
+    try:
+        item: AcademicItem = backend.get(doi)
+    except (LitcliError, OSError, KeyError):
+        return None
+    if not item.attachments:
+        return None
+    if getattr(item, "extra", {}).get("open_access"):
+        return {"kind": "cambridge", "url": item.attachments[0], "title": item.title,
+                "status": "open access", "access": provenance.OA}
+    # The PDF link is on the page even anonymously, so a hit does not prove a session: say so
+    # when none is configured, or the run would look as if it had tried an entitled session.
+    status = "institutional access (not open access)"
+    if not getattr(backend, "has_session", True):
+        status += " — needs a configured session (none set)"
+    return {"kind": "cambridge", "url": item.attachments[0], "title": item.title,
+            "status": status, "access": provenance.ENTITLED}
+
+
+def _from_aip(doi: str, backend) -> dict | None:
+    """An AIP Publishing PDF the user is entitled to through their institution.
+
+    Mirrors ``_from_wiley``: the site is Cloudflare-gated, so only a backend that reports an
+    attachment is taken; the gate message itself propagates from ``backend.get``.
+    """
+    if backend is None:
+        return None
+    try:
+        item: AcademicItem = backend.get(doi)
+    except (LitcliError, OSError, KeyError):
+        return None
+    if not item.attachments:
+        return None
+    if getattr(item, "extra", {}).get("open_access"):
+        return {"kind": "aip", "url": item.attachments[0], "title": item.title,
+                "status": "open access", "access": provenance.OA}
+    return {"kind": "aip", "url": item.attachments[0], "title": item.title,
+            "status": "institutional access (not open access)", "access": provenance.ENTITLED}
+
+
 def _from_scihub(doi: str, backend) -> dict | None:
     """Sci-Hub fallback via an injected backend (last in the chain; opt-in)."""
     if backend is None:
@@ -247,7 +296,8 @@ def _default_resolvers(email: str, backends: dict | None = None,
                        openalex_backend=None, scihub_backend=None,
                        europepmc_backend=None, zenodo_backend=None,
                        sciencedirect_backend=None, wiley_backend=None,
-                       springer_backend=None, tail_only: bool = False) -> list[Resolver]:
+                       springer_backend=None, cambridge_backend=None,
+                       aip_backend=None, tail_only: bool = False) -> list[Resolver]:
     cache: dict[str, dict | None] = {}
 
     def _oa(doi: str):
@@ -278,6 +328,8 @@ def _default_resolvers(email: str, backends: dict | None = None,
         lambda d: _from_sciencedirect(d, sciencedirect_backend),
         lambda d: _from_wiley(d, wiley_backend),
         lambda d: _from_springer(d, springer_backend),
+        lambda d: _from_cambridge(d, cambridge_backend),
+        lambda d: _from_aip(d, aip_backend),
         *tail,
     ]
 
@@ -325,6 +377,8 @@ def resolve_fulltext(doi: str, email: str = unpaywall.DEFAULT_EMAIL,
                      sciencedirect_backend=None,
                      wiley_backend=None,
                      springer_backend=None,
+                     cambridge_backend=None,
+                     aip_backend=None,
                      resolvers: list[Resolver] | None = None,
                      tail_only: bool = False) -> dict:
     """Find fulltext by DOI, priority: local store → OA sources → Sci-Hub (when injected).
@@ -338,7 +392,8 @@ def resolve_fulltext(doi: str, email: str = unpaywall.DEFAULT_EMAIL,
         resolvers = _default_resolvers(email, backends, openalex_backend, scihub_backend,
                                        europepmc_backend, zenodo_backend,
                                        sciencedirect_backend, wiley_backend,
-                                       springer_backend, tail_only=tail_only)
+                                       springer_backend, cambridge_backend, aip_backend,
+                                       tail_only=tail_only)
     errors: list[str] = []
     for r in resolvers:
         try:

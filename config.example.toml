@@ -1,6 +1,6 @@
 # litcli 配置示例(复制到 ~/.config/litcli/config.toml;Windows 为 %APPDATA%\litcli\config.toml)。
 # 文件存在就**整体以文件为准**;只有文件不存在时才用内置默认(本机 Zotero + arXiv + Crossref + OpenAlex)。
-# 所以复制本文件 = 启用下面全部后端:openlibrary、uspto、cnki、douban、sciencedirect、wiley、springer、
+# 所以复制本文件 = 启用下面全部后端:openlibrary、uspto、cnki、douban、sciencedirect、wiley、springer、cambridge、aip、
 # scihub、zlibrary 与四个开放获取源(doaj / europepmc / doab / zenodo);不想用的段整段删掉。
 
 [backends.zotero]
@@ -96,6 +96,32 @@ type = "wiley"
 type = "springer"
 # cookie = "…(浏览器 Cookie 头,原样粘贴)"
 # cookie_file = "~/.config/litcli/springer-cookies.txt"   # 或 Netscape cookies.txt 路径
+# user_agent = "…(与 Cookie 同源浏览器的 User-Agent)"
+# delay = 1.0         # 请求间隔(秒)
+# timeout = 30
+
+# 可选:Cambridge Core 文章/章节读取(剑桥大学出版社,无需 key,只按 DOI / 页面 URL 解析,无关键词检索)。
+# 与 Springer 相近:**没有 Cloudflare**,页面匿名就能读、citation_* 题录与 citation_pdf_url 恒在,
+# **CC 许可的 OA 文章 PDF 匿名直取 %PDF**。付费条目经 doi.org 只落到 /abs/ 短页,其 PDF 端点会把
+# 匿名客户端 302 回条目页(HTML,静默降级),litcli 据此明说"未获授权"。
+# 订阅条目需把**已认证**会话的 cookie + user_agent 成对配进来(会话绑 UA;过期就重取)。
+[backends.cambridge]
+type = "cambridge"
+# cookie = "…(浏览器 Cookie 头,原样粘贴)"
+# cookie_file = "~/.config/litcli/cambridge-cookies.txt"  # 或 Netscape cookies.txt 路径
+# user_agent = "…(与 Cookie 同源浏览器的 User-Agent)"
+# delay = 1.0         # 请求间隔(秒)
+# timeout = 30
+
+# 可选:AIP Publishing 文章读取(pubs.aip.org,无需 key,只按 DOI / 页面 URL 解析,无关键词检索)。
+# 与 Cambridge 不同,**站点在 Cloudflare 托管挑战后面**:文章页与 PDF 端点对裸 HTTP 客户端
+# 一律 403 + `cf-mitigated: challenge`(Just a moment…),所以匿名基本取不到东西——必须把
+# **已清关**浏览器会话的 cookie + user_agent 成对配进来(cf_clearance 同时绑 UA 与出口 IP,
+# 过期就重取)。未配会话时 litcli 报的就是这道门,不是 IP 被封。
+[backends.aip]
+type = "aip"
+# cookie = "…(浏览器 Cookie 头,原样粘贴)"
+# cookie_file = "~/.config/litcli/aip-cookies.txt"       # 或 Netscape cookies.txt 路径
 # user_agent = "…(与 Cookie 同源浏览器的 User-Agent)"
 # delay = 1.0         # 请求间隔(秒)
 # timeout = 30

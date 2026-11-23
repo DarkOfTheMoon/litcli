@@ -125,7 +125,8 @@ class CorpusResolverTest(unittest.TestCase):
         order = [self._target(r) for r in ft._default_resolvers("a@b.c")]
         self.assertEqual(order, ["_from_local", "_from_unpaywall", "_from_openalex",
                                  "_from_europepmc", "_from_zenodo", "_from_sciencedirect", "_from_wiley",
-                                 "_from_springer", "_from_unpaywall_landing", "_from_scihub"])
+                                 "_from_springer", "_from_cambridge", "_from_aip",
+                                 "_from_unpaywall_landing", "_from_scihub"])
 
     def test_sciencedirect_candidate_is_entitled(self):
         cand = ft._from_sciencedirect("10.1/x", self.FakeBackend(["https://sd/x.pdf"]))
@@ -205,6 +206,76 @@ class CorpusResolverTest(unittest.TestCase):
                                       springer_backend=self.FakeBackend(["https://s/x.pdf"]))
         self.assertEqual(out["kind"], "springer")
         self.assertEqual(out["url"], "https://s/x.pdf")
+
+    def test_cambridge_candidate_is_entitled(self):
+        cand = ft._from_cambridge("10.1017/x", self.FakeBackend(["https://c/x.pdf"]))
+        self.assertEqual(cand["kind"], "cambridge")
+        self.assertEqual(cand["access"], "entitled")
+        self.assertNotIn("format", cand)
+
+    def test_an_open_access_cambridge_hit_is_labelled_oa(self):
+        class Oa:
+            def get(self, key):
+                return type("I", (), {"title": "T", "url": "https://c/x",
+                                      "attachments": ["https://c/x.pdf"],
+                                      "extra": {"open_access": True}})()
+
+        cand = ft._from_cambridge("10.1017/x", Oa())
+        self.assertEqual(cand["access"], "oa")
+        self.assertEqual(cand["status"], "open access")
+
+    def test_a_sessionless_cambridge_hit_says_so_in_its_status(self):
+        class Anonymous:
+            has_session = False
+
+            def get(self, key):
+                return type("I", (), {"title": "T", "url": "https://c/x",
+                                      "attachments": ["https://c/x.pdf"], "extra": {}})()
+
+        cand = ft._from_cambridge("10.1017/x", Anonymous())
+        self.assertEqual(cand["access"], "entitled")
+        self.assertIn("needs a configured session", cand["status"])
+
+    def test_cambridge_without_a_pdf_falls_through(self):
+        self.assertIsNone(ft._from_cambridge("10.1017/x", self.FakeBackend([])))
+        self.assertIsNone(ft._from_cambridge("10.1017/x", self.Missing()))
+        self.assertIsNone(ft._from_cambridge("10.1017/x", None))
+
+    def test_aip_candidate_is_entitled(self):
+        cand = ft._from_aip("10.1063/x", self.FakeBackend(["https://a/x.pdf"]))
+        self.assertEqual(cand["kind"], "aip")
+        self.assertEqual(cand["access"], "entitled")
+        self.assertNotIn("format", cand)
+
+    def test_an_open_access_aip_hit_is_labelled_oa(self):
+        class Oa:
+            def get(self, key):
+                return type("I", (), {"title": "T", "url": "https://a/x",
+                                      "attachments": ["https://a/x.pdf"],
+                                      "extra": {"open_access": True}})()
+
+        cand = ft._from_aip("10.1063/x", Oa())
+        self.assertEqual(cand["access"], "oa")
+        self.assertEqual(cand["status"], "open access")
+
+    def test_aip_without_a_pdf_falls_through(self):
+        self.assertIsNone(ft._from_aip("10.1063/x", self.FakeBackend([])))
+        self.assertIsNone(ft._from_aip("10.1063/x", self.Missing()))
+        self.assertIsNone(ft._from_aip("10.1063/x", None))
+
+    def test_a_cambridge_hit_is_used_over_the_landing_page(self):
+        with mock.patch.object(ft.unpaywall, "resolve_oa",
+                               return_value={"best_pdf": "", "best_landing": "https://legal/page"}):
+            out = ft.resolve_fulltext("10.1017/x",
+                                      cambridge_backend=self.FakeBackend(["https://c/x.pdf"]))
+        self.assertEqual(out["kind"], "cambridge")
+
+    def test_an_aip_hit_is_used_over_the_landing_page(self):
+        with mock.patch.object(ft.unpaywall, "resolve_oa",
+                               return_value={"best_pdf": "", "best_landing": "https://legal/page"}):
+            out = ft.resolve_fulltext("10.1063/x",
+                                      aip_backend=self.FakeBackend(["https://a/x.pdf"]))
+        self.assertEqual(out["kind"], "aip")
 
     def test_tail_only_skips_everything_already_answered(self):
         self.assertEqual([self._target(r) for r in ft._default_resolvers("a@b.c", tail_only=True)],

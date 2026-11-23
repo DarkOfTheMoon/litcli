@@ -30,10 +30,10 @@ from urllib.parse import urlparse
 from ..errors import BadInput, NotFound, Unavailable, for_status
 from ..models import AcademicItem, extract_year, normalize_author_name
 from ..transport import HttpError
-from ._cf_gate import CHALLENGE_MARKERS, gate_message, is_challenge_page, session_cookie
+from ._cf_gate import gate_message, is_challenge_page
 from ._cf_gate import load_cookie as _load_cookie
 from ._cf_gate import parse_cookie as _parse_cookie
-from .http import HttpBackend
+from ._entitled import EntitledBackend
 
 _SITE = "https://www.sciencedirect.com"
 _ARTICLE = f"{_SITE}/science/article"
@@ -42,9 +42,6 @@ _ARTICLE = f"{_SITE}/science/article"
 _UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
        "Chrome/120.0 Safari/537.36 (litcli)")
 
-#: Markers of the pages ScienceDirect serves to a client it does not let through — shared
-#: with the other Cloudflare-gated readers (see ``_cf_gate``).
-_BLOCK_MARKERS = CHALLENGE_MARKERS
 _BLOCK_MSG = gate_message("ScienceDirect", "sciencedirect")
 
 _DOI_PREFIX_RE = re.compile(r"^(?:https?://(?:dx\.)?doi\.org/|doi:\s*)", re.I)
@@ -341,7 +338,7 @@ def load_cookie(cookie: str = "", cookie_file: str = "") -> str:
     return _load_cookie(cookie, cookie_file, _COOKIE_HOSTS, "sciencedirect")
 
 
-class ScienceDirectBackend(HttpBackend):
+class ScienceDirectBackend(EntitledBackend):
     """Resolve a DOI / PII / article URL to one ScienceDirect item and its PDF link.
 
     The site gates content behind a Cloudflare check plus an entitlement decision, neither of
@@ -350,7 +347,6 @@ class ScienceDirectBackend(HttpBackend):
     .cookie``/``.cookie_file``), and requests look like that browser's session.
     """
 
-    access = "entitled"  # a subscription copy through the user's institution, not an OA licence
     UA = _UA
     headers: ClassVar[dict] = {
         "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
@@ -358,27 +354,15 @@ class ScienceDirectBackend(HttpBackend):
     }
     min_interval = 0.5
     rate = 2
-    #: The article page is session/IP state, so it should not sit in the metadata cache.
-    cacheable = False
+    COOKIE_HOSTS = _COOKIE_HOSTS
+    GATE_NAME = "the ScienceDirect clearance cookie"
+    BLOCK_MSG = _BLOCK_MSG
 
     def __init__(self, name: str = "sciencedirect", timeout: float = 30.0,
                  cookie: str = "", cookie_file: str = "", user_agent: str = "", **_unused):
-        # Fail early: a bad cookie_file, or a cookie without its UA, is a config error.
-        self.cookie = session_cookie(cookie, cookie_file, user_agent, _COOKIE_HOSTS, name)
-        if user_agent:
-            # The clearance cookie is bound to the UA that earned it: requests must look like
-            # that browser (verbatim UA, no "litcli" suffix).
-            self.UA = user_agent.strip()
-        if self.cookie:
-            self.headers = {**type(self).headers, "Cookie": self.cookie}
+        super().__init__(name=name, timeout=timeout, cookie=cookie,
+                         cookie_file=cookie_file, user_agent=user_agent)
         self._last_pii = self._last_page = ""
-        super().__init__(name=name, timeout=timeout)
-
-    @property
-    def capabilities(self) -> set[str]:
-        # Read-only, and deliberately not "attachment": the fulltext chain must treat a
-        # ScienceDirect hit as a remote source, never as a local-store attachment.
-        return {"read"}
 
     # -- network ---------------------------------------------------------------
 
@@ -410,16 +394,7 @@ class ScienceDirectBackend(HttpBackend):
         if self._last_page and self._last_pii == pii:
             return self._last_page
         url = f"{_ARTICLE}/pii/{urllib.parse.quote(pii)}"
-        try:
-            # Normal raise-for-status keeps the 5xx family on the retry path.
-            response = self.fetch(url)
-        except HttpError as e:
-            if e.status == 403 or is_block_page(e.body, e.status):
-                raise RuntimeError(_BLOCK_MSG) from e
-            raise
-        body = response.text
-        if is_block_page(body, response.status_code) or response.headers.get("cf-mitigated"):
-            raise RuntimeError(_BLOCK_MSG)
+        body = self._open(url).text
         self._last_pii, self._last_page = pii, body
         return body
 

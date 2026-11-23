@@ -160,6 +160,8 @@ CNKI / 豆瓣另需浏览器依赖。
 | `sciencedirect` | 读 | 订阅内容，凭你的机构授权（不是 OA） | Elsevier DOI 的全文 PDF；只对 `10.1016` 等 Elsevier 前缀自动尝试 |
 | `wiley` | 读 | 订阅内容，凭你的机构授权（不是 OA） | Wiley DOI 的全文 PDF；只对 `10.1002` 等 Wiley 前缀自动尝试 |
 | `springer` | 读 | 订阅内容，凭你的机构授权（不是 OA）；金 OA 文章免配置 | Springer Nature DOI 的全文 PDF；只对 `10.1007` 等前缀自动尝试 |
+| `cambridge` | 读 | 订阅内容，凭你的机构授权（不是 OA）；CC 许可的 OA 文章免配置 | Cambridge DOI 的全文 PDF；只对 `10.1017` 前缀自动尝试 |
+| `aip` | 读 | 订阅内容，凭你的机构授权（不是 OA）；站点在 Cloudflare 挑战后 | AIP DOI 的全文 PDF；只对 `10.1063`、`10.1121` 前缀自动尝试 |
 | `scihub` | 读 | 公开副本（非 OA 授权），只按 DOI | PDF；`--scihub` 才兜底 |
 | `zlibrary` | 读 | 公开副本（非 OA 授权） | 书目 + PDF；匿名每日有下载配额 |
 
@@ -172,6 +174,10 @@ Wiley 另有 **TDM token**（`[backends.wiley].tdm_token`，免费申请）：�
 `link.springer.com`（`[backends.springer]`）**没有 Cloudflare**、是另一种形态：文章页匿名就能读，题录与 PDF 链接恒在，金 OA 的 PDF 匿名也能下载，
 只有付费文章的 PDF 需要会话——该端点先 303 到 `idp.springer.com` 换身份 cookie，未订阅的会话最后落回文章页（静默降级，不是 403），
 同样需要**已认证**会话的 cookie + `user_agent` 成对配置（会话绑 UA，过期就重取；OpenAlex 给出的题录仍可正常读出）；
+`cambridge.org`（`[backends.cambridge]`）也与 Cloudflare 无关：条目页匿名可读、题录恒在，CC 许可的 OA PDF 匿名直取；
+付费条目经 `doi.org` 只落到 `/abs/` 短页，其 PDF 端点把匿名客户端 302 回条目页（静默降级），未获授权时 `fetch` 报因并给链接；
+`pubs.aip.org`（`[backends.aip]`）相反，**在 Cloudflare 托管挑战后面**：文章页与 `article-pdf` 端点对无 JS 客户端一律 403 + `cf-mitigated: challenge`，
+因此 AIP 基本必须配 `[backends.aip]` 的 `cookie` + `user_agent`（`cf_clearance` 绑 UA 与出口 IP，过期就重取），未配时报的是这道门而不是 IP 被封；
 `europepmc.org` 的网页在 Cloudflare challenge 后面，所以走 EBI 的 REST；
 DOAB 的 `/rest` 拒绝无 JS 客户端，所以走它的 Atom feed；DOAB 详情页、Sci-Hub、Z-Library 用可解的工作量证明，
 litcli 在本地做题后复用 cookie，不改写、不绕过。知网与豆瓣的滑块交你在可见浏览器手动完成。

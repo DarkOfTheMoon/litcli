@@ -30,10 +30,10 @@ from urllib.parse import urlparse
 from ..errors import BadInput, NotFound, Unavailable
 from ..models import AcademicItem, extract_year, normalize_author_name
 from ..transport import HttpError
-from ._cf_gate import gate_message, is_challenge_page, session_cookie
+from ._cf_gate import gate_message, is_challenge_page
 from ._cf_gate import load_cookie as _load_cookie
 from ._cf_gate import parse_cookie as _parse_cookie
-from .http import HttpBackend
+from ._entitled import EntitledBackend
 
 _SITE = "https://onlinelibrary.wiley.com"
 
@@ -367,7 +367,7 @@ def load_cookie(cookie: str = "", cookie_file: str = "") -> str:
     return _load_cookie(cookie, cookie_file, _COOKIE_HOSTS, "wiley")
 
 
-class WileyBackend(HttpBackend):
+class WileyBackend(EntitledBackend):
     """Resolve a DOI / Wiley article URL to one item and, when entitled, its PDF link.
 
     A session you already entitled in your own browser is carried in as a ``Cookie`` header
@@ -376,7 +376,6 @@ class WileyBackend(HttpBackend):
     PDF goes through the TDM API instead, so no browser session is needed for the bytes.
     """
 
-    access = "entitled"  # a subscription copy through the user's institution, not an OA licence
     UA = _UA
     headers: ClassVar[dict] = {
         "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
@@ -385,44 +384,25 @@ class WileyBackend(HttpBackend):
     #: Wiley's documented pace is 3 articles/s *and* 60 requests / 10 min, so ~10 s apart.
     min_interval = 10.0
     rate = 3
-    #: The article page is session/IP state, so it should not sit in the metadata cache.
-    cacheable = False
+    COOKIE_HOSTS = _COOKIE_HOSTS
+    GATE_NAME = "the Wiley clearance cookie"
+    BLOCK_MSG = _BLOCK_MSG
 
     def __init__(self, name: str = "wiley", timeout: float = 30.0, delay: float = 10.0,
                  cookie: str = "", cookie_file: str = "", user_agent: str = "",
                  tdm_token: str = "", **_unused):
-        # Fail early: a bad cookie_file, or a cookie without its UA, is a config error.
-        self.cookie = session_cookie(cookie, cookie_file, user_agent, _COOKIE_HOSTS, name)
+        super().__init__(name=name, timeout=timeout, delay=delay, cookie=cookie,
+                         cookie_file=cookie_file, user_agent=user_agent)
         #: Optional Wiley TDM token: downloads go through ``api.wiley.com`` and skip Cloudflare.
         self.tdm_token = (tdm_token or "").strip()
-        if user_agent:
-            self.UA = user_agent.strip()
-        if self.cookie:
-            self.headers = {**type(self).headers, "Cookie": self.cookie}
         self._last_doi = self._last_page = ""
-        super().__init__(name=name, timeout=timeout, min_interval=delay)
-
-    @property
-    def capabilities(self) -> set[str]:
-        # Read-only, and deliberately not "attachment": the fulltext chain must treat a Wiley
-        # hit as a remote source, never as a local-store attachment.
-        return {"read"}
 
     def _page(self, doi: str) -> str:
         """Fetch the article page, turning a gate into one clear error (page memoized)."""
         if self._last_page and self._last_doi == doi:
             return self._last_page
         url = f"{_SITE}/doi/{urllib.parse.quote(doi)}"
-        try:
-            # Normal raise-for-status keeps the 5xx family on the retry path.
-            response = self.fetch(url)
-        except HttpError as e:
-            if is_block_page(e.body, e.status):
-                raise RuntimeError(_BLOCK_MSG) from e
-            raise
-        body = response.text
-        if is_block_page(body, response.status_code) or response.headers.get("cf-mitigated"):
-            raise RuntimeError(_BLOCK_MSG)
+        body = self._open(url).text
         self._last_doi, self._last_page = doi, body
         return body
 

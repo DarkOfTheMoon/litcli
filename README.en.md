@@ -172,6 +172,8 @@ without any config. The keyless OA corpora (`doaj`/`europepmc`/`doab`/`zenodo`) 
 | `sciencedirect` | subscription content via your institution's entitlement (not OA) | fulltext PDF for Elsevier DOIs; tried automatically for the `10.1016`-style prefixes |
 | `wiley` | subscription content via your institution's entitlement (not OA) | fulltext PDF for Wiley DOIs; tried automatically for the `10.1002`-style prefixes |
 | `springer` | subscription content via your institution's entitlement (not OA); open-access articles need no config | fulltext PDF for Springer Nature DOIs; tried automatically for the `10.1007`-style prefixes |
+| `cambridge` | subscription content via your institution's entitlement (not OA); CC-licensed open-access articles need no config | fulltext PDF for Cambridge DOIs; tried automatically for the `10.1017` prefix |
+| `aip` | subscription content via your institution's entitlement (not OA); the site sits behind a Cloudflare challenge | fulltext PDF for AIP DOIs; tried automatically for the `10.1063` / `10.1121` prefixes |
 | `scihub` | public copy (non-OA), DOI only | PDF, opt-in via `--scihub` |
 | `zlibrary` | public copy (non-OA) | records + PDF; anonymous daily quota |
 
@@ -197,6 +199,16 @@ all. Only a paywalled PDF needs a session — its endpoint first 303s to `idp.sp
 cookie, and a session that is not entitled simply lands back on the article page (a silent downgrade, not a
 403). That session is again a cookie plus its `user_agent` from an **authenticated** tab (bound to the UA;
 refresh it when it expires).
+`cambridge.org` (`[backends.cambridge]`) likewise has no Cloudflare: item pages read anonymously, the metadata
+is always there and CC-licensed open-access PDFs download with no config. A paywalled item only reaches its
+`/abs/` short page through `doi.org`, and its PDF endpoint 302s an anonymous client back to that page (a silent
+downgrade); `fetch` then reports it and gives the link.
+
+`pubs.aip.org` (`[backends.aip]`) is the opposite: it sits behind a Cloudflare *managed challenge*, so both the
+page and the `article-pdf` endpoint answer a JS-less client with `403` and `cf-mitigated: challenge`. AIP is
+therefore configured near-mandatorily with `[backends.aip]` `cookie` + `user_agent` (the `cf_clearance` cookie is
+bound to both the UA and the egress IP; refresh it when it expires) — an unconfigured run reports that gate, not
+a blocked IP.
 
 ## Configuration
 
