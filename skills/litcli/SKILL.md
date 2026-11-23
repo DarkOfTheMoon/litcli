@@ -33,7 +33,7 @@ description: 用 litcli 与用户的学术资料互操作——检索、读取�
 | 语义相关 | `litcli related <key> [--limit N] [--backend openalex]` OpenAlex `related_works` 邻居;该文无邻居列表时退回标题实词检索(`extra["related_via"]=keyword`);不支持的只读后端 `[skipped]` 退出码 2 | 只读 |
 | 单条全字段 | `litcli data get <key> [--format table\|json\|csl]`（默认 `table`） | 只读 |
 | 导出引文 | `litcli export <key> [--format csljson\|bibtex\|ris\|text]`（arXiv key 如 `arxiv/1806.09180` 在 `--backend openalex\|crossref` 下归一为 DOI；csljson/bibtex 含期刊名/卷/页/出版社） | 只读 |
-| 定位全文 | `litcli fetch <doi\|arXiv id\|ScienceDirect URL/PII\|Wiley URL> [--out DIR] [--no-download] [--scihub]`（旧写法 `fetch fulltext <doi>` 仍认） 本地→OA→（Elsevier DOI 或 SD 文章 URL 试 ScienceDirect、Wiley DOI 试 Wiley，凭机构订阅）默认落盘；加 `--scihub` 才兜底公开副本(会标注) | 只读 |
+| 定位全文 | `litcli fetch <doi\|arXiv id\|ScienceDirect URL/PII\|Wiley URL\|Springer URL> [--out DIR] [--no-download] [--scihub]`（旧写法 `fetch fulltext <doi>` 仍认） 本地→OA→（Elsevier DOI 或 SD 文章 URL 试 ScienceDirect、Wiley DOI 试 Wiley、Springer Nature DOI 试 Springer，凭机构订阅；金 OA 免配置）默认落盘；加 `--scihub` 才兜底公开副本(会标注) | 只读 |
 | **新增(元信息)** | `litcli data add --title "..." --creator "家族, 名字" --year 2002 [--doi ...]` | **写库** |
 | **新增(从 PDF)** | `litcli data add --pdf <file>` 抽启发式候选→展示→**交互确认(y/N)**→写；`--yes` 跳过确认 | **写库** |
 | 修改 | `litcli data set <key> --title "..." [--year ...]` | **写库** |
@@ -70,6 +70,7 @@ description: 用 litcli 与用户的学术资料互操作——检索、读取�
 - **开放获取源只给公开 OA 记录**：DOAJ / DOAB / Europe PMC / Zenodo 均免 key、开放授权；`fetch` 在合法链里用 Europe PMC（JATS XML 文本，存 `.xml`）与 Zenodo（开放文件），Unpaywall 只给落地页时退到链末并标 `HTML`。
 - **被 403 不等于你的 IP 被封**：`europepmc.org` 在 Cloudflare managed challenge/Turnstile 后面（CLI、假浏览器头、无头/有头浏览器实测都过不去，故走 EBI 的 REST）；DOAB 的 `/rest` 对无 JS 客户端 403（故走 Atom feed），但它的详情页是可解的工作量证明，litcli 本地解、换 cookie 后正常取页。这两类站点都无需换网络/代理。
 - **ScienceDirect / Wiley 走你的机构订阅**：`fetch` 对 `10.1016`、`10.1002` 等 Elsevier / Wiley DOI 各自动试一次，拿到的是订阅全文（不是 OA 授权，输出标注 `entitled`）。需要机构会话：校内 IP 直接可用；校外则在**已认证**的浏览器标签里取 Cookie 与其 UA 配进 `[backends.sciencedirect]` / `[backends.wiley]`（`cookie`/`cookie_file` + `user_agent` 必须成对，绑 UA+出口 IP、服务端随时可能失效；未认证页只给 Purchase PDF）。未获授权时给 Cloudflare 挑战页（`CPE00001` 等），链条继续往下走，不阻断；PDF 另有验收关（SD 走 `craft/challenge/pdf`，Wiley 未订阅时 PDF 端点跳摘要页），被拦时 `fetch` 先走完链尾（落地页、`--scihub`）再报因给链接。Wiley 可另配 `tdm_token`（免费申请）：走 `api.wiley.com` 不过 Cloudflare，只放行机构已订阅文章，否则 403，但页面路径仍会照试。
+- **SpringerLink 没有 Cloudflare**：文章页匿名可读、题录恒在，金 OA 的 PDF 匿名直取；只有付费文章的 PDF 要会话（端点先 303 到 `idp.springer.com` 换身份 cookie，未订阅会落回文章页），同样配 `[backends.springer]` 的 `cookie` + `user_agent` 成对使用。
 - **Sci-Hub 是可选兜底、默认不介入**：`fetch` 仍先走本地库/Unpaywall/OpenAlex，只有加 `--scihub`（或配置启用）才试公开副本；输出标 `source=scihub` 且注明非 OA 授权。镜像用 ALTCHA 验人，litcli 用本地 `hashlib` 解同一道题（不绕过），每次单 DOI、低频。
 - **Z-Library 给的是公开副本（非 OA 授权）**：`fetch --book` 用来找 Sci-Hub 没有的图书（Sci-Hub 只按 DOI 解析论文）。无需 Playwright，但用前要过站点“Checking your browser”工作量证明——litcli 用本地 `hashlib` 解同一道题（不绕过）。**匿名每日下载有配额**，超限会明确提示，可在 `[backends.zlibrary]` 配 `email`/`password` 登录放宽。只取公开书目元数据与公开 PDF 直链。
 - **豆瓣只取公开书目元数据、不绕过反爬**：豆瓣无公开 API；`search --backend douban` 也需 `install.sh --with-douban` 装 Playwright + Chromium，但**默认无头**——搜索页 SSR 直接给书卡 JSON，无需登录/滑块。仅当被风控时手动在可见浏览器处理，脚本不程序化绕过。图书以 ISBN 为身份键（无 DOI），`search --all` 聚合时与期刊/论文的 DOI 身份键并行。

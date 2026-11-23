@@ -1,8 +1,8 @@
-"""Helpers shared by Cloudflare-gated publisher readers (ScienceDirect, Wiley).
+"""Helpers shared by the entitled publisher readers (ScienceDirect, Wiley, SpringerLink).
 
-Both sites answer a plain HTTP client with a managed challenge instead of the article, and
-both serve the article only to a session the user entitled in their browser. The pieces are
-therefore the same everywhere:
+These sites serve the article only to a session the user entitled in their browser, and the
+two Cloudflare-walled ones answer a plain HTTP client with a managed challenge instead of the
+article. The pieces are therefore the same everywhere:
 
 * the markers that identify a challenged page (``is_challenge_page``);
 * reading a ``Cookie`` header or a Netscape ``cookies.txt`` export, keeping only the
@@ -70,18 +70,19 @@ def load_cookie(cookie: str = "", cookie_file: str = "", hosts: tuple[str, ...] 
 
 
 def session_cookie(cookie: str, cookie_file: str, user_agent: str, hosts: tuple[str, ...],
-                   name: str) -> str:
+                   name: str, gate: str = "Cloudflare's clearance cookie") -> str:
     """Build the ``Cookie`` header, refusing a cookie that arrives without its user_agent.
 
-    Cloudflare's clearance cookie is bound to the UA (and the egress IP) that earned it, so a
-    cookie alone can only ever be useless — say so at construction instead of a mystery 403.
+    The entitlement cookie is bound to the UA (and the egress IP) that earned it, so a cookie
+    alone can only ever be useless — say so at construction instead of a mystery 403. ``gate``
+    names the cookie in that message (a site without Cloudflare names its own).
     """
     value = load_cookie(cookie, cookie_file, hosts, name)
     if value and not user_agent:
         raise RuntimeError(
-            f"[{name}] a session cookie needs the browser's user_agent as well: Cloudflare's "
-            "clearance cookie is bound to the User-Agent (and the egress IP) that earned it, "
-            "so both must be copied from the same browser")
+            f"[{name}] a session cookie needs the browser's user_agent as well: {gate} is "
+            "bound to the User-Agent (and the egress IP) that earned it, so both must be "
+            "copied from the same browser")
     return value
 
 

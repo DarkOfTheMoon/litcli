@@ -1,7 +1,8 @@
 """``fetch``: save the fulltext behind an id, or a book by title/ISBN. Read-only, nothing is stored.
 
-One command, one target. ``fetch <doi|arxiv-id|sciencedirect-url|isbn>`` walks the legitimate chain (local store →
-Unpaywall/OpenAlex → Europe PMC/Zenodo → ScienceDirect when entitled → landing page) and
+One command, one target. ``fetch <doi|arxiv-id|publisher-url|isbn>`` walks the legitimate chain
+(local store → Unpaywall/OpenAlex → Europe PMC/Zenodo → ScienceDirect / Wiley / Springer when
+entitled → landing page) and
 **saves the file by default**, printing
 exactly one line on stdout: the path. Everything else (what source answered, notes, previews) goes
 to stderr so ``f=$(litcli fetch <id>)`` stays clean. Exit codes: 0 file saved, 1 nothing found,
@@ -20,6 +21,7 @@ from .. import pdf as pdfutil
 from .. import provenance, unpaywall
 from ..backends.base import Backend, NotSupportedError
 from ..backends.sciencedirect import normalize_key as sciencedirect_key
+from ..backends.springer import normalize_key as springer_key
 from ..backends.wiley import normalize_key as wiley_key
 from ..config import get_all_backends, get_backend
 from ..errors import LitcliError, Unavailable
@@ -37,6 +39,15 @@ WILEY_DOI_RE = ("10.1002/", "10.1111/", "10.1113/", "10.1114/", "10.1046/", "10.
 
 #: Targets that are Wiley by shape: a ``wiley:`` key, or a Wiley / doi.org URL.
 _WILEY_LIKE_RE = re.compile(r"^(?:wiley:|https?://(?:[\w-]+\.)*(?:wiley\.com|doi\.org)/)", re.I)
+
+#: DOI prefixes owned by Springer Nature (SpringerLink, BMC/SpringerOpen, EPJ, Nature-branded
+#: content, and the Palgrave/Materials & Structures legacies).
+SPRINGER_DOI_RE = ("10.1007/", "10.1186/", "10.1140/", "10.1038/", "10.1617/", "10.1057/")
+
+#: Targets that are Springer by shape: a ``springer:`` key, or a SpringerLink / Nature URL.
+_SPRINGER_LIKE_RE = re.compile(
+    r"^(?:springer[:\/]|https?://(?:[\w-]+\.)*(?:springer\.com|springernature\.com|nature\.com|"
+    r"biomedcentral\.com|doi\.org)/)", re.I)
 
 #: A target that already is a DOI (an arXiv id has been turned into one by normalization).
 _DOI_LIKE_RE = re.compile(r"^10\.\d{4,9}/")
@@ -153,6 +164,12 @@ def _wiley_hint() -> None:
          " or set a free tdm_token (its PDF route skips Cloudflare)")
 
 
+def _springer_hint() -> None:
+    note("  SpringerLink PDFs need a session: set [backends.springer] cookie"
+         " (or cookie_file) and user_agent from an authenticated browser tab"
+         " (open-access articles download without one)")
+
+
 def _fetch_fulltext(cfg, args, target: str) -> int:
     """Walk the legitimate fulltext chain for ``target`` and save the file (or print the link).
 
@@ -160,12 +177,16 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
     it is a public copy without an open licence, so its hits say so.
     """
     key = normalize_related_key(target)
-    try:
-        key = wiley_key(key)[4:]  # a pasted Wiley URL / wiley:<DOI> form normalizes to the DOI
-    except LitcliError as e:
-        if _WILEY_LIKE_RE.match(target.strip()):  # a Wiley-shaped target must normalize
-            note(f"[error] {e}")
-            return 2
+    # A pasted publisher URL / ``wiley:<DOI>`` / ``springer:<DOI>`` form normalizes to the DOI;
+    # a target shaped like one of those sites must normalize or it would drift down the chain.
+    for _normalize, _like in ((wiley_key, _WILEY_LIKE_RE), (springer_key, _SPRINGER_LIKE_RE)):
+        try:
+            key = _normalize(key)[4:]
+            break
+        except LitcliError as e:
+            if _like.match(target.strip()):
+                note(f"[error] {e}")
+                return 2
     email = _resolve_oa_email(cfg, args)
     backends = get_all_backends(cfg)
     scihub_backend = backends.get("scihub")
@@ -191,6 +212,13 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
             wiley_backend = _optional_backend("wiley", cfg)
         except RuntimeError as e:  # a broken section must not sink the rest of the chain
             wiley_error = str(e)
+    springer_backend = backends.get("springer")
+    springer_error = ""
+    if springer_backend is None and key.lower().startswith(SPRINGER_DOI_RE):
+        try:
+            springer_backend = _optional_backend("springer", cfg)
+        except RuntimeError as e:  # a broken section must not sink the rest of the chain
+            springer_error = str(e)
     info = None
     if pii_key and sciencedirect_backend is not None:
         # The URL/PII is the identifier the user has; its DOI (when the page carries one)
@@ -224,6 +252,7 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
                                              zenodo_backend=corpus["zenodo"],
                                              sciencedirect_backend=sciencedirect_backend,
                                              wiley_backend=wiley_backend,
+                                             springer_backend=springer_backend,
                                              scihub_backend=scihub_backend)
     if not info.get("has_fulltext"):
         note(f"DOI {key}  no such work in the local store or open OA sources")
@@ -231,12 +260,16 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
             note(f"  [skipped] {sd_error}")
         if wiley_error:
             note(f"  [skipped] {wiley_error}")
+        if springer_error:
+            note(f"  [skipped] {springer_error}")
         for reason in info.get("errors") or []:
             note(f"  [skipped] {reason}")
         if sciencedirect_backend is not None and (pii_key or key.lower().startswith(ELSEVIER_DOI_RE)):
             _sciencedirect_hint()
         if wiley_backend is not None and key.lower().startswith(WILEY_DOI_RE):
             _wiley_hint()
+        if springer_backend is not None and key.lower().startswith(SPRINGER_DOI_RE):
+            _springer_hint()
         if not scihub_backend:
             note("  add --scihub to also try Sci-Hub, or use institutional access / interlibrary loan")
         else:
@@ -279,7 +312,8 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
         return 0
 
     raw = None
-    publisher = {"sciencedirect": sciencedirect_backend, "wiley": wiley_backend}.get(kind)
+    publisher = {"sciencedirect": sciencedirect_backend, "wiley": wiley_backend,
+                 "springer": springer_backend}.get(kind)
     if publisher is not None:
         # The PDF needs the same entitled session as the page (and may sit behind a second
         # gate), so downloading it through a plain client would only collect a challenge page.

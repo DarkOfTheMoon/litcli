@@ -125,7 +125,7 @@ class CorpusResolverTest(unittest.TestCase):
         order = [self._target(r) for r in ft._default_resolvers("a@b.c")]
         self.assertEqual(order, ["_from_local", "_from_unpaywall", "_from_openalex",
                                  "_from_europepmc", "_from_zenodo", "_from_sciencedirect", "_from_wiley",
-                                 "_from_unpaywall_landing", "_from_scihub"])
+                                 "_from_springer", "_from_unpaywall_landing", "_from_scihub"])
 
     def test_sciencedirect_candidate_is_entitled(self):
         cand = ft._from_sciencedirect("10.1/x", self.FakeBackend(["https://sd/x.pdf"]))
@@ -161,6 +161,50 @@ class CorpusResolverTest(unittest.TestCase):
 
         cand = ft._from_wiley("10.1002/x", TdmOnly())
         self.assertEqual(cand["url"], "https://onlinelibrary.wiley.com/doi/10.1002/x")
+
+    def test_springer_candidate_is_entitled(self):
+        cand = ft._from_springer("10.1007/x", self.FakeBackend(["https://s/x.pdf"]))
+        self.assertEqual(cand["kind"], "springer")
+        self.assertEqual(cand["access"], "entitled")
+        self.assertNotIn("format", cand)
+
+    def test_an_open_access_springer_hit_is_labelled_oa(self):
+        class Oa:
+            def get(self, key):
+                return type("I", (), {"title": "T", "url": "https://s/x",
+                                      "attachments": ["https://s/x.pdf"],
+                                      "extra": {"open_access": True}})()
+
+        cand = ft._from_springer("10.1007/x", Oa())
+        self.assertEqual(cand["access"], "oa")
+        self.assertEqual(cand["status"], "open access")
+
+    def test_a_sessionless_springer_hit_says_so_in_its_status(self):
+        # The PDF link is on the page even anonymously: the hit must not read as if an
+        # entitled session had been tried.
+        class Anonymous:
+            has_session = False
+
+            def get(self, key):
+                return type("I", (), {"title": "T", "url": "https://s/x",
+                                      "attachments": ["https://s/x.pdf"], "extra": {}})()
+
+        cand = ft._from_springer("10.1007/x", Anonymous())
+        self.assertEqual(cand["access"], "entitled")
+        self.assertIn("needs a configured session", cand["status"])
+
+    def test_springer_without_a_pdf_falls_through(self):
+        self.assertIsNone(ft._from_springer("10.1007/x", self.FakeBackend([])))
+        self.assertIsNone(ft._from_springer("10.1007/x", self.Missing()))
+        self.assertIsNone(ft._from_springer("10.1007/x", None))
+
+    def test_springer_hit_is_used_over_the_landing_page(self):
+        with mock.patch.object(ft.unpaywall, "resolve_oa",
+                               return_value={"best_pdf": "", "best_landing": "https://legal/page"}):
+            out = ft.resolve_fulltext("10.1007/x",
+                                      springer_backend=self.FakeBackend(["https://s/x.pdf"]))
+        self.assertEqual(out["kind"], "springer")
+        self.assertEqual(out["url"], "https://s/x.pdf")
 
     def test_tail_only_skips_everything_already_answered(self):
         self.assertEqual([self._target(r) for r in ft._default_resolvers("a@b.c", tail_only=True)],

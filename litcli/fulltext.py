@@ -5,7 +5,7 @@ Priorities (per user requirements):
      locate an item by DOI and take its attachment — local store wins, no network.
   2. **Public OA sources**: Unpaywall (best_oa_location.pdf) → OpenAlex (best_oa_location.pdf_url),
      then the legal corpus endpoints: Europe PMC (open-access JATS XML) → Zenodo (open files),
-     then the publisher readers **ScienceDirect / Wiley** (entitled subscription copies
+     then the publisher readers **ScienceDirect / Wiley / Springer** (entitled subscription copies
      through the user's institution), and finally Unpaywall's landing page (HTML, no bytes) so
      a legal page is still reported
      when no file exists.
@@ -17,7 +17,7 @@ Priorities (per user requirements):
 
 Decoupled from backends: ``resolve_fulltext`` accepts an injectable resolver list for offline
 stubbing; the default resolvers are local/unpaywall/openalex (+ the corpus endpoints) +
-sciencedirect/wiley + landing page + scihub when injected.
+sciencedirect/wiley/springer + landing page + scihub when injected.
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ import re
 
 from lxml import etree as ET
 
-from . import unpaywall
+from . import provenance, unpaywall
 from .aggregate import norm_doi
 from .debug import notice
 from .errors import LitcliError
@@ -202,6 +202,33 @@ def _from_wiley(doi: str, backend) -> dict | None:
             "status": "institutional access (not open access)", "access": "entitled"}
 
 
+def _from_springer(doi: str, backend) -> dict | None:
+    """A Springer Nature PDF through the user's institution, or an open-access one.
+
+    Unlike the two Cloudflare-walled readers above, a SpringerLink page answers anonymously and
+    always names its ``citation_pdf_url``, so the item usually arrives with an attachment even
+    without a session; the chain then lets ``fetch`` find out whether the bytes come.
+    """
+    if backend is None:
+        return None
+    try:
+        item: AcademicItem = backend.get(doi)
+    except (LitcliError, OSError, KeyError):
+        return None
+    if not item.attachments:
+        return None
+    if getattr(item, "extra", {}).get("open_access"):
+        return {"kind": "springer", "url": item.attachments[0], "title": item.title,
+                "status": "open access", "access": provenance.OA}
+    # The PDF link is on the page even anonymously, so a hit does not prove a session: say so
+    # when none is configured, or the run would look as if it had tried an entitled session.
+    status = "institutional access (not open access)"
+    if not getattr(backend, "has_session", True):
+        status += " — needs a configured session (none set)"
+    return {"kind": "springer", "url": item.attachments[0], "title": item.title,
+            "status": status, "access": provenance.ENTITLED}
+
+
 def _from_scihub(doi: str, backend) -> dict | None:
     """Sci-Hub fallback via an injected backend (last in the chain; opt-in)."""
     if backend is None:
@@ -220,7 +247,7 @@ def _default_resolvers(email: str, backends: dict | None = None,
                        openalex_backend=None, scihub_backend=None,
                        europepmc_backend=None, zenodo_backend=None,
                        sciencedirect_backend=None, wiley_backend=None,
-                       tail_only: bool = False) -> list[Resolver]:
+                       springer_backend=None, tail_only: bool = False) -> list[Resolver]:
     cache: dict[str, dict | None] = {}
 
     def _oa(doi: str):
@@ -250,6 +277,7 @@ def _default_resolvers(email: str, backends: dict | None = None,
         # An entitled subscription PDF outranks a landing page (bytes beat a page).
         lambda d: _from_sciencedirect(d, sciencedirect_backend),
         lambda d: _from_wiley(d, wiley_backend),
+        lambda d: _from_springer(d, springer_backend),
         *tail,
     ]
 
@@ -296,6 +324,7 @@ def resolve_fulltext(doi: str, email: str = unpaywall.DEFAULT_EMAIL,
                      zenodo_backend=None,
                      sciencedirect_backend=None,
                      wiley_backend=None,
+                     springer_backend=None,
                      resolvers: list[Resolver] | None = None,
                      tail_only: bool = False) -> dict:
     """Find fulltext by DOI, priority: local store → OA sources → Sci-Hub (when injected).
@@ -309,7 +338,7 @@ def resolve_fulltext(doi: str, email: str = unpaywall.DEFAULT_EMAIL,
         resolvers = _default_resolvers(email, backends, openalex_backend, scihub_backend,
                                        europepmc_backend, zenodo_backend,
                                        sciencedirect_backend, wiley_backend,
-                                       tail_only=tail_only)
+                                       springer_backend, tail_only=tail_only)
     errors: list[str] = []
     for r in resolvers:
         try:

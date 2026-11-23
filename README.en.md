@@ -135,7 +135,7 @@ How each backend maps a filter (a backend without the field folds it into free t
 | `litcli search "X" [--all] [--backend B] [--type T] [--limit N] [--format table\|json\|csl]` | candidate search; field filters and sorting below |
 | `litcli refs <key>` / `citing <key>` / `related <key>` (all take `--limit N`, `--sort cited`) | cited works / citing works / semantic neighbours (OpenAlex graph; with no neighbour list it falls back to a title-term search and says so) |
 | `litcli export <key>... [--format csljson\|bibtex\|ris\|text] [--no-cite]` | citations; `csljson` feeds `pandoc --citeproc`. arXiv keys normalise to a DOI only with `--backend openalex\|crossref` |
-| `litcli fetch <doi\|arXiv id\|ScienceDirect URL/PII\|Wiley URL> [--out DIR] [--no-download] [--scihub]` (the old `fetch fulltext <doi>` and the `--download` flag are still accepted) | save the fulltext: local store → Unpaywall → OpenAlex → Europe PMC → Zenodo → ScienceDirect (Elsevier DOIs / article URLs) → Wiley → landing page |
+| `litcli fetch <doi\|arXiv id\|ScienceDirect URL/PII\|Wiley URL\|Springer URL> [--out DIR] [--no-download] [--scihub]` (the old `fetch fulltext <doi>` and the `--download` flag are still accepted) | save the fulltext: local store → Unpaywall → OpenAlex → Europe PMC → Zenodo → ScienceDirect (Elsevier DOIs / article URLs) → Wiley → Springer (Springer Nature DOIs; open access downloads without config) → landing page |
 | `litcli fetch --book "title\|ISBN" [--backend zlibrary\|doab\|openlibrary] [--pick N]` | book candidates → pick → full metadata → save the file (an ISBN takes this path automatically) |
 | `litcli backends authorize zotero` | one-off write authorization (local dialog) |
 | `litcli data add --title "..." --creator "Family, Given" [--year ..] [--doi ..] [--force]` / `data add --pdf|--csl <file>` | ingest metadata (dedupe gate, `--force` skips), heuristics from page 1 (y/N), or CSL JSON |
@@ -171,6 +171,7 @@ without any config. The keyless OA corpora (`doaj`/`europepmc`/`doab`/`zenodo`) 
 | `douban` | Douban web | public bibliographic data; headless |
 | `sciencedirect` | subscription content via your institution's entitlement (not OA) | fulltext PDF for Elsevier DOIs; tried automatically for the `10.1016`-style prefixes |
 | `wiley` | subscription content via your institution's entitlement (not OA) | fulltext PDF for Wiley DOIs; tried automatically for the `10.1002`-style prefixes |
+| `springer` | subscription content via your institution's entitlement (not OA); open-access articles need no config | fulltext PDF for Springer Nature DOIs; tried automatically for the `10.1007`-style prefixes |
 | `scihub` | public copy (non-OA), DOI only | PDF, opt-in via `--scihub` |
 | `zlibrary` | public copy (non-OA) | records + PDF; anonymous daily quota |
 
@@ -190,6 +191,12 @@ and `/pii/` is silently rewritten to `/abs/`. Wiley is the same mechanism and th
 PDF URL is silently redirected to the abstract page). Wiley also offers a free **TDM token**
 (`[backends.wiley].tdm_token`): that route uses `api.wiley.com`, bypasses Cloudflare entirely and only serves
 what your institution subscribes to.
+`link.springer.com` (`[backends.springer]`) has **no Cloudflare** and a different shape: the article page reads
+anonymously, the metadata and the PDF link are always there, and open-access PDFs download with no config at
+all. Only a paywalled PDF needs a session — its endpoint first 303s to `idp.springer.com` for an identity
+cookie, and a session that is not entitled simply lands back on the article page (a silent downgrade, not a
+403). That session is again a cookie plus its `user_agent` from an **authenticated** tab (bound to the UA;
+refresh it when it expires).
 
 ## Configuration
 
@@ -218,7 +225,8 @@ base = "http://localhost:23119/api"     # the write key is written by `litcli ba
   not guarantee the bytes. `fetch` downloads through the backend's session and, when gated, says so and prints
   the PDF link to open in your entitled browser. Wiley's PDF endpoint answers an HTML abstract page (a silent
   redirect) instead of 403 for unentitled sessions, and `fetch` reports "not entitled / session expired" with
-  the link. A failed download on either site first finishes the chain's tail (legal landing page, `--scihub`).
+  the link. SpringerLink does the same: an unentitled session is sent back to the article page. A failed
+  download on any of the three first finishes the chain's tail (legal landing page, `--scihub`).
 - The binary installer ships no Chromium: CNKI/Douban need `litcli backends install-browser` first.
 - `api_key` and Z-Library credentials are stored in plain text; `backends authorize` chmods the config, hand-edited
   credentials are not covered. On Windows chmod only clears the read-only attribute — the `%APPDATA%`

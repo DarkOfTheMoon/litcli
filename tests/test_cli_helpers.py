@@ -469,7 +469,7 @@ class FetchFulltextTest(unittest.TestCase):
         self.assertIsNotNone(self._probe_kwarg("10.1016/j.cma.2004.11.019"))
 
     def test_another_publisher_does_not_pay_a_sciencedirect_probe(self):
-        self.assertIsNone(self._probe_kwarg("10.1038/s41598-024-80509-9"))
+        self.assertIsNone(self._probe_kwarg("10.1103/PhysRevLett.126.151601"))
 
     def _wiley_probe(self, target):
         from unittest import mock
@@ -487,7 +487,7 @@ class FetchFulltextTest(unittest.TestCase):
         self.assertIsNotNone(self._wiley_probe("10.1002/nme.1628"))
 
     def test_another_publisher_does_not_pay_a_wiley_probe(self):
-        self.assertIsNone(self._wiley_probe("10.1038/s41598-024-80509-9"))
+        self.assertIsNone(self._wiley_probe("10.1103/PhysRevLett.126.151601"))
 
     def test_a_wiley_url_normalizes_to_its_doi(self):
         from unittest import mock
@@ -501,6 +501,53 @@ class FetchFulltextTest(unittest.TestCase):
 
     def test_a_jphysiol_doi_probes_wiley_too(self):
         self.assertIsNotNone(self._wiley_probe("10.1113/JP280000"))
+
+    def _springer_probe(self, target):
+        from unittest import mock
+
+        import litcli.cli as cli
+
+        sentinel = object()
+        with mock.patch("litcli.commands.fetch._optional_backend", return_value=sentinel), \
+             mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext",
+                        return_value={"has_fulltext": False}) as resolve:
+            cli.main(["fetch", target])
+        return resolve.call_args.kwargs["springer_backend"]
+
+    def test_a_springer_doi_probes_springer_even_unconfigured(self):
+        self.assertIsNotNone(self._springer_probe("10.1007/s11831-021-09587-6"))
+
+    def test_a_nature_doi_probes_springer_too(self):
+        self.assertIsNotNone(self._springer_probe("10.1038/s41598-024-80509-9"))
+
+    def test_a_wiley_doi_does_not_pay_a_springer_probe(self):
+        self.assertIsNone(self._springer_probe("10.1002/nme.1628"))
+
+    def test_a_springer_url_normalizes_to_its_doi(self):
+        from unittest import mock
+
+        import litcli.cli as cli
+
+        with mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext",
+                        return_value={"has_fulltext": False}) as resolve:
+            cli.main(["fetch", "https://link.springer.com/article/10.1007/s11831-021-09587-6"])
+        self.assertEqual(resolve.call_args.args[0], "10.1007/s11831-021-09587-6")
+
+    def test_a_nature_url_normalizes_to_its_doi_instead_of_exiting_2(self):
+        # nature.com is named by the Springer matcher, so its URLs must enter the chain too.
+        from unittest import mock
+
+        import litcli.cli as cli
+
+        with mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext",
+                        return_value={"has_fulltext": False}) as resolve:
+            cli.main(["fetch", "https://www.nature.com/articles/s41598-024-80509-9"])
+        self.assertEqual(resolve.call_args.args[0], "10.1038/s41598-024-80509-9")
+
+    def test_a_malformed_springer_key_exits_2_instead_of_drifting_down_the_chain(self):
+        rc, _out, err, _files = self._run(["fetch", "springer:"], {"has_fulltext": False})
+        self.assertEqual(rc, 2)
+        self.assertIn("[error] [springer] not a DOI", err)
 
     def test_a_malformed_wiley_key_exits_2_instead_of_drifting_down_the_chain(self):
         rc, _out, err, _files = self._run(["fetch", "wiley:"], {"has_fulltext": False})
@@ -532,6 +579,31 @@ class FetchFulltextTest(unittest.TestCase):
         self.assertTrue(resolve.call_args.kwargs.get("tail_only"))
         self.assertIn("public copy", self.err.getvalue())
         self.assertEqual(os.listdir(self.dir), ["10.1002_x.pdf"])
+
+    def test_a_failed_springer_download_falls_through_to_the_tail(self):
+        # A Springer page always names a citation_pdf_url; without entitlement it lands back on
+        # the page, and the landing page / Sci-Hub still deserve their turn.
+        from unittest import mock
+
+        import litcli.cli as cli
+
+        class Pub:
+            def get_attachment(self, key):
+                raise RuntimeError("[springer] no PDF bytes")
+
+        head = {"has_fulltext": True, "kind": "springer", "url": "https://s/article",
+                "access": "entitled"}
+        tail = {"has_fulltext": True, "kind": "scihub", "url": "https://sci/x.pdf",
+                "access": "public"}
+        with mock.patch("litcli.commands.fetch.get_all_backends",
+                        return_value={"springer": Pub()}), \
+             mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext",
+                        side_effect=[head, tail]) as resolve, \
+             mock.patch("litcli.commands.fetch.pdfutil.download", return_value=b"%PDF-1.4 sci"):
+            rc = cli.main(["fetch", "10.1007/x", "--lines", "0"])
+        self.assertEqual(rc, 0)
+        self.assertTrue(resolve.call_args.kwargs.get("tail_only"))
+        self.assertIn("public copy", self.err.getvalue())
 
     def test_an_empty_tail_after_a_failed_publisher_download_gives_the_link(self):
         from unittest import mock

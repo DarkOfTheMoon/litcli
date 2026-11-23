@@ -9,7 +9,7 @@ Values are deliberately about the copy, not about a site:
 
 ``oa``       openly licensed (arXiv, DOAB, Europe PMC, Zenodo, DOAJ, OpenAlex)
 ``entitled`` a subscription copy reached through the user's own institutional access
-             (ScienceDirect): legitimate, but not open access
+             (ScienceDirect, Wiley, SpringerLink): legitimate, but not open access
 ``public``   a copy published on a public site without an open licence (Sci-Hub, Z-Library)
 ``local``    the user's own library
 ``""``       records or metadata only — no copy
@@ -37,9 +37,14 @@ def tag(access: str) -> str:
 
 
 def stamp(items, backend) -> list:
-    """Mark freshly returned items with the backend's access; returns the list unchanged."""
+    """Mark freshly returned items with the backend's access; returns the list unchanged.
+
+    An item that already carries an access keeps it: a backend can answer per item (a
+    SpringerLink open-access article is OA, not the subscription copy its backend declares).
+    """
     access = getattr(backend, "access", "")
     if access:
         for item in items:
-            item.access = access
+            if not getattr(item, "access", ""):
+                item.access = access
     return items

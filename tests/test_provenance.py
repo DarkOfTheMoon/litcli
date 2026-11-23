@@ -42,6 +42,14 @@ class StampTest(unittest.TestCase):
         provenance.stamp([item], self.Metadata())
         self.assertEqual(item.access, "")
 
+    def test_an_access_the_item_already_carries_is_kept(self):
+        # A backend can answer per item: a SpringerLink open-access article is OA even though
+        # the backend as a whole is an entitled one.
+        oa = AcademicItem(source="springer", key="doi:10.1038/x", access=provenance.OA)
+        plain = AcademicItem(source="springer", key="doi:10.1007/y")
+        provenance.stamp([oa, plain], self.Backend())
+        self.assertEqual((oa.access, plain.access), ("oa", "oa"))
+
 
 class RegistryTest(unittest.TestCase):
     """The declaration lives on the backend, so a renamed or wrapped backend keeps it."""
