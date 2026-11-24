@@ -118,6 +118,29 @@ class BrowserCacheTest(unittest.TestCase):
             paths.apply_browser_cache()
             self.assertEqual(os.environ["PLAYWRIGHT_BROWSERS_PATH"], "/elsewhere")
 
+
+class ProjectRootTest(unittest.TestCase):
+    """Survey projects and the shared browser profile both live under the data dir."""
+
+    def test_posix_honours_xdg_data_home(self):
+        env = {"XDG_DATA_HOME": "/tmp/data"}
+        with mock.patch.object(paths, "_IS_WINDOWS", False), mock.patch.dict(os.environ, env):
+            self.assertEqual(paths.project_root(), paths.Path("/tmp/data/litcli/projects"))
+
+    def test_windows_uses_localappdata(self):
+        env = {"LOCALAPPDATA": r"C:\Users\me\AppData\Local"}
+        with mock.patch.object(paths, "_IS_WINDOWS", True), mock.patch.dict(os.environ, env):
+            self.assertEqual(paths.project_root(),
+                             paths.Path(env["LOCALAPPDATA"]) / "litcli" / "projects")
+
+    def test_session_file_sits_beside_the_profile(self):
+        env = {"XDG_DATA_HOME": "/tmp/data"}
+        with mock.patch.object(paths, "_IS_WINDOWS", False), mock.patch.dict(os.environ, env):
+            self.assertEqual(paths.browser_session_file(),
+                             paths.Path("/tmp/data/litcli/browser-session.json"))
+            self.assertNotEqual(paths.browser_session_file().parent,
+                                paths.browser_profile_dir())
+
     def test_apply_sets_the_cache_when_unset(self):
         env = {k: v for k, v in os.environ.items() if k != "PLAYWRIGHT_BROWSERS_PATH"}
         with mock.patch.dict(os.environ, env, clear=True):

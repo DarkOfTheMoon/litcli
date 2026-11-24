@@ -106,6 +106,38 @@ def cache_dir() -> Path:
     return Path(base) / APP_DIR / "cache"
 
 
+def _data_dir() -> Path:
+    """Per-user data directory (``%LOCALAPPDATA%`` / ``$XDG_DATA_HOME``, default ``~/.local/share``)."""
+    if _IS_WINDOWS:
+        base = os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local")
+    else:
+        base = os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share")
+    return Path(base) / APP_DIR
+
+
+def project_root() -> Path:
+    """Where survey projects live, one directory per project.
+
+    Unlike the cache these are the user's own work, so they sit under the data dir and
+    survive a cache clear.
+    """
+    return _data_dir() / "projects"
+
+
+def browser_profile_dir() -> Path:
+    """The one Chrome profile every entitled publisher shares.
+
+    Sharing it is the point: a single institutional sign-in covers all the sites, and the
+    clearance cookies are renewed by the browser itself instead of being copied by hand.
+    """
+    return _data_dir() / "browser-profile"
+
+
+def browser_session_file() -> Path:
+    """Discovery file of a running browser session (endpoint + pid); absent when none runs."""
+    return _data_dir() / "browser-session.json"
+
+
 def apply_browser_cache() -> Path:
     """Make Playwright resolve browsers from :func:`browser_cache_dir` and return it.
 
