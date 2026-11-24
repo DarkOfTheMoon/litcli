@@ -115,9 +115,14 @@ publish_release() {
   # (Gitee rejects a second Release for the same tag). An asset of the same name is replaced
   # rather than uploaded twice (a retry must not end up as `name (1).whl`).
   if curl -sS -f --connect-timeout 10 --max-time 60 --config "$auth" "$GITEE_API/repos/$GITEE_PROJECT/releases/tags/v$ver" -o "$resp" 2>/dev/null; then
-    id="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('id',''))" "$resp")"
-    attached="$(python3 -c "import json,sys; print('\n'.join(f\"{a['id']}\t{a['name']}\" for a in (json.load(open(sys.argv[1])).get('assets') or [])))" "$resp")"
-    echo "  - Release v$ver already exists (id $id), attaching to it"
+    # A tag without a Release answers `200` with a bare `null` (not a 404), so the body decides.
+    id="$(python3 -c "import json,sys; print((json.load(open(sys.argv[1])) or {}).get('id',''))" "$resp")"
+    attached="$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])) or {}; print('\n'.join(f\"{a['id']}\t{a['name']}\" for a in (d.get('assets') or [])))" "$resp")"
+    if [ -n "$id" ]; then
+      echo "  - Release v$ver already exists (id $id), attaching to it"
+    else
+      echo "  - no Release for v$ver yet (Gitee answers a missing one with an empty 200)"
+    fi
   fi
   if [ -z "$id" ]; then
     NOTES="$notes" python3 - "$payload" "$ver" <<'PAYLOAD'
