@@ -105,21 +105,26 @@ publish_release() {
   fi
 
   local payload resp id f failed=0 attached="" auth
-  payload="$(mktemp)"; resp="$(mktemp)"; auth="$(mktemp)"
+  payload="$(mktemp)"; resp="$(mktemp)"; auth="$(mktemp)"; listing="$(mktemp)"
   # The token goes into a curl config file (mode 600) rather than a -H argument, so it is not
   # readable from `ps` for the lifetime of every upload.
   chmod 600 "$auth"
   printf 'header = "Authorization: token %s"\n' "$GITEE_TOKEN" > "$auth"
-  trap 'rm -f "$payload" "$resp" "$auth"' RETURN
+  trap 'rm -f "$payload" "$resp" "$auth" "$listing"' RETURN
   # A retry after a half-failed upload must attach to the existing Release, not POST a duplicate
   # (Gitee rejects a second Release for the same tag). An asset of the same name is replaced
   # rather than uploaded twice (a retry must not end up as `name (1).whl`).
   if curl -sS -f --connect-timeout 10 --max-time 60 --config "$auth" "$GITEE_API/repos/$GITEE_PROJECT/releases/tags/v$ver" -o "$resp" 2>/dev/null; then
     # A tag without a Release answers `200` with a bare `null` (not a 404), so the body decides.
     id="$(python3 -c "import json,sys; print((json.load(open(sys.argv[1])) or {}).get('id',''))" "$resp")"
-    attached="$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])) or {}; print('\n'.join(f\"{a['id']}\t{a['name']}\" for a in (d.get('assets') or [])))" "$resp")"
     if [ -n "$id" ]; then
       echo "  - Release v$ver already exists (id $id), attaching to it"
+      # The release object's own ``assets`` carry no ids; the attach listing does. Without the
+      # ids a same-named asset could only be added a second time, not replaced.
+      if curl -sS -f --connect-timeout 10 --max-time 60 --config "$auth" \
+          "$GITEE_API/repos/$GITEE_PROJECT/releases/$id/attach_files" -o "$listing" 2>/dev/null; then
+        attached="$(python3 -c "import json,sys; print('\n'.join(f\"{a['id']}\t{a['name']}\" for a in (json.load(open(sys.argv[1])) or [])))" "$listing")"
+      fi
     else
       echo "  - no Release for v$ver yet (Gitee answers a missing one with an empty 200)"
     fi
@@ -148,7 +153,7 @@ PAYLOAD
     old_id="$(awk -F'\t' -v n="$(basename "$f")" '$2 == n { print $1 }' <<<"$attached")"
     if [ -n "$old_id" ]; then
       curl -sS -f --connect-timeout 10 --max-time 60 -X DELETE \
-        "$GITEE_API/repos/$GITEE_PROJECT/releases/$id/assets/$old_id" --config "$auth" >/dev/null \
+        "$GITEE_API/repos/$GITEE_PROJECT/releases/$id/attach_files/$old_id" --config "$auth" >/dev/null \
         || { echo "  ✗ could not replace $(basename "$f")" >&2; failed=1; continue; }
     fi
     if curl -sS -f --connect-timeout 10 --max-time 1800 -X POST "$GITEE_API/repos/$GITEE_PROJECT/releases/$id/attach_files" \
