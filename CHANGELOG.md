@@ -64,6 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Windows 上 `tests/test_cache.py` 的剪枝用例偶发红：它在同一循环里连写五条，Windows 的时钟粒度（15.6 ms）
+  让它们的 `mtime` 全相同，"最旧的先删"退化成目录列举顺序。改为逐条打上递增的 `mtime`。
 - IEEE Xplore 换了闸：除了 AWS WAF，又多一层 F5 拦截页（`200` + `<APM_DO_NOT_TOUCH>` + `/TSPD/…`
   脚本，正文只有导航与标题、没有 `citation_*`）。此前它当普通页面解析，于是报「未订阅」；现在按 WAF 闸
   认下，报的是「该站要 JS、请用带会话的浏览器」。闸提示与构造期报错同时把 `TS*` cookie 与 `aws-waf-token` 并列。

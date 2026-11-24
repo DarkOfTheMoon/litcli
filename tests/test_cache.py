@@ -2,6 +2,7 @@
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -60,6 +61,11 @@ class PruneTest(_TmpCache):
         stamp = old.stat().st_atime - seconds
         os.utime(old, (stamp, stamp))
 
+    def _stamp(self, key, minutes_ago):
+        old = cache._path(key)
+        stamp = time.time() - minutes_ago * 60
+        os.utime(old, (stamp, stamp))
+
     def test_expired_entries_go_before_fresh_ones(self):
         for i in range(2):
             cache.put(f"stale{i}", "x")
@@ -67,6 +73,10 @@ class PruneTest(_TmpCache):
         with mock.patch.object(cache, "MAX_ENTRIES", 3):
             for i in range(5):
                 cache.put(f"fresh{i}", "x")
+                # The write clock is coarser than this loop (15.6 ms ticks on Windows), so the
+                # fresh entries otherwise share one mtime and "oldest" falls back to the
+                # directory listing order. Stamp their own order instead.
+                self._stamp(f"fresh{i}", 10 - i)
         left = {p.name for p in Path(self._dir).rglob("*") if p.is_file()}
         self.assertEqual(left, {cache._path(f"fresh{i}").name for i in (2, 3, 4)})
 
