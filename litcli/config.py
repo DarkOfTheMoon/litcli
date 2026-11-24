@@ -10,6 +10,7 @@ import copy
 import os
 import tomllib
 from functools import cache
+from importlib import import_module
 from pathlib import Path
 
 from .backends.base import Backend
@@ -65,112 +66,51 @@ def load_config(path: str | Path | None = None) -> dict:
 _IMPORT_ERRORS: dict[str, str] = {}
 
 
+def _try_import(reg: dict[str, type[Backend]], name: str, module: str, attr: str) -> None:
+    """Register ``attr`` of ``backends.<module>`` as ``name``, or record why it cannot be imported.
+
+    Every optional backend is tried by itself: one that is not ready (a missing dependency, a
+    syntax error, a bad constant) must cost only its own backend, not the whole registry. The
+    reason is kept in :data:`_IMPORT_ERRORS` — the swallow would otherwise surface as "unknown
+    backend type", a name the config plainly has.
+    """
+    try:
+        mod = import_module(f".backends.{module}", __package__)
+        reg[name] = getattr(mod, attr)
+    except Exception as e:
+        _IMPORT_ERRORS[name] = f"{type(e).__name__}: {e}"
+
+
+#: The optional modules, by registered name and class (``name == module`` for all of them).
+_OPTIONAL_BACKENDS = (
+    ("arxiv", "ArxivBackend"), ("crossref", "CrossrefBackend"), ("openalex", "OpenAlexBackend"),
+    ("openlibrary", "OpenLibraryBackend"), ("uspto", "UsptoBackend"), ("cnki", "CnkiBackend"),
+    ("douban", "DoubanBackend"), ("scihub", "ScihubBackend"), ("zlibrary", "ZlibraryBackend"),
+    ("doaj", "DoajBackend"), ("europepmc", "EuropePmcBackend"), ("doab", "DoabBackend"),
+    ("zenodo", "ZenodoBackend"),
+)
+
+
 @cache
 def _registry() -> dict[str, type[Backend]]:
-    """Backend type registry (type string -> class). Cached per-process: the try-import
-    blocks are static, while every backend instantiation and the ``get_backend`` fallback
-    path consult the registry, so caching avoids redoing the imports each time.
+    """Backend type registry (type string -> class). Cached per-process: the try-imports are
+    static, while every backend instantiation and the ``get_backend`` fallback path consult the
+    registry, so caching avoids redoing the imports each time.
     """
     from .backends import zotero_local
 
-    # Every optional module is tried by itself: one that is not ready (missing dependency, a
-    # syntax error, a bad constant) must cost only its own backend, not the whole registry.
     reg: dict[str, type[Backend]] = {"zotero_local": zotero_local.ZoteroLocalBackend}
-    try:
-        from .backends import arxiv
-
-        reg["arxiv"] = arxiv.ArxivBackend
-    except Exception:
-        pass  # When arXiv isn't ready, it doesn't affect the Zotero definition
-    try:
-        from .backends import crossref
-
-        reg["crossref"] = crossref.CrossrefBackend
-    except Exception:
-        pass
-    try:
-        from .backends import openalex
-
-        reg["openalex"] = openalex.OpenAlexBackend
-    except Exception:
-        pass
-    try:
-        from .backends import openlibrary
-
-        reg["openlibrary"] = openlibrary.OpenLibraryBackend
-    except Exception:
-        pass
-    try:
-        from .backends import uspto
-
-        reg["uspto"] = uspto.UsptoBackend
-    except Exception:
-        pass
-    try:
-        from .backends import cnki
-
-        reg["cnki"] = cnki.CnkiBackend
-    except Exception:
-        pass
-    try:
-        from .backends import douban
-
-        reg["douban"] = douban.DoubanBackend
-    except Exception:
-        pass
-    try:
-        from .backends import scihub
-
-        reg["scihub"] = scihub.ScihubBackend
-    except Exception:
-        pass
+    for name, attr in _OPTIONAL_BACKENDS:
+        _try_import(reg, name, name, attr)
     # Every entitled/guarded publisher: its name, module and class come from the one table, so
     # a registered reader cannot be missing from the chain (and vice versa).
-    from importlib import import_module
-
-    try:  # the table imports every publisher module: one missing must not sink the registry
+    try:
         from .backends.publishers import _PUBLISHER_SPECS
-    except Exception:
+    except Exception as e:
+        _IMPORT_ERRORS["publishers"] = f"{type(e).__name__}: {e}"
         _PUBLISHER_SPECS = ()
-
-    # "Not ready" is anything the import raises — a missing module (``ImportError``), but also
-    # a syntax error, a bad constant or a renamed class, none of which is an ``ImportError``.
     for spec in _PUBLISHER_SPECS:
-        try:
-            module = import_module(f".backends.{spec.name}", __package__)
-            reg[spec.name] = getattr(module, spec.backend)
-        except Exception as e:
-            _IMPORT_ERRORS[spec.name] = f"{type(e).__name__}: {e}"
-    try:
-        from .backends import zlibrary
-
-        reg["zlibrary"] = zlibrary.ZlibraryBackend
-    except Exception:
-        pass
-    try:
-        from .backends import doaj
-
-        reg["doaj"] = doaj.DoajBackend
-    except Exception:
-        pass
-    try:
-        from .backends import europepmc
-
-        reg["europepmc"] = europepmc.EuropePmcBackend
-    except Exception:
-        pass
-    try:
-        from .backends import doab
-
-        reg["doab"] = doab.DoabBackend
-    except Exception:
-        pass
-    try:
-        from .backends import zenodo
-
-        reg["zenodo"] = zenodo.ZenodoBackend
-    except Exception:
-        pass
+        _try_import(reg, spec.name, spec.name, spec.backend)
     return reg
 
 
