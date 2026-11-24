@@ -35,6 +35,8 @@ _TOP_LEVEL_COMMANDS = {
 _SURVEY_COMMANDS = {
     "new": survey_cmd.cmd_survey_new,
     "run": survey_cmd.cmd_survey_run,
+    "status": survey_cmd.cmd_survey_status,
+    "stop": survey_cmd.cmd_survey_stop,
 }
 
 _BROWSER_COMMANDS = {

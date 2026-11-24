@@ -413,3 +413,66 @@ def cmd_survey_run(cfg, args) -> int:
             lock.unlink()
     corpus = survey_project.root / "corpus"
     return 0 if corpus.is_dir() and any(corpus.iterdir()) else 1
+
+
+def add_status_parser(p: argparse.ArgumentParser) -> None:
+    """Register the arguments of ``survey status`` (also used by its tests)."""
+    p.add_argument("project", help="project directory, or a name under the project root")
+    p.add_argument("--root", default=None, help="project root (default: the user data dir)")
+
+
+def add_stop_parser(p: argparse.ArgumentParser) -> None:
+    """Register the arguments of ``survey stop`` (also used by its tests)."""
+    p.add_argument("project", help="project directory, or a name under the project root")
+    p.add_argument("--root", default=None, help="project root (default: the user data dir)")
+
+
+def _load_or_report(args) -> tuple[project.Project | None, int]:
+    """The project, or ``(None, 2)`` with the reason already on stderr."""
+    try:
+        return project.load(_project_dir(args.project, getattr(args, "root", None))), 0
+    except BadInput as e:
+        print(f"[error] {e}", file=sys.stderr)
+        return None, 2
+
+
+def cmd_survey_status(cfg, args) -> int:
+    """Report one project as JSON: question, status, hops, admitted, last stop, remaining."""
+    survey_project, code = _load_or_report(args)
+    if survey_project is None:
+        return code
+    trace = project.read_trace(survey_project)
+    seen = project.read_seen(survey_project)
+    envelope = effort.resolve(survey_project.effort)
+    remaining = {key: int(envelope[f"{key}_cap"]) for key in ("openalex", "arxiv", "publisher")}
+    for event in reversed(trace):
+        if event.get("event") == "hop_end" and isinstance(event.get("remaining"), dict):
+            remaining.update({k: int(v) for k, v in event["remaining"].items()})
+            break
+    last_stop = next((str(e.get("reason") or "") for e in reversed(trace)
+                      if e.get("event") == "stop"), "")
+    report = {"question": survey_project.question, "status": survey_project.status,
+              "effort": survey_project.effort,
+              "hops": sum(1 for e in trace if e.get("event") == "hop_end"),
+              "admitted": sum(1 for row in seen if row.get("admit")),
+              "last_stop": last_stop, "remaining": remaining,
+              "corpus": len(list((survey_project.root / "corpus").glob("*")))
+              if (survey_project.root / "corpus").is_dir() else 0,
+              "running": (survey_project.root / LOCK_NAME).exists()}
+    print(json.dumps(report, ensure_ascii=False))
+    return 0
+
+
+def cmd_survey_stop(cfg, args) -> int:
+    """Write the stop sentinel; the loop reads it at its next hop boundary."""
+    survey_project, code = _load_or_report(args)
+    if survey_project is None:
+        return code
+    sentinel = survey_project.root / STOP_NAME
+    if sentinel.exists():
+        print(f"already stopped: {survey_project.root} (the sentinel is waiting to be read)",
+              file=sys.stderr)
+        return 0
+    sentinel.write_text(str(os.getpid()) + "\n", encoding="utf-8")
+    print(f"stop requested: {survey_project.root} — the walk ends at its next hop boundary")
+    return 0

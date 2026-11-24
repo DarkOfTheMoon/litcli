@@ -27,7 +27,7 @@ EXPECTED_PARENTS = {
     "data": {"get", "add", "set", "del", "attach", "tree", "members"},
     "backends": {"list", "status", "authorize", "install-browser"},
     "browser": {"login", "status"},
-    "survey": {"new", "run"},
+    "survey": {"new", "run", "status", "stop"},
 }
 
 
