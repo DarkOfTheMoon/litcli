@@ -1,7 +1,10 @@
 [build-system]
 # Upper bound: an unpinned setuptools changes packaging output under you between release runs.
 # Lower bound 77 is where PEP 639 (SPDX licence string + [project] license-files) landed.
-requires = ["setuptools>=77,<81"]
+# ``tests/test_packaging`` builds with --no-isolation, so the *ambient* setuptools must satisfy
+# this range too: when a CI runner image outgrows the cap, carry the cap forward in its own
+# commit after checking the wheel still builds with that version (its licence metadata included).
+requires = ["setuptools>=77,<85"]
 build-backend = "setuptools.build_meta"
 
 [project]
