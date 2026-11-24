@@ -1,6 +1,7 @@
 [build-system]
 # Upper bound: an unpinned setuptools changes packaging output under you between release runs.
-requires = ["setuptools>=61,<80"]
+# Lower bound 77 is where PEP 639 (SPDX licence string + [project] license-files) landed.
+requires = ["setuptools>=77,<81"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +9,8 @@ name = "litcli"
 dynamic = ["version"]
 description = "通用学术 CLI:后端无关的领域库 + 可插拔多后端(本机 Zotero / arXiv / Crossref / OpenAlex / 中文题录与图书)互操作"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
   "httpx[http2]>=0.27",   # transport: pooling, HTTP/2, proxy, explicit timeouts
@@ -17,16 +19,17 @@ dependencies = [
   "lxml>=5",              # HTML/XML parsing
 ]
 authors = [{ name = "ZhangHuiJie" }]
+maintainers = [{ name = "ZhangHuiJie" }]
 keywords = ["zotero", "arxiv", "academic", "cli", "csl"]
 classifiers = [
+  "Development Status :: 4 - Beta",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
-  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.13",
   "Environment :: Console",
   "Operating System :: Microsoft :: Windows",
   "Operating System :: POSIX :: Linux",
-  "Operating System :: MacOS",
   "Intended Audience :: Science/Research",
   "Topic :: Scientific/Engineering",
 ]
@@ -35,6 +38,10 @@ classifiers = [
 # Browser-driven backends (install.sh --with-cnki / --with-douban installs these too).
 cnki = ["playwright>=1.40,<2", "jieba>=0.42"]   # jieba: splits concatenated Chinese keywords
 douban = ["playwright>=1.40,<2"]
+# Maintainer tools: packaging (`python3 -m build`), lint (the ruff CI and release gates run),
+# and the freezer `scripts/build_binary.sh` uses. ruff is pinned so the lint gate cannot
+# change its rule set under a release run.
+dev = ["build>=1.2,<2", "ruff==0.17.3", "pyinstaller>=6.10,<7"]
 
 [project.urls]
 Homepage = "https://gitee.com/simult/litcli"
@@ -49,7 +56,13 @@ version = {attr = "litcli._version.__version__"}
 
 [tool.setuptools]
 packages = ["litcli", "litcli.backends", "litcli.commands"]
-license-files = ["LICENSE"]
+
+# Files a wheel must carry beyond the importable package: the documented config template and
+# the agent skill source. They install under <prefix>/config.example.toml and
+# <prefix>/skills/litcli/SKILL.md (tests/test_packaging.py asserts they are in the wheel).
+[tool.setuptools.data-files]
+"" = ["config.example.toml"]
+"skills/litcli" = ["skills/litcli/SKILL.md"]
 
 [tool.ruff]
 line-length = 120

@@ -165,12 +165,12 @@ type = "ieee"
 # user_agent = "…"
 
 # 可选:Sci-Hub 全文兜底(盗版镜像,只按 DOI 解析 PDF,无关键词检索)。
-# 默认不内置。启用后 `fetch fulltext` 会在本地库/Unpaywall/OpenAlex 都无果时再试 Sci-Hub,
+# 默认不内置,但本文件里是启用的(复制本文件即启用)。启用后 `fetch` 会在链末再试 Sci-Hub,
 # 并标注来源。也可只在单次调用加 `--scihub`,不改配置。
 # 站点用 ALTCHA 工作量证明验人,litcli 用本地 hashlib 解同一道题(不绕过),每次调用一个 DOI。
 [backends.scihub]
 type = "scihub"
-# 镜像按序尝试;探测失效的镜像可自行替换。
+# 镜像按序尝试;这三条就是代码内置的 _DEFAULT_MIRRORS,失效的自行替换。
 mirrors = ["sci-hub.ru", "sci-hub.st", "sci-hub.se"]
 # timeout = 30
 
@@ -181,7 +181,7 @@ mirrors = ["sci-hub.ru", "sci-hub.st", "sci-hub.se"]
 [backends.zlibrary]
 type = "zlibrary"
 # base = "https://z-library.by"                    # 入口域名;也可直接填当前前端主机
-# mirrors = ["z-library.by", "zh.pirate101.ru"]    # 入口按序尝试
+# mirrors = ["z-library.by", "zh.pirate101.ru"]    # 入口按序尝试;首项是内置默认(仅此一条),备用镜像自行加
 # email = "you@example.com"                        # 可选:登录后放宽匿名每日下载配额
 # password = "***"
 # delay = 1.0                                      # 请求间隔(秒),人机节律
@@ -193,6 +193,7 @@ type = "zlibrary"
 # (如节律),不写也一样能搜到;想彻底排除某个源才需要 `enabled = false`。
 [backends.doaj]                    # DOAJ 开放获取期刊论文索引(全是 OA)
 type = "doaj"
+# enabled = false                  # 反注释即从 search / fetch 的全量扇出里彻底排除本源(其余源不受影响)
 [backends.europepmc]               # Europe PMC 生物医学题录 + 开放获取 JATS 全文
 type = "europepmc"
 # delay = 0.4                      # EBI 建议 ≤3 req/s

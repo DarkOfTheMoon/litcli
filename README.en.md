@@ -67,9 +67,10 @@ Browsers live in Playwright's own cache (`~/.cache/ms-playwright` /
 **From source** (to change code or run the tests):
 
 ```bash
-pip install .                 # into the current environment (venv, Python 3.11+)
-./install.sh                  # Debian/Ubuntu PEP 668: --user snapshot into ~/.local
-litcli backends               # self-test: configured backends and their capabilities
+pip install .                        # into the current environment (venv, Python 3.11+)
+./install.sh                         # Debian/Ubuntu PEP 668: --user snapshot into ~/.local
+export PATH="$HOME/.local/bin:$PATH"  # if ~/.local/bin is not on PATH yet (persist it in your shell rc)
+litcli backends                      # self-test: configured backends and their capabilities
 ```
 
 `install.sh` copies the source into `~/.local` and decouples production from the checkout; rerun it to
@@ -105,8 +106,9 @@ both forms are accepted. Exit codes: `0` success (including no results), `2` err
 Search fans out: **a single failing source is silent by default** — `--verbose` (or `LITCLI_VERBOSE=1`) names
 which source failed and why. When every source failed it says so even without the flag and exits `2`, since that
 is not "nothing found". Commands whose result you need (`fetch`, `data`, `export`, `refs`, `citing`, `related`,
-`backends`) always speak up on failure. With the local Zotero app closed, reads and writes probe the port first and
-fail with the fix instead of waiting for a y/N answer.
+`backends`) always speak up on failure. With the local Zotero app closed, reads and writes fail with a connection
+error immediately (no timeout wait); `backends status` probes the port first and marks `[unreachable]`, instead of
+letting you answer a y/N prompt first.
 
 Metadata reads are cached for a day (`~/.cache/litcli/cache`; successful GETs only, no files, no writes),
 so repeating a search does not spend the site's budget again — use `--no-cache` for fresh results. Sources are
@@ -121,27 +123,30 @@ first; `--sort cited` switches to a pure citation ranking. Field filters are sen
 locally, so a source that ignores one cannot leak records. A citation badge reads `[cited N via source]` and says
 `(sources disagree)` when sources report different counts.
 
-How each backend maps a filter (a backend without the field folds it into free text, or ignores it):
+### How each backend maps a filter
+
+A backend without the field folds it into free text, or ignores it:
 
 - **crossref** → `query.title` / `query.author` / `query.container-title` / `filter=from-pub-date,until-pub-date`
 - **openalex** → `filter=title.search:` / `raw_author_name.search:` / `publication_year:`; `container` folds into free text
 - **arxiv** → `ti:` / `au:` / `submittedDate:[…]`, AND-joined into `search_query`
 - **zotero** → everything folds into a single `q` (`qmode=everything`, all fields)
 
-**Read-only**
+**Commands** (read-only unless marked as a write)
 
 | Command | What it does |
 |---|---|
-| `litcli search "X" [--all] [--backend B] [--type T] [--limit N] [--format table\|json\|csl]` | candidate search; field filters and sorting below |
-| `litcli refs <key>` / `citing <key>` / `related <key>` (all take `--limit N`, `--sort cited`) | cited works / citing works / semantic neighbours (OpenAlex graph; with no neighbour list it falls back to a title-term search and says so) |
+| `litcli search "X" [--all] [--backend B] [--type T] [--limit N] [--no-cite] [--format table\|json\|csl]` | candidate search; field filters and sorting above; `--no-cite` omits the in-table citation |
+| `litcli refs <key>` / `citing <key>` / `related <key>` (all take `--limit N`, `--sort cited`, `--format table\|json\|csl`) | cited works / citing works / semantic neighbours (OpenAlex graph; with no neighbour list it falls back to a title-term search and says so) |
 | `litcli export <key>... [--format csljson\|bibtex\|ris\|text] [--no-cite]` | citations; `csljson` feeds `pandoc --citeproc`. arXiv keys normalise to a DOI only with `--backend openalex\|crossref` |
-| `litcli fetch <DOI or publisher article URL> [--out DIR] [--no-download] [--scihub]` (the old `fetch fulltext <doi>` and the `--download` flag are still accepted) | save the fulltext: local store → Unpaywall → OpenAlex → Europe PMC → Zenodo → each publisher's subscription copy (tried automatically for its DOI prefixes, see the table) → landing page |
-| `litcli fetch --book "title\|ISBN" [--backend zlibrary\|doab\|openlibrary] [--pick N]` | book candidates → pick → full metadata → save the file (an ISBN takes this path automatically) |
-| `litcli backends authorize zotero` | one-off write authorization (local dialog) |
-| `litcli data add --title "..." --creator "Family, Given" [--year ..] [--doi ..] [--force]` / `data add --pdf|--csl <file>` | ingest metadata (dedupe gate, `--force` skips), heuristics from page 1 (y/N), or CSL JSON |
-| `litcli data get <key> [--format table\|json\|csl]` · `data tree` · `data members <coll> [--limit N] [--format table\|json]` | read one record; browse collections |
-| `litcli backends list/status` · `litcli completions <bash\|zsh\|fish>` | diagnostics, shell completion |
+| `litcli fetch <DOI or publisher article URL> [--out DIR] [--no-download] [--lines N] [--email ADDR] [--scihub]` (the old `fetch fulltext <doi>` and the `--download` flag are still accepted) | save the fulltext: local store → Unpaywall → OpenAlex → Europe PMC → Zenodo → each publisher's subscription copy (tried automatically for its DOI prefixes, see the table) → landing page; `--lines` also previews the first N text lines, `--email` is the Unpaywall/OpenAlex polite-pool address |
+| `litcli fetch --book "title\|ISBN" [--backend zlibrary\|doab\|openlibrary] [--limit N] [--pick N]` | book candidates → pick → full metadata → save the file (an ISBN takes this path automatically); `--limit` candidates, `--pick` chooses one |
+| `litcli data get <key> [--format table\|json\|csl]` · `data tree` | read one record; browse the collection tree |
+| `litcli backends list` · `backends status` | diagnostics: configured backends and capabilities / authorization and reachability |
+| `litcli completions <bash\|zsh\|fish>` | print a self-contained completion script; `eval "$(...)"` then TAB |
+| `litcli data members <coll> [--no-recursive] [--limit N] [--format table\|json]` | list a collection's records (recurse by default, `--no-recursive` lists one level) |
 | `litcli backends install-browser [--check] [--dry-run] [--with-deps]` | download the browser; `--check` launches it headless, `--dry-run` only shows the source, `--with-deps` apt-installs OS libraries |
+| `litcli --version` | print the version and exit |
 | `litcli --no-cache <command>` | bypass the response cache (`LITCLI_NO_CACHE=1` does the same); entries live 24 h and only successful metadata reads are kept |
 | `litcli --verbose <command>` | per-source failure lines for a search (silent by default; `LITCLI_VERBOSE=1` does the same), stderr only |
 | `litcli --debug <command>` | one line per request, status, duration, pacing wait and retry on stderr (`LITCLI_DEBUG=1` does the same); unexpected exceptions also print the stack. stdout is untouched |
@@ -151,8 +156,8 @@ How each backend maps a filter (a backend without the field folds it into free t
 | Command | What it does |
 |---|---|
 | `litcli backends authorize zotero` | one-off write authorization (local dialog) |
-| `litcli data add ...` | ingest (above) |
-| `litcli data set <key> --title ..` · `data del <key>` · `data attach <key> <path\|URL>` | edit, delete, attach a file |
+| `litcli data add --title "..." --creator "Family, Given" [--year ..] [--doi ..] [--type ..] [--url ..] [--abstract ..] [--force]` / `data add --pdf\|--csl <file> [--yes]` | ingest metadata (dedupe gate, `--force` skips), heuristics from page 1 (y/N unless `--yes`), or CSL JSON |
+| `litcli data set <key> --title ..` (also `--abstract/--doi/--url/--year`) · `data del <key>` · `data attach <key> <path\|URL>` | edit, delete, attach a file |
 
 ## Backends and what they may fetch
 
@@ -180,7 +185,7 @@ without any config. The keyless OA corpora (`doaj`/`europepmc`/`doab`/`zenodo`) 
 | `tandf` | subscription content via your institution's entitlement (not OA); Cloudflare challenge | fulltext PDF for Taylor & Francis DOIs; tried automatically for the `10.1080` prefix |
 | `aiaa` | subscription content via your institution's entitlement (not OA); Cloudflare challenge | fulltext PDF for AIAA DOIs; tried automatically for the `10.2514` prefix |
 | `ieee` | subscription content via your institution's entitlement (not OA); AWS WAF challenge | fulltext PDF for IEEE Xplore items; tried automatically for the `10.1109` prefix |
-| `scihub` | public copy (non-OA), DOI only | PDF, opt-in via `--scihub` |
+| `scihub` | public copy (non-OA), DOI only | PDF, opt-in via `--scihub` (copying `config.example.toml` also enables it — the example keeps the `[backends.scihub]` section) |
 | `zlibrary` | public copy (non-OA) | records + PDF; anonymous daily quota |
 
 **China-specific sources.** CNKI drives a visible browser with your own logged-in profile and needs one
@@ -227,6 +232,8 @@ one DOI at a time, at low frequency.
 
 `~/.config/litcli/config.toml` (`%APPDATA%\litcli\config.toml` on Windows; `$LITCLI_CONFIG`
 overrides); with no file, a built-in default of Zotero + arXiv + Crossref + OpenAlex applies.
+Every backend a file lists is enabled; to keep a section's fields but turn it off, write
+`enabled = false` in it (this also covers the keyless OA corpora).
 Every field is documented in `config.example.toml`.
 
 ```toml
@@ -253,17 +260,36 @@ base = "http://localhost:23119/api"     # the write key is written by `litcli ba
   the link. SpringerLink does the same: an unentitled session is sent back to the article page. A failed
   download on any of the three first finishes the chain's tail (legal landing page, `--scihub`).
 - The binary installer ships no Chromium: CNKI/Douban need `litcli backends install-browser` first.
-- `api_key` and Z-Library credentials are stored in plain text; `backends authorize` chmods the config, hand-edited
-  credentials are not covered. On Windows chmod only clears the read-only attribute — the `%APPDATA%`
+- `api_key`, Z-Library credentials and the publisher `cookie` / `cookie_file` values are stored in plain text;
+  `backends authorize` chmods the config, hand-edited values and an exported cookies.txt are not covered — keep
+  them out of public repositories. On Windows chmod only clears the read-only attribute — the `%APPDATA%`
   profile ACL is what isolates the file.
+
+## Layout
+
+```
+litcli/          cli.py (entry: parse/dispatch/error mapping) + commands/ (one module per family) + backends/ (sources)
+                 models.py the one normalized model · aggregate.py dedupe/merge · fulltext.py the chain · transport.py httpx primitives
+tests/           unittest, fully offline (stub backends / MockTransport)
+skills/litcli/   agent skill source; install.sh distributes it per target agent
+```
+
+Layers: domain (pure functions first) → transport → backends (read/write declared through `capabilities`) →
+config → CLI. Layer duties and per-backend details are in [`AGENTS.md`](AGENTS.md), which is also the checklist
+for a new backend.
 
 ## Development
 
 ```bash
+python3 -m pip install -e '.[dev]'      # maintainer tools: build + a pinned ruff + pyinstaller (no runtime deps)
 python3 -m unittest discover -s tests   # the whole suite is offline (stubs / MockTransport)
-ruff check litcli tests
+ruff check litcli tests                 # rules are pinned in pyproject.toml
 scripts/release.sh --check              # release gates (--dry-run / --bump / --push: see AGENTS.md)
 ```
 
+`release.sh` preflights `ruff` and `build` (and prints that install line when either is missing); a `--binary`
+release additionally needs the [GitHub CLI](https://cli.github.com) (`gh`) to fetch the other platform's installer.
+
 CI runs on the GitHub mirror (`master` and `v*` tags: lint, tests, packaging); releases are cut from the
-Gitee repo and verified against the published assets afterwards. Changes are listed in `CHANGELOG.md`.
+Gitee repo and verified against the published assets afterwards. Changes are listed in
+[`CHANGELOG.md`](CHANGELOG.md).

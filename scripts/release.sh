@@ -11,10 +11,12 @@
 #                                                  written __version__ equals it
 #   2) bump `litcli/_version.py` (--bump major|minor|patch, default patch; `none` releases the
 #      current __version__ in place) and harvest CHANGELOG [Unreleased] into a dated section
-#   3) commit `chore(release): vX.Y.Z` + tag vX.Y.Z
+#   3) commit `chore(release): bump to X.Y.Z, harvest changelog` + tag vX.Y.Z
+#      (`--bump none` uses `cut release vX.Y.Z, harvest changelog` instead)
 #   4) build dist/ artifacts + SHA256SUMS ([--binary] also builds this platform's installer)
-#   5) only with --push: push master + tag to every remote, and create the Gitee Release with the
-#      artifacts attached when a token is configured (otherwise print the manual steps)
+#   5) only with --push: push master + tag to origin (and to `github` when that remote
+#      exists), and create the Gitee Release with the artifacts attached when a token is
+#      configured (otherwise print the manual steps)
 #      --binary releases need a Linux *and* a Windows installer. The local build covers one
 #      platform; the other is fetched from the GitHub CI artifact of the pushed commit (or
 #      supplied with --installer from a Windows machine). Publishing stops if either is absent,
@@ -176,12 +178,31 @@ while [ $# -gt 0 ]; do
     --no-release) DO_RELEASE=0 ;;
     --binary) DO_BINARY=1 ;;
     --installer) DO_BINARY=1; EXTRA_INSTALLERS+=("${2:?--installer needs a path}"); shift ;;
-    -h|--help) sed -n '2,39p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    # Everything from line 2 to the first non-comment line: the header grows without the
+    # help text silently losing its tail.
+    -h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
 done
 case "$BUMP" in major|minor|patch|none) ;; *) echo "--bump must be major|minor|patch|none" >&2; exit 2 ;; esac
+
+# The gates and the artifact build need tools that are not runtime dependencies. Fail here with
+# the install line, not halfway through with "command not found".
+DEV_HINT="python3 -m pip install -e '.[dev]'"
+need() {  # need <command> <install hint>
+  command -v "$1" >/dev/null 2>&1 && return 0
+  echo "  ✗ $1 is required; $2" >&2
+  exit 1
+}
+echo "==> preflight"
+need ruff "$DEV_HINT"
+python3 -c 'import build' >/dev/null 2>&1 \
+  || { echo "  ✗ the 'build' module is required; $DEV_HINT" >&2; exit 1; }
+if [ "$DO_BINARY" = 1 ] && [ -n "$GITHUB_PROJECT" ]; then
+  need gh "install the GitHub CLI (https://cli.github.com) so CI can supply the other installer"
+fi
+echo "  ✓ ruff, build${GITHUB_PROJECT:+$( [ "$DO_BINARY" = 1 ] && echo ', gh')}"
 
 # Secret lookup: environment first, then the untracked per-user file (600).
 if [ -z "${GITEE_TOKEN:-}" ] && [ -f "${HOME}/.config/litcli/gitee.token" ]; then
@@ -418,8 +439,8 @@ if [ "$DO_PUSH" = 0 ]; then
 fi
 
 echo "==> [5/6] push $BRANCH_REQUIRED + v$NEW_VER"
-# Every configured remote gets the branch and the tag; a mirror (e.g. the GitHub side that runs
-# CI) must not silently lag behind what was released.
+# origin always; `github` too when it exists, because the mirror runs CI and must not lag
+# behind what was released. Any other remote is not pushed (name it in the list below to add it).
 REMOTES="origin"
 git remote get-url github >/dev/null 2>&1 && REMOTES="$REMOTES github"
 for r in $REMOTES; do

@@ -17,15 +17,15 @@ jobs:
     timeout-minutes: 15
     strategy:
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Lint (ruff, configured in pyproject.toml)
+      - name: Lint (ruff from the pinned `dev` extra, configured in pyproject.toml)
         run: |
-          pip install ruff
+          pip install ".[dev]"
           ruff check litcli tests
       # Install builds the package from pyproject (verifies packaging metadata + console entry point).
       # jieba is the optional `[cnki]` extra's splitter; the cnki query tests need it present.
@@ -48,9 +48,9 @@ jobs:
           python-version: "3.12"
       # Same lint as the Linux job: a rule that only fires on Windows-conditional code paths
       # must fail here too, not slip through until a release.
-      - name: Lint (ruff, configured in pyproject.toml)
+      - name: Lint (ruff from the pinned `dev` extra, configured in pyproject.toml)
         run: |
-          pip install ruff
+          pip install ".[dev]"
           ruff check litcli tests
       - name: Install package
         run: pip install . jieba
@@ -133,7 +133,7 @@ jobs:
       # Releases ship an sdist + a wheel built exactly this way; a broken build must fail CI.
       - name: Build sdist and wheel
         run: |
-          pip install build
+          pip install ".[dev]"
           python -m build
       - uses: actions/upload-artifact@v4
         with:

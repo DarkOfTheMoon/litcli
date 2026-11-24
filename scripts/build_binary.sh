@@ -34,7 +34,7 @@ mkdir -p "$WORK" "$STAGE" "$(dirname "$OUT")"
 echo "==> build environment"
 python3 -m venv "$VENV"
 "$VENV/bin/pip" -q install --upgrade pip
-"$VENV/bin/pip" -q install ".[cnki]" pyinstaller   # [cnki]: playwright + jieba, bundled
+"$VENV/bin/pip" -q install ".[cnki,dev]"   # [cnki]: playwright + jieba, bundled; [dev] pins pyinstaller
 
 echo "==> freeze (PyInstaller, onedir)"
 "$VENV/bin/pyinstaller" --noconfirm --clean --distpath "$STAGE" --workpath "$WORK/pyinstaller" \
@@ -47,7 +47,14 @@ echo "==> smoke-test the frozen tree"
 "$STAGE/litcli/litcli" backends install-browser --help >/dev/null
 
 echo "==> assemble $OUT"
-sed "s/@VERSION@/$VERSION/g" packaging/installer/linux-header.sh >"$OUT"
+# Both placeholders are filled: @PREFIX@ with the runtime shell variable the header defines
+# (its value is chosen at install time), @VERSION@ with this build's version.
+sed -e "s/@VERSION@/$VERSION/g" -e 's|@PREFIX@|$PREFIX|g' \
+    packaging/installer/linux-header.sh >"$OUT"
+# A leftover placeholder would ship in the built-in help; the payload is binary, so only the
+# script part above the marker is inspected.
+awk '/^__PAYLOAD__$/{exit} {print}' "$OUT" | grep -q '@' \
+    && { echo "unsubstituted @PLACEHOLDER@ left in $OUT" >&2; exit 1; }
 tar -C "$STAGE" -czf "$WORK/payload.tar.gz" litcli
 cat "$WORK/payload.tar.gz" >>"$OUT"
 chmod +x "$OUT"

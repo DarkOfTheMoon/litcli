@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+本文件给在本仓库里干活的 Claude Code（或任何 agent）当指引。
 
 ## 运行与命令
 
@@ -35,7 +35,7 @@ scripts/verify_release.sh vX.Y.Z
 
 `--binary` 发版必须同时给出 Linux `.run` 与 Windows `setup.exe`：本机只构建得动本平台那个，另一个由 CI（推送后取 `installer-windows-latest` 产物）或 `--installer <path>`（Windows 机器手建）提供，缺任一平台脚本就拒绝发布，`--release-only` 同样补取。**发布前另做一次人工 Windows 验收**（CI 只做静默安装，覆盖不到向导）：双击安装走完向导 → 新开终端 `litcli --version` 与 `litcli backends` 正常（PATH 生效、无需管理员）→ 勾选 Chromium 任务时 `litcli backends install-browser --check` 启动成功 → 控制面板卸载后目录与 PATH 项都清掉。
 
-**发布**：只在用户明确要求时切版——日常改动提交、推送、CI 绿即止，不顺手发版。发版走 `scripts/release.sh`，不手工改版本号/打 tag。流程是门禁（在 master 且与 origin 齐平、工作区干净、测试绿、ruff 干净、能出包、`CHANGELOG.md` 的 `[Unreleased]` 非空、目标 tag 未占用）→ 改 `litcli/_version.py` + 把 `[Unreleased]` 收成带日期的版本段 → 提交 `chore(release): vX.Y.Z` → 打 tag → 构建 `dist/`（sdist + wheel）与 `SHA256SUMS`。`--check`/`--dry-run` 只跑门禁与预演，`--push` 才外发（推 master + tag 到**所有** remote；设了 `GITEE_TOKEN` 或 `~/.config/litcli/gitee.token` 才建 Gitee Release 并挂产物；切版时没 token，事后用 `--release-only` 给已推的 tag 补建，不改提交；它同样要求 HEAD 等于该 tag、工作区干净，重建 `dist/` 后**先复用已存在的 Release**再补传缺的附件，附件传失败即算失败，最后照样跑消费者验证）。二进制产物只与 `--binary` 一起发；带 `--binary` 时脚本会等 CI 出另一平台的安装器，CI 红或缺产物即中止（tag 已推，修好后用 `--release-only` 补发）。发布后自动跑 `scripts/verify_release.sh` 做消费者验证，不过就算发布失败。`github` 是 CI 镜像仓，新增 remote 后 `release.sh` 会自动同步推送，别让它落后于已发布的 tag。日常改动本身**不**往 CHANGELOG 里随手加，收版时统一补 `[Unreleased]`。
+**发布**：只在用户明确要求时切版——日常改动提交、推送、CI 绿即止，不顺手发版。发版走 `scripts/release.sh`，不手工改版本号/打 tag。流程是门禁（在 master 且与 origin 齐平、工作区干净、测试绿、ruff 干净、能出包、`CHANGELOG.md` 的 `[Unreleased]` 非空、目标 tag 未占用）→ 改 `litcli/_version.py` + 把 `[Unreleased]` 收成带日期的版本段 → 提交 `chore(release): bump to X.Y.Z, harvest changelog`（`--bump none` 时是 `chore(release): cut release vX.Y.Z, harvest changelog`）→ 打 tag → 构建 `dist/`（sdist + wheel）与 `SHA256SUMS`。开始前先自检 `ruff` 与 `build` 模块（缺了脚本会直接给出 `pip install -e '.[dev]'`）。`--check`/`--dry-run` 只跑门禁与预演，`--push` 才外发：推 master + tag 到 `origin`，配了 `github` 镜像 remote 时也推它；设了 `GITEE_TOKEN` 或 `~/.config/litcli/gitee.token` 才建 Gitee Release 并挂产物；切版时没 token，事后用 `--release-only` 给已推的 tag 补建，不改提交；它同样要求 HEAD 等于该 tag、工作区干净，重建 `dist/` 后**先复用已存在的 Release**再补传缺的附件，附件传失败即算失败，最后照样跑消费者验证。二进制产物只与 `--binary` 一起发；带 `--binary` 时脚本会等 CI 出另一平台的安装器（需要 `gh`），CI 红或缺产物即中止（tag 已推，修好后用 `--release-only` 补发）。发布后自动跑 `scripts/verify_release.sh` 做消费者验证，不过就算发布失败。`github` 是 CI 镜像仓，**按名字硬编码**在 `release.sh` 的推送列表里；新加别的 remote 不会被自动推送，要同步得自己推。日常改动本身**不**往 CHANGELOG 里随手加，收版时统一补 `[Unreleased]`。
 
 CLI 帮助用 `./bin/litcli --help`。常用面：
 
@@ -90,8 +90,8 @@ litcli 的核心是「一条文献在多个后端间的读到写」统一归一�
 ## 惯例与约定
 
 - **一次改动只留一条提交**：审查、修复、文档补齐都先做完，再一次性提交；发现要改就 `commit --amend` 后 `push --force-with-lease`，不补 `fix:`/`style:` 类修补提交。顺序是审查 → 修复 → 全量测试 → 一次提交 → push；怕成果丢失用本地提交做检查点、审完 amend 合并再推。
-- **所有 `.py` 文本一律英文**：注释、docstring，以及任何用户可见字符串（`print`/argparse `help`/`raise` 异常消息）都要英文——CLI 输出也走英文。AGENTS.md、`skills/`、`config.example.toml` 保持中文；`README.md`（中文）与 `README.en.md`（英文入口页）成对维护，两份都在才动，`tests/test_docs.py` 钉住两边的命令与后端清单一致。标识符统一英文；按载体区分语言，不混用。
-- 加后端：继承 `Backend`，实现 `search`/`get`，覆盖 `capabilities`（只读就 `{"read"}`），在 `config._registry()` 的 try-import 里注册，并在 `config.example.toml` 加字段。
+- **所有 `.py` 文本一律英文**：注释、docstring，以及任何用户可见字符串（`print`/argparse `help`/`raise` 异常消息）都要英文——CLI 输出也走英文。例外是**站点语言的样例串**（CNKI / 豆瓣 / Z-Library / DOAB 等的 fixture HTML、页面提示语、挑战页正文）保持原语言，不译成英文，否则解析断言就不再对应真实页面。AGENTS.md、`skills/`、`config.example.toml` 保持中文；`README.md`（中文）与 `README.en.md`（英文入口页）成对维护，两份都在才动，`tests/test_docs.py` 钉住两边的命令与后端清单一致。标识符统一英文；按载体区分语言，不混用。
+- 加后端：先按形态选基类——普通 HTTP 源继承 `HttpBackend`；订阅出版社（页面带 `citation_*` 与 PDF 锚点）继承 `_entitled.EntitledBackend`；在机器人闸（Cloudflare 托管挑战 / AWS WAF）后面的继承 `_gated.GatedBackend`，子类只写站点事实（主机、URL 形状、PDF 路径、标题后缀）。实现 `search`/`get`、覆盖 `capabilities`（只读就 `{"read"}`），在 `config._registry()` 的 try-import 里注册。**四处必须同一提交一起改**：`README.md` + `README.en.md`、`skills/litcli/SKILL.md`、`config.example.toml`，以及 `tests/` 里对应的解析用例（两边清单由 `tests/test_docs.py` 与 `tests/test_skill_commands.py` 钉住）。
 - 新功能若要在领域层「输入某数据 → 输出统一模型」，优先做成纯函数（不 I/O、不联网），便于离线单测（现有测试都走构造数据、不连真库）。
 - 写 `AcademicItem` 新增字段时，同步检查 `to_csl`/`from_csl`/`merge_items` 是否该感知该字段。
 - `skills/litcli/SKILL.md` 是面向学术库互操作的技能**唯一源**（纯 markdown、不绑定 agent）；`install.sh` 按探测到的 agent 各自格式分发（Claude 技能目录 / Codex prompt / Cursor `.mdc` / Gemini 上下文标记块），并始终留一份中立副本 `~/.local/share/litcli/skill/SKILL.md`。加分发目标时改 `install.sh` 的 `install_skill` 分支，别再往源路径里嵌 agent 名。它的命令表与后端名由 `tests/test_skill_commands.py` 对着 parser 与后端注册表钉住——改 CLI 面会同时把它变成红，别只改一边。

@@ -36,16 +36,13 @@ while [ $# -gt 0 ]; do
 done
 
 if [ "$ACTION" = uninstall ]; then
-    removed=0
-    for dir in "$PREFIX"/opt/litcli-*; do
-        [ -d "$dir" ] || continue
-        rm -rf "$dir"
-        removed=1
-    done
-    [ "$removed" = 1 ] || die "nothing installed under $PREFIX/opt"
+    # This installer's own version only: running an old installer's --uninstall must not
+    # remove a newer tree that sits next to it.
+    [ -d "$DEST" ] || die "litcli $VERSION is not installed under $PREFIX/opt"
+    rm -rf "$DEST"
     [ -L "$LINK" ] && rm -f "$LINK"
     rmdir "$PREFIX/opt" 2>/dev/null || true
-    say "litcli removed from $PREFIX (downloaded browsers stay in the Playwright cache)"
+    say "litcli $VERSION removed from $PREFIX (downloaded browsers stay in the Playwright cache)"
     exit 0
 fi
 

@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 11 家出版社订阅全文阅读器：ScienceDirect、Wiley、SpringerLink、Cambridge Core、AIP Publishing、ACM、APS、
+  IOPscience、Taylor & Francis、AIAA、IEEE Xplore。只读、只按 DOI / 文章 URL 解析，`fetch` 仅对各自 DOI 前缀
+  自动尝试一次；命中标 `kind` 与 `access=entitled`，被 Cloudflare / AWS WAF 闸拦下时报因并由链尾续接。
+  会话按 `cookie` + `user_agent` 成对配置，OA / 金 OA 条目免配置。
+
 - 结果里出现 `[public]` 副本（Sci-Hub / Z-Library 等镜像）时，stderr 打一行说明「不是开放获取授权，许可见标签」，
   整轮只打一次：判断许可的责任落在读者身上这件事，标签本身交代不了。
 
@@ -53,6 +58,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 出错时可附一行 `[hint]`（如缺浏览器时的 `litcli backends install-browser`、Zotero 未启动时的启动提示），与错误正文分开呈现。
 - 失败呈现分层：`search` 扇出默认静默（详见上），`fetch`/`data`/`export`/`refs`/`citing`/`related`/`backends`
   这类要拿到确定结果的命令失败一律明说。
+- 出版社阅读器收口到同一基类与一张站点表：`resolve_fulltext()` 的具名参数
+  `sciencedirect_backend=` / `wiley_backend=` / `springer_backend=` / `cambridge_backend=` / `aip_backend=`
+  并入唯一的 `publishers=` 字典。仓外按旧签名传参的调用方会得到 `TypeError`，请改用 `publishers`。
 
 ### Fixed
 

@@ -59,6 +59,7 @@ litcli backends install-browser --check  # 自检：无头启动一次并报版�
 ```bash
 pip install .                        # 装进当前环境（venv / 任意 Python 3.11+）
 ./install.sh                         # Debian/Ubuntu 的 PEP 668 环境：--user 快照到 ~/.local，不动系统包
+export PATH="$HOME/.local/bin:$PATH"  # 若 ~/.local/bin 还不在 PATH（写进 shell 启动文件可持久）
 litcli backends                      # 自测：列出已配置后端及能力
 ```
 
@@ -89,7 +90,7 @@ shell 补全只有 bash/zsh/fish（PowerShell 下可在 Git Bash 里生成）。
 检索是向外扇出：**单个来源失败默认不提**，加 `--verbose`（或 `LITCLI_VERBOSE=1`）才逐条说明哪个来源、
 什么原因；全部来源都失败时即使不加开关也会明说并以 `2` 退出——那不算「没有结果」。
 其余需要拿到确定结果的命令（`fetch`、`data`、`export`、`refs`、`citing`、`related`、`backends`）失败一律明说。
-本机 Zotero 没开着时，写库与检索会先探一次端口直接报错，省得等你按了 y 才发现。
+本机 Zotero 没开着时，读写会直接报连接失败（不用等超时）；`backends status` 会先探一次端口并标 `[unreachable]`，省得你按了 y 才发现。
 
 元数据读取会缓存一天（`~/.cache/litcli/cache`，只存成功的 GET、不存文件、写操作不缓存），重复检索不必再花站点的配额；
 要拿最新结果用 `--no-cache`。检索对来源是并发的（最多 4 路），整轮 45 秒上限：卡住的来源按超时跳过，不再把命令拖住。
@@ -99,21 +100,21 @@ shell 补全只有 bash/zsh/fish（PowerShell 下可在 Git Bash 里生成）。
 
 | 命令 | 说明 |
 |---|---|
-| `litcli search "X" [--all] [--backend B] [--type T] [--limit N]` | 检索候选（`--format table\|json\|csl`）；字段过滤与排序见下节 |
-| `litcli refs <key>` / `citing <key>` / `related <key>`（均可 `--limit N`、`--sort cited`） | 参考文献（回溯奠基）／引用该文的文献（前向跟进）／语义邻居（OpenAlex 图谱；该文没有邻居列表时退回按标题实词检索并标注） |
+| `litcli search "X" [--all] [--backend B] [--type T] [--limit N] [--no-cite]` | 检索候选（`--format table\|json\|csl`）；`--no-cite` 不在表格里附行内引文；字段过滤与排序见下节 |
+| `litcli refs <key>` / `citing <key>` / `related <key>`（均可 `--limit N`、`--sort cited`、`--format table\|json\|csl`） | 参考文献（回溯奠基）／引用该文的文献（前向跟进）／语义邻居（OpenAlex 图谱；该文没有邻居列表时退回按标题实词检索并标注） |
 | `litcli data get <key> [--format table\|json\|csl]` | 单条全字段 |
 | `litcli export <key>... [--format csljson\|bibtex\|ris\|text] [--no-cite]` | 导出引文；`csljson` 可喂 `pandoc --citeproc`；`--no-cite` 只对 `text` 生效。arXiv key 仅在 `--backend openalex\|crossref` 下归一为 DOI |
-| `litcli fetch <DOI 或出版社文章 URL> [--out DIR] [--no-download] [--scihub]`（旧动词 `fetch fulltext <doi>`、旧旗标 `--download` 仍接受） | 保存全文：本地库 → Unpaywall → OpenAlex → Europe PMC → Zenodo → 各出版社订阅副本（按其 DOI 前缀自动尝试，见下表）→ 落地页 |
-| `litcli fetch --book "书名\|ISBN" [--backend zlibrary\|doab\|openlibrary] [--pick N]` | 图书候选 → 选定补全书目 → 保存文件（ISBN 自动走此路径） |
+| `litcli fetch <DOI 或出版社文章 URL> [--out DIR] [--no-download] [--lines N] [--email ADDR] [--scihub]`（旧动词 `fetch fulltext <doi>`、旧旗标 `--download` 仍接受） | 保存全文：本地库 → Unpaywall → OpenAlex → Europe PMC → Zenodo → 各出版社订阅副本（按其 DOI 前缀自动尝试，见下表）→ 落地页；`--lines` 顺带预览正文前 N 行，`--email` 作为 Unpaywall/OpenAlex 礼貌池的联系邮箱 |
+| `litcli fetch --book "书名\|ISBN" [--backend zlibrary\|doab\|openlibrary] [--limit N] [--pick N]` | 图书候选 → 选定补全书目 → 保存文件（ISBN 自动走此路径）；`--limit` 候选条数、`--pick` 选第几条 |
 
 **写库**（默认 Zotero；只读后端会报 `[skipped]` 并以退出码 2 结束）
 
 | 命令 | 说明 |
 |---|---|
 | `litcli backends authorize zotero` | 一次性授权写库 key（本地弹框批准后写回配置） |
-| `litcli data add --title "..." --creator "家族, 名字" [--year ..] [--doi ..]` | 摄入元信息；写前过查重 / 半残门，`--force` 跳过 |
-| `litcli data add --pdf <file>` / `--csl <file>` | 从 PDF 首页启发式抽候选（交互确认 y/N 后写库，`--yes` 跳过）或从 CSL JSON 摄入 |
-| `litcli data set <key> --title ..` · `data del <key>` · `data attach <key> <路径\|URL>` | 改 / 删 / 挂全文 |
+| `litcli data add --title "..." --creator "家族, 名字" [--year ..] [--doi ..] [--type ..] [--url ..] [--abstract ..] [--force]` | 摄入元信息；写前过查重 / 半残门，`--force` 跳过 |
+| `litcli data add --pdf <file> [--yes]` / `--csl <file>` | 从 PDF 首页启发式抽候选（交互确认 y/N 后写库，`--yes` 跳过）或从 CSL JSON 摄入 |
+| `litcli data set <key> --title ..`（另有 `--abstract/--doi/--url/--year`） · `data del <key>` · `data attach <key> <路径\|URL>` | 改 / 删 / 挂全文 |
 
 **诊断**
 
@@ -122,7 +123,8 @@ shell 补全只有 bash/zsh/fish（PowerShell 下可在 Git Bash 里生成）。
 | `litcli backends list` · `backends status` | 已配置后端与能力 / 授权与可达状态 |
 | `litcli completions <bash\|zsh\|fish>` | 打印自包含补全脚本；`eval "$(...)"` 后按 TAB 补全 |
 | `litcli backends install-browser [--check] [--dry-run] [--with-deps]` | 下载浏览器；`--check` 无头启动验证、`--dry-run` 只显示下载源、`--with-deps` 顺带 apt 装系统库 |
-| `litcli data members <集合key> [--format table\|json]` | 罗列集合条目（`--format json` 一行一条记录） |
+| `litcli data members <集合key> [--no-recursive] [--limit N] [--format table\|json]` | 罗列集合条目（默认递归子集合，`--no-recursive` 只看本层；`--format json` 一行一条记录） |
+| `litcli --version` | 打印版本并退出 |
 | `litcli --no-cache <命令>` | 跳过响应缓存（`LITCLI_NO_CACHE=1` 同样生效）；缓存默认 24 小时、只存成功的元数据读取 |
 | `litcli --verbose <命令>` | 检索里失败来源的逐条说明（默认静默；`LITCLI_VERBOSE=1` 同样生效），只写 stderr |
 | `litcli --debug <命令>` | 把请求、状态、耗时、限速等待与重试逐行写到 stderr（`LITCLI_DEBUG=1` 同样生效）；意外异常额外打印调用栈。stdout 不受影响 |
@@ -168,7 +170,7 @@ CNKI / 豆瓣另需浏览器依赖。
 | `tandf` | 读 | 订阅内容，凭你的机构授权（不是 OA）；站点在 Cloudflare 挑战后 | Taylor & Francis DOI 的全文 PDF；只对 `10.1080` 前缀自动尝试 |
 | `aiaa` | 读 | 订阅内容，凭你的机构授权（不是 OA）；站点在 Cloudflare 挑战后 | AIAA DOI 的全文 PDF；只对 `10.2514` 前缀自动尝试 |
 | `ieee` | 读 | 订阅内容，凭你的机构授权（不是 OA）；站点在 AWS WAF 挑战后 | IEEE Xplore 文章的全文 PDF；只对 `10.1109` 前缀自动尝试 |
-| `scihub` | 读 | 公开副本（非 OA 授权），只按 DOI | PDF；`--scihub` 才兜底 |
+| `scihub` | 读 | 公开副本（非 OA 授权），只按 DOI | PDF；加 `--scihub` 才兜底（复制 `config.example.toml` 也会启用，因为示例里留着 `[backends.scihub]` 段） |
 | `zlibrary` | 读 | 公开副本（非 OA 授权） | 书目 + PDF；匿名每日有下载配额 |
 
 反爬说明：被 403 不等于你的 IP 被封。`www.sciencedirect.com` 对无 JS 客户端先给 Cloudflare 挑战、再按会话判权限（`CPE00001`），
@@ -197,6 +199,7 @@ litcli 在本地做题后复用 cookie，不改写、不绕过。知网与豆瓣
 
 `~/.config/litcli/config.toml`（Windows 为 `%APPDATA%\litcli\config.toml`；`$LITCLI_CONFIG` 可另指）；
 没有配置时用内置默认（Zotero + arXiv + Crossref + OpenAlex）。
+文件里列出的后端默认全部启用；想留着字段又临时关掉某一段，在该段写 `enabled = false`（连免 key 的 OA 语料也适用）。
 完整字段见 [`config.example.toml`](config.example.toml)。
 
 ```toml
@@ -216,7 +219,8 @@ base = "http://localhost:23119/api"     # 写库 key 由 `litcli backends author
 - Sci-Hub 只按 DOI 解析，不能关键词检索；Z-Library 匿名下载有每日配额，可在配置里填 `email`/`password` 登录放宽。
 - ScienceDirect 的 PDF 另有**第二道验收关**（`craft/challenge/pdf`），页面能开也未必能直取：`fetch` 走后端会话下载，被拦时明确报因并给出 PDF 链接，让你在已授权的浏览器里打开。Wiley 的 PDF 端点对未订阅会话返回的是跳转后的 HTML 摘要页而非 403，`fetch` 会明说"未获授权或会话已失效"并给链接。SpringerLink 同理：未订阅（且非金 OA）时会话会被送回文章页，`fetch` 报"未获授权或会话已失效"并给链接。三者下载失败都会先把链的尾部（合法落地页、`--scihub`）走完再报错。
 - 二进制安装器不含 Chromium：知网 / 豆瓣要先 `litcli backends install-browser`，否则报错并给出该命令。
-- 配置里的 `api_key` 与 zlibrary 凭据是明文：`backends authorize` 会把配置 chmod 0600，手填凭据不会；
+- 配置里的 `api_key`、zlibrary 凭据，以及出版社会话的 `cookie` / `cookie_file` 都是明文：`backends authorize`
+  会把配置 chmod 0600，手填的不会；导出的 cookies.txt 也按普通文件保存，别提交进公开仓库。
   Windows 上 chmod 只等于只读位，真正的隔离来自 `%APPDATA%` 的用户目录 ACL。
 - arXiv 在受限沙箱里可能返回 406；`--all` 会跳过失败的后端继续。
 
@@ -235,10 +239,14 @@ skills/litcli/   agent 技能源，install.sh 按目标 agent 分发
 ## 开发与发布
 
 ```bash
+python3 -m pip install -e '.[dev]'      # 维护工具：build + 固定版 ruff + pyinstaller（运行时不装）
 python3 -m unittest discover -s tests   # 全量离线测试
 ruff check litcli tests                 # 规则集固定在 pyproject.toml
 scripts/release.sh --check              # 发布门禁（另有 --dry-run / --bump / --push，详见 AGENTS.md）
 ```
+
+`release.sh` 先自检 `ruff` 与 `build` 是否齐备（缺了直接给上面那条安装命令）；`--binary` 发版还需要
+[GitHub CLI](https://cli.github.com)（`gh`）去取另一平台的安装器。
 
 CI 跑在 GitHub 镜像仓（`DarkOfTheMoon/litcli`，`master` 与 `v*` 触发 lint / 测试 / 打包）；Gitee 是发布主仓，
 发版后由 `scripts/verify_release.sh vX.Y.Z` 按消费者视角复验产物。变更记录见 [`CHANGELOG.md`](CHANGELOG.md)。

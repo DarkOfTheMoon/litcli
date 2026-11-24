@@ -12,7 +12,7 @@ description: 用 litcli 与用户的学术资料互操作——检索、读取�
 ## 一条检索怎么走
 
 1. **先看用户自己的库**：`litcli search "关键词" --backend zotero`（不带 `--backend` 时是全部来源一起搜，本机库只是其中之一）。
-2. **库里没有才外扩**：`litcli search "关键词"` 默认就跨全部已配置来源 + 免 key 的 OA 语料聚合（去重/合并，`extra["sources"]` 标来源），或用 `--backend arxiv|crossref|openalex|doaj|europepmc|zenodo` 指定开放源；中文文献用 `--backend cnki`，中文图书用 `--backend douban`。
+2. **库里没有才外扩**：`litcli search "关键词"` 默认就跨全部已配置来源 + 免 key 的 OA 语料聚合（去重/合并，`extra["sources"]` 标来源），或用 `--backend arxiv|crossref|openalex|doaj|europepmc|doab|zenodo` 指定开放源；中文文献用 `--backend cnki`，中文图书用 `--backend douban`。
 3. **收敛**：`--type article` 降噪，`--title/--author/--year/--container` 字段级过滤，`--sort cited` 按被引降序。结果只是候选，**引用前核对题名/作者/年份**，不要把摘要当结论。
 4. **顺藤摸瓜**：`refs`（回溯奠基）／`citing`（前向跟进）／`related`（语义邻居）——都基于 OpenAlex 引文图谱。
 5. **落盘**：要入库走 `data add`（先查重、经确认）；只要引文走 `export --format csljson`（喂 `pandoc --citeproc`）；要全文走 `fetch <doi|arXiv id>`（默认落盘，stdout 只有路径；要正文且合法源拿不到时加 `--scihub`）。
@@ -33,7 +33,7 @@ description: 用 litcli 与用户的学术资料互操作——检索、读取�
 | 语义相关 | `litcli related <key> [--limit N] [--backend openalex]` OpenAlex `related_works` 邻居;该文无邻居列表时退回标题实词检索(`extra["related_via"]=keyword`);不支持的只读后端 `[skipped]` 退出码 2 | 只读 |
 | 单条全字段 | `litcli data get <key> [--format table\|json\|csl]`（默认 `table`） | 只读 |
 | 导出引文 | `litcli export <key> [--format csljson\|bibtex\|ris\|text]`（arXiv key 如 `arxiv/1806.09180` 在 `--backend openalex\|crossref` 下归一为 DOI；csljson/bibtex 含期刊名/卷/页/出版社） | 只读 |
-| 定位全文 | `litcli fetch <doi\|arXiv id\|ScienceDirect URL/PII\|Wiley URL\|Springer URL> [--out DIR] [--no-download] [--scihub]`（旧写法 `fetch fulltext <doi>` 仍认） 本地→OA→（Elsevier DOI 或 SD 文章 URL 试 ScienceDirect、Wiley DOI 试 Wiley、Springer Nature DOI 试 Springer，凭机构订阅；金 OA 免配置）默认落盘；加 `--scihub` 才兜底公开副本(会标注) | 只读 |
+| 定位全文 | `litcli fetch <doi\|arXiv id\|出版社文章 URL/PII> [--out DIR] [--no-download] [--scihub]`（旧写法 `fetch fulltext <doi>` 仍认；URL 形态覆盖 ScienceDirect / Wiley / Springer / Cambridge / AIP / ACM / APS / IOP / Taylor & Francis / AIAA / IEEE） 本地→OA→对应出版社订阅副本（按 DOI 前缀自动试，凭机构订阅；金 OA 免配置）默认落盘；加 `--scihub` 才兜底公开副本(会标注) | 只读 |
 | **新增(元信息)** | `litcli data add --title "..." --creator "家族, 名字" --year 2002 [--doi ...]` | **写库** |
 | **新增(从 PDF)** | `litcli data add --pdf <file>` 抽启发式候选→展示→**交互确认(y/N)**→写；`--yes` 跳过确认 | **写库** |
 | 修改 | `litcli data set <key> --title "..." [--year ...]` | **写库** |
@@ -65,7 +65,7 @@ description: 用 litcli 与用户的学术资料互操作——检索、读取�
 - `data add` 返回新 key；写库仅对可写后端（zotero）成功，其余报错并退出码 2。
 - `data add` 写前过 `should_import` 查重/半残门：同 DOI/题已存在、或缺标题/缺作者且缺年份 → 拒绝，需 `--force` 覆盖。
 - `data add --pdf` 是**启发式**候选，写前会交互确认（y/N）请核对；非交互/脚本用 `--yes` 跳过确认。勿盲目入库。
-- **检索失败默认静默**：单个来源挂了不提（`--verbose` 才逐条说明）；全部来源都失败会明说并退出码 2。因此退出码 0 且「没结果」要先想「是不是全挂了」，怀疑时补 `--verbose` 重跑。`fetch`/`data`/`export`/`refs`/`citing`/`related` 出错一律明说。
+- **检索失败默认静默**：单个来源挂了不提（`--verbose` 才逐条说明）；全部来源都失败会明说并退出码 2。因此退出码 0 且「没结果」要先想「是不是全挂了」，怀疑时补 `--verbose` 重跑。`fetch`/`data`/`export`/`refs`/`citing`/`related` 出错一律明说。`fetch` 的退出码另分三档：`0` 拿到文件、`1` 没有全文、`2` 出错——`1` 不是错误，别当故障重试。
 - **CNKI 只取公开题录、不抓全文**：知网无开放 API；`search --backend cnki` 需先 `./install.sh --with-cnki` 装 Playwright + Chromium。它会弹**可见浏览器**，请你手动过滑块验证码 + 登录知网（校外账号）一次（独立 profile，之后复用）。检索结果仅标题/作者/刊名/年份/摘要片段，**不下载付费墙全文**；遇验证码交给人工，脚本不绕过、不实现反爬规避。
 - **开放获取源只给公开 OA 记录**：DOAJ / DOAB / Europe PMC / Zenodo 均免 key、开放授权；`fetch` 在合法链里用 Europe PMC（JATS XML 文本，存 `.xml`）与 Zenodo（开放文件），Unpaywall 只给落地页时退到链末并标 `HTML`。
 - **被 403 不等于你的 IP 被封**：`europepmc.org` 在 Cloudflare managed challenge/Turnstile 后面（CLI、假浏览器头、无头/有头浏览器实测都过不去，故走 EBI 的 REST）；DOAB 的 `/rest` 对无 JS 客户端 403（故走 Atom feed），但它的详情页是可解的工作量证明，litcli 本地解、换 cookie 后正常取页。这两类站点都无需换网络/代理。

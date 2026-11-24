@@ -180,9 +180,14 @@ if [ "${DO_SKILLS}" = "1" ]; then
   run_skill_install
 fi
 
-if [ "${INSTALL_PKG}" = "1" ] && ! printf '%s' "${PATH}" | grep -q "${BIN_DIR}"; then
-  echo "[litcli] 提示: PATH 尚无 ${BIN_DIR}。建议在 shell 启动文件加:"
-  echo "        export PATH=\"${BIN_DIR}:\$PATH\""
-fi
+# `grep -q "${BIN_DIR}"` matches as a substring (a sibling directory would silence the hint);
+# the colon-delimited case is an exact element test.
+case ":${PATH}:" in
+  *":${BIN_DIR}:"*) ;;
+  *)
+    echo "[litcli] 提示: PATH 尚无 ${BIN_DIR}。建议在 shell 启动文件加:"
+    echo "        export PATH=\"${BIN_DIR}:\$PATH\""
+    ;;
+esac
 
 echo "[litcli] 完成。自测: litcli backends"
