@@ -67,54 +67,56 @@ def _registry() -> dict[str, type[Backend]]:
     """
     from .backends import zotero_local
 
+    # Every optional module is tried by itself: one that is not ready (missing dependency, a
+    # syntax error, a bad constant) must cost only its own backend, not the whole registry.
     reg: dict[str, type[Backend]] = {"zotero_local": zotero_local.ZoteroLocalBackend}
     try:
         from .backends import arxiv
 
         reg["arxiv"] = arxiv.ArxivBackend
-    except ImportError:
+    except Exception:
         pass  # When arXiv isn't ready, it doesn't affect the Zotero definition
     try:
         from .backends import crossref
 
         reg["crossref"] = crossref.CrossrefBackend
-    except ImportError:
+    except Exception:
         pass
     try:
         from .backends import openalex
 
         reg["openalex"] = openalex.OpenAlexBackend
-    except ImportError:
+    except Exception:
         pass
     try:
         from .backends import openlibrary
 
         reg["openlibrary"] = openlibrary.OpenLibraryBackend
-    except ImportError:
+    except Exception:
         pass
     try:
         from .backends import uspto
 
         reg["uspto"] = uspto.UsptoBackend
-    except ImportError:
+    except Exception:
         pass
     try:
         from .backends import cnki
 
         reg["cnki"] = cnki.CnkiBackend
-    except ImportError:
+    except Exception:
         pass
     try:
         from .backends import douban
 
         reg["douban"] = douban.DoubanBackend
-    except ImportError:
+    except Exception:
         pass
     try:
         from .backends import scihub
 
         reg["scihub"] = scihub.ScihubBackend
-    except ImportError:
+    except Exception:
         pass
     # Every entitled/guarded publisher: its name, module and class come from the one table, so
     # a registered reader cannot be missing from the chain (and vice versa).
@@ -122,44 +124,46 @@ def _registry() -> dict[str, type[Backend]]:
 
     try:  # the table imports every publisher module: one missing must not sink the registry
         from .backends.publishers import _PUBLISHER_SPECS
-    except ImportError:
+    except Exception:
         _PUBLISHER_SPECS = ()
 
+    # "Not ready" is anything the import raises — a missing module (``ImportError``), but also
+    # a syntax error, a bad constant or a renamed class, none of which is an ``ImportError``.
     for spec in _PUBLISHER_SPECS:
         try:
             module = import_module(f".backends.{spec.name}", __package__)
             reg[spec.name] = getattr(module, spec.backend)
-        except ImportError:
+        except Exception:
             pass
     try:
         from .backends import zlibrary
 
         reg["zlibrary"] = zlibrary.ZlibraryBackend
-    except ImportError:
+    except Exception:
         pass
     try:
         from .backends import doaj
 
         reg["doaj"] = doaj.DoajBackend
-    except ImportError:
+    except Exception:
         pass
     try:
         from .backends import europepmc
 
         reg["europepmc"] = europepmc.EuropePmcBackend
-    except ImportError:
+    except Exception:
         pass
     try:
         from .backends import doab
 
         reg["doab"] = doab.DoabBackend
-    except ImportError:
+    except Exception:
         pass
     try:
         from .backends import zenodo
 
         reg["zenodo"] = zenodo.ZenodoBackend
-    except ImportError:
+    except Exception:
         pass
     return reg
 

@@ -26,11 +26,16 @@ _modules: dict[str, object] = {}
 
 
 def _module(name: str):
-    """The reader module, imported on first use; ``None`` when it cannot be imported."""
+    """The reader module, imported on first use; ``None`` when it cannot be imported.
+
+    A missing module raises ``ImportError``, but "not ready" also covers a syntax error, a bad
+    constant and a renamed attribute — none of them an ``ImportError`` — so anything the import
+    raises is caught (`KeyboardInterrupt`/`SystemExit` aside).
+    """
     if name not in _modules:
         try:
             _modules[name] = import_module(f".{name}", __package__)
-        except ImportError:
+        except Exception:
             _modules[name] = None
     return _modules[name]
 

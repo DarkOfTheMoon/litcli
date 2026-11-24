@@ -62,18 +62,41 @@ class PublisherTableTest(unittest.TestCase):
             self.assertEqual(ieee.page_key("https://ieeexplore.ieee.org/document/1"), "")
             self.assertEqual(PUBLISHER_ORDER, tuple(s.name for s in _PUBLISHER_SPECS))
 
-    def test_a_broken_reader_does_not_break_importing_the_cli(self):
-        # The file header promises Zotero alone keeps working; the readers are imported at
-        # module level nowhere, so one broken reader must not traceback `litcli --help`.
+    def _run_with_a_broken_reader(self, setup: str):
+        """Import the CLI with ``litcli.backends.ieee`` broken by ``setup`` in a fresh process."""
         import subprocess
 
-        code = ("import sys; sys.modules['litcli.backends.ieee'] = None; "
-                "import litcli.cli, litcli.fulltext, litcli.completions, "
-                "litcli.commands.fetch; print('ok')")
-        out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
-                             cwd=os.path.join(os.path.dirname(__file__), ".."))
+        code = setup + (
+            "import litcli.cli, litcli.fulltext, litcli.completions, litcli.commands.fetch\n"
+            "from litcli import config\n"
+            "assert 'ieee' not in config._registry(), 'the broken reader stayed registered'\n"
+            "raise SystemExit(litcli.cli.main(['--help']))\n")
+        return subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                              cwd=os.path.join(os.path.dirname(__file__), ".."))
+
+    def test_a_missing_reader_does_not_break_the_cli(self):
+        # The file header promises Zotero alone keeps working; no reader is imported at module
+        # level, so one that cannot be imported must not traceback `litcli --help` or the
+        # registry every command builds.
+        out = self._run_with_a_broken_reader("import sys; sys.modules['litcli.backends.ieee'] = None\n")
         self.assertEqual(out.returncode, 0, out.stderr)
-        self.assertEqual(out.stdout.strip(), "ok")
+
+    def test_a_reader_that_raises_at_import_does_not_break_the_cli(self):
+        # "Not ready" is not only ``ImportError``: a syntax error, a bad constant or a renamed
+        # attribute all used to escape the guard and take the registry down with them.
+        setup = (
+            "import importlib.abc, importlib.machinery, sys\n"
+            "class Boom(importlib.abc.MetaPathFinder, importlib.abc.Loader):\n"
+            "    def find_spec(self, name, path=None, target=None):\n"
+            "        if name == 'litcli.backends.ieee':\n"
+            "            return importlib.machinery.ModuleSpec(name, self)\n"
+            "    def create_module(self, spec):\n"
+            "        return None\n"
+            "    def exec_module(self, module):\n"
+            "        raise ValueError('bad constant in reader')\n"
+            "sys.meta_path.insert(0, Boom())\n")
+        out = self._run_with_a_broken_reader(setup)
+        self.assertEqual(out.returncode, 0, out.stderr)
 
 
 if __name__ == "__main__":
