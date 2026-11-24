@@ -30,10 +30,10 @@ from lxml import etree as ET
 
 from . import provenance, unpaywall
 from .aggregate import norm_doi
-from .backends.publishers import PUBLISHER_ORDER
 from .debug import notice
 from .errors import BotWall, LitcliError
 from .models import AcademicItem
+from .publishers import PUBLISHER_ORDER
 
 # A resolver: takes a doi, returns a candidate dict or None.
 # Candidate fields usable by the CLI:

@@ -12,8 +12,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from litcli import config, fulltext
 from litcli.backends._entitled import EntitledBackend
-from litcli.backends.publishers import _PUBLISHER_SPECS, PUBLISHER_ORDER
 from litcli.completions import BACKENDS
+from litcli.publishers import _PUBLISHER_SPECS, PUBLISHER_ORDER
 
 
 class PublisherTableTest(unittest.TestCase):
@@ -49,7 +49,7 @@ class PublisherTableTest(unittest.TestCase):
         # cannot be imported must cost that one step, not the whole table.
         from unittest import mock
 
-        from litcli.backends import publishers
+        from litcli import publishers
 
         real = publishers._module
         with mock.patch.object(publishers, "_module",

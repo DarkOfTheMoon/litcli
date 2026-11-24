@@ -16,7 +16,6 @@ import re
 from urllib.parse import urlparse
 
 from ..models import AcademicItem
-from ._cf_gate import is_challenge_page
 from ._cf_gate import load_cookie as _load_cookie
 from ._cf_gate import parse_cookie as _parse_cookie
 from ._gated import GatedBackend
@@ -46,9 +45,6 @@ def normalize_key(key: str) -> str:
     return _normalize_key(key, tag="tandf", url_re=_URL_RE, forms=_KEY_FORMS,
                           embedded_doi_re=_URL_DOI_RE)
 
-
-#: The gate predicate, bound by name for the module's own API.
-is_block_page = is_challenge_page
 
 
 def extract_pdf_url(page_html: str, doi: str = "", want_id: str = "") -> str:

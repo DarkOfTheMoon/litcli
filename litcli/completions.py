@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import argparse
 
-from .backends.publishers import PUBLISHER_ORDER
 from .config import _OPTIONAL_BACKENDS
+from .publishers import PUBLISHER_ORDER
 
 # argparse does not encode these as ``choices``; supply the known values for completion. The
 # optional and publisher blocks come from their one registry each, so a reader cannot be

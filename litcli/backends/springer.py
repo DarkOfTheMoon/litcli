@@ -33,7 +33,6 @@ from urllib.parse import urlparse
 from ..errors import BadInput, NotFound, Paywalled
 from ..models import AcademicItem, extract_year, normalize_author_name
 from ..transport import HttpError
-from ._cf_gate import is_challenge_page
 from ._cf_gate import load_cookie as _load_cookie
 from ._cf_gate import parse_cookie as _parse_cookie
 from ._gated import _DOI_RE, GatedBackend, _clean_doi, _title_from_tag
@@ -148,9 +147,6 @@ def normalize_key(key: str) -> str:
         raise BadInput(f"[springer] not a DOI, springer:<DOI> or SpringerLink article URL: {key!r}")
     return f"doi:{doi}"
 
-
-#: The gate predicate, bound by name for the module's own API.
-is_block_page = is_challenge_page
 
 
 def is_open_access(page_html: str) -> bool:

@@ -36,6 +36,7 @@ from .. import pdf as pdfutil
 from ..errors import BotWall, LitcliError, Unavailable, for_status
 from ..models import AcademicItem, extract_year, normalize_author_name
 from ..transport import Session
+from ._cf_gate import metas as _all_metas
 from .base import Backend
 
 # Mirrors tried in order; overridable via ``[backends.scihub].mirrors``. Probed 2026-10: ``.ru``
@@ -51,12 +52,6 @@ _CAPTCHA_ID_RE = re.compile(r"/captcha/(?:challenge|solution)/(\d+)")
 
 # PDF link fallbacks: the ``#pdf`` container's ``<embed>`` / ``<iframe>`` src.
 _EMBED_RE = re.compile(r"<(?:embed|iframe)\b[^>]*\bsrc=[\"']([^\"']+)", re.I)
-
-# ``<meta ...>`` tags (attribute order varies, so the tag is scanned rather than pattern-matched).
-_META_TAG_RE = re.compile(r"<meta\b[^>]*>", re.I)
-_META_NAME_RE = re.compile(r"\bname=[\"']([^\"']+)[\"']", re.I)
-#: The value runs to the opening quote's own kind: an apostrophe in a title is content.
-_META_CONTENT_RE = re.compile(r"\bcontent=([\"'])(.*?)\1", re.I | re.S)
 
 # ALTCHA hash algorithms the widget supports (``hashlib`` names).
 _ALGORITHMS = {"SHA-256": "sha256", "SHA-384": "sha384", "SHA-512": "sha512"}
@@ -114,17 +109,8 @@ def solve_altcha(challenge: dict) -> str:
 
 
 def _metas(html: str) -> dict[str, list[str]]:
-    """Collect ``<meta name="citation_*" content=...>`` values, keyed by lowercased name."""
-    found: dict[str, list[str]] = {}
-    for tag in _META_TAG_RE.findall(html or ""):
-        name = _META_NAME_RE.search(tag)
-        content = _META_CONTENT_RE.search(tag)
-        if not name or not content:
-            continue
-        n = name.group(1).lower()
-        if n.startswith("citation_"):
-            found.setdefault(n, []).append(content.group(2))
-    return found
+    """The article page's own ``citation_*`` meta, keyed by lowercased name."""
+    return _all_metas(html, keep=lambda name: name.startswith("citation_"))
 
 
 def extract_pdf_url(html: str, page_url: str = "") -> str:

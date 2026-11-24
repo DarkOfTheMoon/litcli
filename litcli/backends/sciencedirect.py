@@ -15,7 +15,7 @@ inline or Netscape ``cookies.txt``), and names what happened when they are missi
 mistakes a ScienceDirect hit for a local-store attachment.
 
 The markup is parsed by pure functions (:func:`normalize_key`, :func:`page_to_item`,
-:func:`extract_pdf_url`, :func:`is_block_page`) so a site change touches only the thin
+:func:`extract_pdf_url`) so a site change touches only the thin
 adapter, and every branch is testable offline with a literal page snippet.
 """
 from __future__ import annotations
@@ -29,7 +29,7 @@ from urllib.parse import urlparse
 
 from ..errors import BadInput, NotFound, Paywalled, for_status
 from ..models import AcademicItem, extract_year, normalize_author_name
-from ._cf_gate import gate_message, is_challenge_page
+from ._cf_gate import gate_message
 from ._cf_gate import load_cookie as _load_cookie
 from ._cf_gate import parse_cookie as _parse_cookie
 from ._gated import GatedBackend, _title_from_tag
@@ -116,9 +116,6 @@ def normalize_key(key: str) -> str:
         return f"doi:{doi}"
     raise BadInput(f"[sciencedirect] not a DOI, PII or ScienceDirect URL: {key!r}")
 
-
-#: The module-local name for the shared gate predicate (kept: callers and tests use it).
-is_block_page = is_challenge_page
 
 
 def _unescaped_when_safe(url: str) -> str:

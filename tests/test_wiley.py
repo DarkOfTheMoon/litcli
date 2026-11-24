@@ -5,10 +5,10 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from litcli.backends._cf_gate import is_challenge_page as is_block_page
 from litcli.backends.wiley import (
     WileyBackend,
     extract_pdf_url,
-    is_block_page,
     normalize_key,
     page_to_item,
     parse_cookie,

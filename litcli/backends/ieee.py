@@ -50,11 +50,6 @@ def normalize_key(key: str) -> str:
     return _normalize_key(key, tag="ieee", url_re=_URL_RE, forms=_KEY_FORMS)
 
 
-def is_block_page(page_html: str, status: int = 200) -> bool:
-    """True when the body is the WAF challenge page or the status is 202/403."""
-    return status in (202, 403) or "gokuProps" in (page_html or "")
-
-
 def extract_pdf_url(page_html: str, doi: str = "", want_id: str = "") -> str:
     """Return the item's PDF link, or "" when the page carries none."""
     return _extract_pdf_url(page_html, doi, want_id, site=_SITE, pdf_path_re=_PDF_PATH_RE,

@@ -9,7 +9,9 @@ of the article. The pieces are therefore the same everywhere:
 * reading a ``Cookie`` header or a Netscape ``cookies.txt`` export, keeping only the
   publisher's own hosts (``parse_cookie`` / ``load_cookie``);
 * enforcing that a cookie arrives with its browser's ``user_agent`` — the clearance cookie is
-  bound to the UA and the egress IP that earned it (``session_cookie``).
+  bound to the UA and the egress IP that earned it (``session_cookie``);
+* the one ``<meta>`` tokenizer (``metas``), for the item fields and for the tags a fulltext
+  reader such as Sci-Hub reads.
 
 Everything here is pure and offline-testable.
 """
@@ -31,6 +33,15 @@ def is_challenge_page(page_html: str, status: int = 200) -> bool:
     if status == 403:
         return True
     return any(marker in (page_html or "") for marker in CHALLENGE_MARKERS)
+
+
+def is_waf_page(page_html: str, status: int = 200) -> bool:
+    """True when the body is an AWS WAF challenge page, or the status is 202/403.
+
+    The WAF serves its JS challenge as an empty 202 carrying ``gokuProps``; the site never
+    serves a real article on 202. A plain 403 is both gates' default answer.
+    """
+    return status in (202, 403) or "gokuProps" in (page_html or "")
 
 
 def parse_cookie(raw: str, hosts: tuple[str, ...]) -> dict[str, str]:
@@ -151,3 +162,36 @@ def waf_gate_message(site: str, name: str) -> str:
             "browser's own user_agent, and from the same machine: the aws-waf-token cookie is "
             "bound to both the UA and the egress IP and the server may drop it at any time "
             "(or retry from an entitled network)")
+
+
+# --- meta tokenizer ---------------------------------------------------------
+
+_META_TAG_RE = re.compile(r"<meta\b[^>]*>", re.I)
+_META_NAME_RE = re.compile(r"\bname=[\"']([^\"']+)[\"']", re.I)
+#: The value is matched up to the opening quote's own kind: an apostrophe inside a title
+#: (``Schrödinger's``) or a name (``O'Brien``) is content, not the closing delimiter.
+_META_CONTENT_RE = re.compile(r"\bcontent=([\"'])(.*?)\1", re.I | re.S)
+
+
+def is_item_meta(name: str) -> bool:
+    """True for a name that identifies the item: ``citation_*`` / ``dc.*`` (not site chrome)."""
+    return name.startswith(("citation_", "dc."))
+
+
+def metas(page_html: str, keep=is_item_meta) -> dict[str, list[str]]:
+    """Collect ``<meta name=… content=…>`` values, keyed by lowercased name.
+
+    ``keep`` filters the names — the default keeps the item fields (``citation_*``, ``dc.*``);
+    a parser that reads other names too passes ``keep=None``. One tokenizer for every reader
+    (the item pages and Sci-Hub's article page), so a quoting fix lands everywhere at once.
+    """
+    found: dict[str, list[str]] = {}
+    for tag in _META_TAG_RE.findall(page_html or ""):
+        name = _META_NAME_RE.search(tag)
+        content = _META_CONTENT_RE.search(tag)
+        if not name or not content:
+            continue
+        key = name.group(1).lower()
+        if keep is None or keep(key):
+            found.setdefault(key, []).append(content.group(2))
+    return found

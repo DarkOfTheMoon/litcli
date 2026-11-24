@@ -11,6 +11,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from litcli.backends import acm, aiaa, aip, aps, ieee, iop, tandf
+from litcli.backends._cf_gate import is_waf_page
 from litcli.errors import BadInput, BotWall, NotFound, Paywalled, Unavailable
 from tests.http_stub import speed_up, stub
 
@@ -491,9 +492,9 @@ class IeeeTest(unittest.TestCase):
         return be
 
     def test_a_waf_page_is_a_gate(self):
-        self.assertTrue(ieee.is_block_page(WAF_PAGE, 202))
-        self.assertTrue(ieee.is_block_page("", 202))
-        self.assertFalse(ieee.is_block_page("<html>article</html>", 200))
+        self.assertTrue(is_waf_page(WAF_PAGE, 202))
+        self.assertTrue(is_waf_page("", 202))
+        self.assertFalse(is_waf_page("<html>article</html>", 200))
 
     def test_a_sign_in_page_is_not_accepted_as_the_item(self):
         # Xplore redirects an unentitled session to /Xplore/login.jsp with a 200.

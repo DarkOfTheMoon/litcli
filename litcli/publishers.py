@@ -7,6 +7,11 @@ and ``completions`` all derive from this table, so a reader cannot be registered
 completion or put into the chain without a spec — and a spec cannot name a kind that does not
 exist. ``PUBLISHER_ORDER`` is the chain order (a subscription copy outranks a landing page).
 
+The table sits above the readers it names (``litcli/publishers.py``, outside ``backends/``):
+it is consumed by the orchestrating ``commands.fetch``, the chain ``fulltext``, the registry
+``config`` and ``completions`` — none of which is a reader, so keeping it in ``backends/``
+would make the package the owner of a layer it does not sit at.
+
 The hints are strings rather than callables, and the table holds no eager reader imports: this
 module must not import ``commands`` (the command imports it), and one reader failing to import
 must leave ``fulltext``, ``fetch`` and even ``litcli --help`` usable — the normalizers import
@@ -18,8 +23,8 @@ import re
 from collections.abc import Callable
 from typing import NamedTuple
 
-from ..errors import LitcliError
-from . import load_module as _module
+from .backends import load_module as _module
+from .errors import LitcliError
 
 
 def _normalizer(name: str) -> Callable[[str], str]:

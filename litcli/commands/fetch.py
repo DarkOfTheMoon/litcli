@@ -22,10 +22,10 @@ from .. import fulltext as fulltext_mod
 from .. import pdf as pdfutil
 from .. import provenance, unpaywall
 from ..backends.base import Backend, NotSupportedError
-from ..backends.publishers import _PUBLISHER_SPECS, _PublisherSpec
 from ..config import get_all_backends, get_backend
 from ..errors import LitcliError, Unavailable
 from ..paths import target_path
+from ..publishers import _PUBLISHER_SPECS, _PublisherSpec
 from .keys import normalize_related_key
 
 _ISBN_RE = re.compile(r"^(?:97[89][\d-]{10,17}|\d{9}[\dXx])$")

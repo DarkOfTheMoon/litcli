@@ -67,7 +67,7 @@ def _try_import(reg: dict[str, type[Backend]], name: str, attr: str) -> None:
     Every optional backend is tried by itself: one that is not ready (a missing dependency, a
     syntax error, a bad constant) must cost only its own backend, not the whole registry. The
     import and its cached reason live in :func:`backends.load_module`, shared with
-    ``backends.publishers`` so both subsystems see one failure policy.
+    ``publishers`` so both subsystems see one failure policy.
     """
     mod = load_module(name)
     if mod is None:
@@ -101,11 +101,10 @@ def _registry() -> dict[str, type[Backend]]:
         _try_import(reg, name, attr)
     # Every entitled/guarded publisher: its name, module and class come from the one table, so
     # a registered reader cannot be missing from the chain (and vice versa).
-    publishers = load_module("publishers")
-    specs: tuple = ()
     try:
-        specs = publishers._PUBLISHER_SPECS if publishers is not None else ()
-    except AttributeError as e:
+        from .publishers import _PUBLISHER_SPECS as specs
+    except Exception as e:  # a broken table must cost only the publisher backends
+        specs = ()
         _IMPORT_ERRORS["publishers"] = f"{type(e).__name__}: {e}"
     for spec in specs:
         _try_import(reg, spec.name, spec.backend)

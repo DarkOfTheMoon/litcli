@@ -27,6 +27,7 @@ from ..errors import BadInput, NotFound, Paywalled
 from ..models import AcademicItem, extract_year, normalize_author_name
 from ..transport import HttpError
 from ._cf_gate import gate_message, waf_gate_message
+from ._cf_gate import metas as _metas
 from ._entitled import EntitledBackend
 
 #: A browser-ish default UA: a challenge is bound to the UA that cleared it.
@@ -39,11 +40,6 @@ _GATE_NAMES = {
     "waf": "the AWS WAF token cookie (aws-waf-token)",
 }
 
-_META_TAG_RE = re.compile(r"<meta\b[^>]*>", re.I)
-_META_NAME_RE = re.compile(r"\bname=[\"']([^\"']+)[\"']", re.I)
-#: The value is matched up to the opening quote's own kind: an apostrophe inside a title
-#: (``Schrödinger's``) or a name (``O'Brien``) is content, not the closing delimiter.
-_META_CONTENT_RE = re.compile(r"\bcontent=([\"'])(.*?)\1", re.I | re.S)
 _TITLE_TAG_RE = re.compile(r"<title\b[^>]*>(.*?)</title>", re.S | re.I)
 #: How a library-platform ``<title>`` separates its parts (a pipe, or a spaced dash).
 _TITLE_SEP_RE = re.compile(r"\s*\|\s*|\s+[—–]\s+")
@@ -112,29 +108,6 @@ def _mentions(text: str, needle: str) -> bool:
 def _text(value) -> str:
     """Strip tags/entities and collapse whitespace."""
     return _WS_RE.sub(" ", html_mod.unescape(_TAG_RE.sub(" ", str(value or "")))).strip()
-
-
-def _is_item_meta(name: str) -> bool:
-    return name.startswith(("citation_", "dc."))
-
-
-def _metas(page_html: str, keep=_is_item_meta) -> dict[str, list[str]]:
-    """Collect ``<meta name=… content=…>`` values, keyed by lowercased name.
-
-    ``keep`` filters the names — the default keeps the item fields (``citation_*``, ``dc.*``);
-    a parser that reads other names too passes ``keep=None``. One tokenizer for every site, so
-    a quoting fix lands everywhere at once.
-    """
-    found: dict[str, list[str]] = {}
-    for tag in _META_TAG_RE.findall(page_html or ""):
-        name = _META_NAME_RE.search(tag)
-        content = _META_CONTENT_RE.search(tag)
-        if not name or not content:
-            continue
-        key = name.group(1).lower()
-        if keep is None or keep(key):
-            found.setdefault(key, []).append(content.group(2))
-    return found
 
 
 def _pages(first: str, last: str, single: str) -> str:

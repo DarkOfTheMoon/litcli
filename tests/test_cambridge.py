@@ -5,10 +5,10 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from litcli.backends._cf_gate import is_challenge_page as is_block_page
 from litcli.backends.cambridge import (
     CambridgeBackend,
     extract_pdf_url,
-    is_block_page,
     is_open_access,
     is_short_page,
     normalize_key,

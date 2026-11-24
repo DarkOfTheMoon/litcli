@@ -23,7 +23,7 @@ from ..errors import BadInput, BotWall, NotFound, Paywalled, Unavailable
 from ..models import AcademicItem
 from ..pdf import is_pdf
 from ..transport import HttpError
-from ._cf_gate import is_challenge_page, is_sign_in_page, session_cookie
+from ._cf_gate import is_challenge_page, is_sign_in_page, is_waf_page, session_cookie
 from .http import HttpBackend
 
 
@@ -92,10 +92,9 @@ class EntitledBackend(HttpBackend):
     # -- gate detection --------------------------------------------------------
 
     def _is_gate(self, body: str, status: int) -> bool:
+        """Whether the answer is the site's bot gate (:attr:`GATE_KIND` says which shape)."""
         if self.GATE_KIND == "waf":
-            # The WAF answers its JS challenge as an empty 202 carrying ``gokuProps``; the site
-            # never serves a real article on 202.
-            return status in (202, 403) or "gokuProps" in (body or "")
+            return is_waf_page(body, status)
         return is_challenge_page(body, status)
 
     def _open(self, url: str, **kw):

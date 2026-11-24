@@ -23,7 +23,6 @@ import re
 from urllib.parse import urlparse
 
 from ..models import AcademicItem
-from ._cf_gate import is_challenge_page
 from ._cf_gate import load_cookie as _load_cookie
 from ._cf_gate import parse_cookie as _parse_cookie
 from ._gated import GatedBackend
@@ -72,9 +71,6 @@ def normalize_key(key: str) -> str:
     """Classify a key and return ``doi:<DOI>`` or ``url:<Cambridge Core URL>``."""
     return _normalize_key(key, tag="cambridge", url_re=_URL_RE, forms=_KEY_FORMS)
 
-
-#: The gate predicate, bound by name for the module's own API.
-is_block_page = is_challenge_page
 
 
 def is_short_page(url: str) -> bool:

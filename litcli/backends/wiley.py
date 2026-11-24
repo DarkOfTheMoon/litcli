@@ -31,7 +31,7 @@ from ..errors import BadInput, BotWall, Paywalled, Unavailable
 from ..models import AcademicItem, extract_year, normalize_author_name
 from ..pdf import is_pdf
 from ..transport import HttpError
-from ._cf_gate import gate_message, is_challenge_page
+from ._cf_gate import gate_message
 from ._cf_gate import load_cookie as _load_cookie
 from ._cf_gate import parse_cookie as _parse_cookie
 from ._gated import GatedBackend, _clean_doi, _title_from_tag
@@ -110,9 +110,6 @@ def normalize_key(key: str) -> str:
         raise BadInput(f"[wiley] not a DOI, wiley:<DOI> or Wiley article URL: {key!r}")
     return f"doi:{doi}"
 
-
-#: The gate predicate, bound by name for the module's own API.
-is_block_page = is_challenge_page
 
 
 def _to_pdfdirect(url: str) -> str:
