@@ -231,6 +231,16 @@ IEEE Xplore (`ieeexplore.ieee.org`, `[backends.ieee]`) sits behind a different g
 cleared by `TS*` cookies) — and an unentitled session's PDF endpoint redirects to `/Xplore/login.jsp?…&authDecision=…`. All six take only institutionally subscribed or OA fulltext,
 one DOI at a time, at low frequency.
 
+**Rather than copying cookies, use the browser session**: with Chrome installed, run
+`litcli browser login sciencedirect` (see `litcli browser status` for the site names), sign in
+institutionally once in the window that opens, and leave the browser up. `fetch` then pulls
+these publishers' fulltext through that live browser, taking both page and PDF in-page — the
+credentials never leave the browser and renew themselves. `litcli browser status` reports each
+site as `signed in` / `signed out` / `gated`. It is switched on by `[browser].enabled = true`
+(off by default); while off the cookie path above runs unchanged, and a configured cookie keeps
+working. The browser inherits `[network].proxy` — a clearance is bound to the egress IP, so both
+must leave by the same one.
+
 ## Configuration
 
 `~/.config/litcli/config.toml` (`%APPDATA%\litcli\config.toml` on Windows; `$LITCLI_CONFIG`

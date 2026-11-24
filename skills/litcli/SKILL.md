@@ -78,6 +78,7 @@ description: 用 litcli 与用户的学术资料互操作——检索、读取�
   六家都必须成对配 `cookie` + `user_agent`，未配会话时报的就是这道门。清关 cookie 是 HttpOnly（`cf_clearance` /
   `aws-waf-token` / `TS*`），**手抄 Cookie 头很容易漏掉**：更稳的是用浏览器扩展/`curl` 导出 Netscape `cookies.txt` 原样指给
   `cookie_file`，导出里的 `#HttpOnly_` 行 litcli 会读。
+- **不想搬 cookie 就用共享浏览器会话**（`[browser].enabled = true`，默认关闭）：装好 Chrome，`litcli browser login <站点>` 在弹出的窗口里机构登录一次，浏览器保持运行；此后 `fetch` 对这些出版社在页内取页与 PDF，凭据不出浏览器、过期自续，`litcli browser status` 逐站报 `signed in` / `signed out` / `gated`。关着时逐字走 cookie 路径，配了 cookie 照样能工作；浏览器自动沿用 `[network].proxy`（清关绑出口 IP，两边须同一出口）。
 - **Sci-Hub 是可选兜底、默认不介入**：`fetch` 仍先走本地库/Unpaywall/OpenAlex，只有加 `--scihub`（或配置启用）才试公开副本；输出标 `source=scihub` 且注明非 OA 授权。镜像用 ALTCHA 验人，litcli 用本地 `hashlib` 解同一道题（不绕过），每次单 DOI、低频。
 - **Z-Library 给的是公开副本（非 OA 授权）**：`fetch --book` 用来找 Sci-Hub 没有的图书（Sci-Hub 只按 DOI 解析论文）。无需 Playwright，但用前要过站点“Checking your browser”工作量证明——litcli 用本地 `hashlib` 解同一道题（不绕过）。**匿名每日下载有配额**，超限会明确提示，可在 `[backends.zlibrary]` 配 `email`/`password` 登录放宽。只取公开书目元数据与公开 PDF 直链。
 - **豆瓣只取公开书目元数据、不绕过反爬**：豆瓣无公开 API；`search --backend douban` 也需 `install.sh --with-douban` 装 Playwright + Chromium，但**默认无头**——搜索页 SSR 直接给书卡 JSON，无需登录/滑块。仅当被风控时手动在可见浏览器处理，脚本不程序化绕过。图书以 ISBN 为身份键（无 DOI），`search --all` 聚合时与期刊/论文的 DOI 身份键并行。

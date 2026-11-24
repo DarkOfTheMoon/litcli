@@ -14,6 +14,7 @@ from pathlib import Path
 
 from .backends import import_errors as _IMPORT_ERRORS
 from .backends import load_module
+from .backends._entitled import EntitledBackend
 from .backends.base import Backend
 from .errors import BadInput
 from .paths import config_dir
@@ -164,7 +165,26 @@ def discover_backends(config: dict | None = None, strict: bool = False) -> dict[
             # The registry already knows the import-time cause when there is one: "unknown
             # backend type" alone would hide it behind a name the config plainly mentions.
             failed_backends[name] = _IMPORT_ERRORS.get(name) or f"{type(e).__name__}: {e}"
+    _attach_browser_session(out, cfg)
     return out
+
+
+def _attach_browser_session(backends: dict, cfg: dict) -> None:
+    """Hand the configured browser session to every entitled reader that wants one.
+
+    A backend built with its own ``session`` keeps it. Without ``[browser].enabled`` this is a
+    no-op, so the cookie path stays the default and no browser ever starts unasked.
+    """
+    if not any(isinstance(b, EntitledBackend) for b in backends.values()):
+        return
+    from .browser import session_from_config
+
+    session = session_from_config(cfg)
+    if session is None:
+        return
+    for backend in backends.values():
+        if isinstance(backend, EntitledBackend) and backend.session is None:
+            backend.session = session
 
 
 def get_backend(name: str = "zotero", config: dict | None = None) -> Backend:

@@ -197,6 +197,12 @@ ACM（`dl.acm.org`）、APS（`link.aps.org`）、IOPscience（`iopscience.iop.o
 DOAB 的 `/rest` 拒绝无 JS 客户端，所以走它的 Atom feed；DOAB 详情页、Sci-Hub、Z-Library 用可解的工作量证明，
 litcli 在本地做题后复用 cookie，不改写、不绕过。知网与豆瓣的滑块交你在可见浏览器手动完成。
 
+**不想搬 cookie 就走浏览器会话**：装好 Chrome，`litcli browser login sciencedirect`（站点名见 `litcli browser status`）
+在弹出的窗口里机构登录一次，浏览器保持运行；之后 `fetch` 对这些出版社的取全文就走这只活着的浏览器，
+页面与 PDF 都在页内取，凭据不离开浏览器、过期也会自己续。`litcli browser status` 逐站看 `signed in` / `signed out` / `gated`。
+它由 `[browser].enabled = true` 打开（默认关闭）；关着时逐字走上面的 cookie 路径，配了 cookie 照样能工作。
+浏览器沿用 `[network].proxy`——清关绑出口 IP，两边必须是同一出口。
+
 ## 配置
 
 `~/.config/litcli/config.toml`（Windows 为 `%APPDATA%\litcli\config.toml`；`$LITCLI_CONFIG` 可另指）；

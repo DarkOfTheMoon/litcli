@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import paths
+from .debug import notice
 from .errors import External
 
 
@@ -95,6 +97,29 @@ def _default_launcher(profile, headless, channel, proxy) -> _Runtime:
             f"could not start the browser (run `litcli backends install-browser` first): {e}",
             hint="litcli backends install-browser") from e
     return _Runtime(context, engine.stop)
+
+
+#: How a real Chrome is spelled on each platform (the ``chrome`` channel needs one installed).
+_CHROME_BINARIES = ("google-chrome", "google-chrome-stable", "chrome", "chromium", "chromium-browser")
+
+
+def session_from_config(cfg: dict) -> Session | None:
+    """The session ``[browser]`` asks for, or ``None`` when the section is off.
+
+    ``[network].proxy`` is passed on: the clearance is bound to the egress IP, so the browser
+    must leave by the same proxy as the request path. Without a real Chrome the ``chrome``
+    channel is dropped (Playwright would refuse to launch) and the bundled Chromium is used.
+    """
+    section = cfg.get("browser") or {}
+    if not section.get("enabled"):
+        return None
+    channel = section.get("channel", "chrome")
+    if channel and not any(shutil.which(binary) for binary in _CHROME_BINARIES):
+        notice("no Chrome found; the browser session falls back to the bundled Chromium")
+        channel = None
+    return Session(profile=section.get("profile") or None,
+                   headless=bool(section.get("headless", False)), channel=channel,
+                   proxy=(cfg.get("network") or {}).get("proxy"))
 
 
 class Session:

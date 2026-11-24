@@ -205,3 +205,14 @@ type = "zenodo"
 # 可选:统一代理(校园/VPN 访问海外学术源)。留空则默认读环境变量 HTTP_PROXY / HTTPS_PROXY。
 [network]
 # proxy = "http://127.0.0.1:7890"
+
+# 可选:共享浏览器会话。装好 Chrome,`litcli browser login <站点>` 在弹出的窗口里机构登录
+# 一次,之后 `fetch` 的出版社取全文就走这只活着的浏览器,无需再搬 cookie——清关凭据绑在
+# 真浏览器自己的 UA 与出口 IP 上,并且自己会续。默认关闭([browser].enabled = false),
+# 关着时逐字走 cookie 路径;配了 cookie 也照样能工作。代理自动沿用 [network].proxy
+# (清关绑出口 IP,两边必须同一出口)。
+[browser]
+# enabled = true
+# profile = "~/.config/litcli/browser-profile"   # 独立 profile,不碰主 Chrome
+# headless = false                               # 出版社闸要真浏览器,无头可试但更容易被挡
+# channel = "chrome"                             # 缺 Chrome 时自动退回随包 Chromium
