@@ -30,14 +30,15 @@ import urllib.parse
 from typing import ClassVar
 from urllib.parse import urlparse
 
-from .. import provenance
-from ..errors import BadInput, NotFound, Paywalled, Unavailable
+from ..errors import BadInput, NotFound, Paywalled
 from ..models import AcademicItem, extract_year, normalize_author_name
 from ..transport import HttpError
 from ._cf_gate import is_challenge_page
 from ._cf_gate import load_cookie as _load_cookie
 from ._cf_gate import parse_cookie as _parse_cookie
-from ._gated import GatedBackend
+from ._gated import _DOI_RE, GatedBackend, _clean_doi, _title_from_tag
+from ._gated import _metas as _all_metas
+from ._gated import doi_from as _doi_from
 
 _SITE = "https://link.springer.com"
 
@@ -66,16 +67,8 @@ _ALLOWED_HOSTS = ("springer.com", "springernature.com", "nature.com", "biomedcen
 #: Repeatable: a pasted key may carry ``springer/`` *and* ``doi:`` (the ``source/key`` form the
 #: table prints prepends to a key that already says ``doi:``).
 _DOI_PREFIX_RE = re.compile(r"^(?:(?:https?://(?:dx\.)?doi\.org/|doi:\s*|springer[:\/]\s*)\s*)+", re.I)
-_DOI_RE = re.compile(r"^10\.\d{4,9}/[^\s?#]+$")
-#: Characters a DOI picks up from a URL tail but does not own.
-_DOI_TAIL = ".,;:)]}/"
-#: A DOI in running text (a pasted link leaves the host before it).
-_DOI_FIND_RE = re.compile(r"10\.\d{4,9}/[^\s?#]+")
 
 
-def _clean(doi: str) -> str:
-    """Decode a DOI and drop the separators running text trails along it."""
-    return urllib.parse.unquote(doi or "").rstrip(_DOI_TAIL)
 #: A page shape a DOI lives under. A journal article answers only on ``/article/``, a book
 #: chapter only on ``/chapter/`` and a reference-work entry only on ``/referenceworkentry/``;
 #: the other two 404. All three carry the same ``citation_*`` tags and ``citation_pdf_url``, so
@@ -96,11 +89,6 @@ _SUBPAGE_RE = re.compile(
 
 _LD_RE = re.compile(
     r'<script\b[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.S | re.I)
-_META_TAG_RE = re.compile(r"<meta\b[^>]*>", re.I)
-_META_NAME_RE = re.compile(r"\bname=[\"']([^\"']+)[\"']", re.I)
-#: The value runs to the opening quote's own kind: an apostrophe in a title is content.
-_META_CONTENT_RE = re.compile(r"\bcontent=([\"'])(.*?)\1", re.I | re.S)
-_TITLE_TAG_RE = re.compile(r"<title\b[^>]*>(.*?)</title>", re.S | re.I)
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
 #: A PDF anchor on the page (``href="/content/pdf/<DOI>.pdf"``). Related-article cards carry
@@ -123,16 +111,8 @@ def _on_springer(url: str) -> bool:
 # --- pure helpers (no network) ---
 
 def doi_from(key: str) -> str:
-    """Return a bare DOI from a DOI-shaped key (or a ``doi.org``/``springer:`` form), else "".
-
-    A query tail (``?download=true``) or fragment is not part of the DOI.
-    """
-    k = re.split(r"[?#\s]", _DOI_PREFIX_RE.sub("", (key or "").strip()).strip(),
-                 maxsplit=1)[0].rstrip(_DOI_TAIL)
-    if _DOI_RE.match(k):
-        return k
-    found = _DOI_FIND_RE.search(key or "")
-    return _clean(found.group(0)) if found else ""
+    """Return a bare DOI from a DOI-shaped key (or the site's own prefix form), else ""."""
+    return _doi_from(key, prefix_re=_DOI_PREFIX_RE)
 
 
 def _trim_subpage(doi: str) -> str:
@@ -153,7 +133,7 @@ def normalize_key(key: str) -> str:
         # finder would keep (the URL regex knows to drop it).
         m = _URL_DOI_RE.search(text)
         if m:
-            return _trim_subpage((m.group(1) or m.group(2)).rstrip(_DOI_TAIL))
+            return _trim_subpage(_clean_doi(m.group(1) or m.group(2)))
         found = doi_from(text)
         if found:
             return _trim_subpage(found)
@@ -169,9 +149,8 @@ def normalize_key(key: str) -> str:
     return f"doi:{doi}"
 
 
-def is_block_page(page_html: str, status: int = 200) -> bool:
-    """True when the body is a bot/entitlement gate, or the status is a plain 403."""
-    return is_challenge_page(page_html, status)
+#: The gate predicate, bound by name for the module's own API.
+is_block_page = is_challenge_page
 
 
 def is_open_access(page_html: str) -> bool:
@@ -238,14 +217,8 @@ def _as_list(value) -> list:
 
 
 def _metas(page_html: str) -> dict[str, list[str]]:
-    """Collect ``<meta name=… content=…>`` pairs by lower-case name."""
-    found: dict[str, list[str]] = {}
-    for tag in _META_TAG_RE.findall(page_html or ""):
-        name = _META_NAME_RE.search(tag)
-        content = _META_CONTENT_RE.search(tag)
-        if name and content:
-            found.setdefault(name.group(1).lower(), []).append(content.group(2))
-    return found
+    """Collect every ``<meta name=… content=…>`` pair (this parser reads non-item names too)."""
+    return _all_metas(page_html, keep=None)
 
 
 def _record_doi(rec: dict) -> str:
@@ -383,10 +356,7 @@ def page_to_item(page_html: str, key: str) -> AcademicItem:
     if not fields["title"] and not fields["creators"]:
         fields = _dc_fields(metas)
     if not fields["title"]:
-        title_tag = _TITLE_TAG_RE.search(page_html or "")
-        if title_tag:
-            title = _text(title_tag.group(1))
-            fields["title"] = re.sub(r"\s*[|—-]\s*SpringerLink\s*$", "", title).strip()
+        fields["title"] = _title_from_tag(page_html, "SpringerLink")
     if from_ld and doi and fields["doi"] and \
             fields["doi"].lower().rstrip(".") != doi.lower().rstrip("."):
         fields["doi"] = ""  # a related card's record, not this article's: the key is the truth
@@ -471,7 +441,7 @@ class SpringerBackend(GatedBackend):
         ``idp.springer.com``, which sets the identity cookie and sends the client back; the
         shared cookie jar carries it, so the hop is transparent.
         """
-        hit = self._memo_get(doi)
+        hit = self._memo.get(doi)
         if hit is not None:
             return hit
         quoted = urllib.parse.quote(doi, safe="/")
@@ -486,7 +456,7 @@ class SpringerBackend(GatedBackend):
                     missing = missing or e
                     continue
                 raise
-            self._memo_put(doi, (body, url))
+            self._memo[doi] = (body, url)
             return body, url
         if missing is not None:  # every kind 404ed: the caller turns this into NotFound
             raise missing
@@ -512,22 +482,16 @@ class SpringerBackend(GatedBackend):
         item.url = url  # a chapter answers on /chapter/, not the /article/ default
         if "/chapter/" in url or "/referenceworkentry/" in url:
             item.item_type = "chapter"  # a book chapter / encyclopedia entry, not a journal article
-        if not item.title:
-            raise RuntimeError(f"[{self.name}] could not parse the article page: doi:{doi}")
-        self._guard_sign_in(body, url, item.title)
+        # No ``_short_page`` to guard: an unentitled session is sent back to the same article
+        # page, so there is no related-item-card short page to mistake the licence block for.
+        return self._finish_item(item, body, url)
+
+    def _pdf_link(self, body: str, item: AcademicItem, landed: str) -> str:
+        # The key's DOI, not the page's ``citation_doi`` (a related card's may be parsed in).
         try:
-            pdf_url = extract_pdf_url(body, doi)
+            return extract_pdf_url(body, _doi_from(item.key))
         except RuntimeError:  # an odd host must not cost the metadata
-            pdf_url = ""
-        if pdf_url:
-            item.attachments = [pdf_url]
-        if is_open_access(body) and not self._short_page(url):
-            # The chain labels the hit from this: an open-access article is not a subscription
-            # copy, so its note and its "needs a session" advice would both be wrong. A licence
-            # block on a paywalled page can be a related-item card's, hence the short-page check.
-            item.extra = {**item.extra, "open_access": True}
-            item.access = provenance.OA
-        return item
+            return ""
 
     def _entitled(self) -> bool:
         """Whether the session holds a filled-in Springer institution token.
@@ -553,31 +517,19 @@ class SpringerBackend(GatedBackend):
     def get_attachment(self, key: str) -> bytes:
         """Download the article PDF (an entitled session, or open access, serves it)."""
         doi = normalize_key(key)[4:]
-        page, _url = self._page(doi)
+        page, landed = self._page(doi)
         url = extract_pdf_url(page, doi)
         if not url:
             raise Paywalled(
                 f"[{self.name}] the article page carries no PDF link for doi:{doi}")
-        open_access = is_open_access(page)
-        try:
-            response = self.fetch(url, headers={"Accept": "application/pdf"})
-        except HttpError as e:
-            if is_block_page(e.body, e.status):
-                raise Unavailable(f"[{self.name}] PDF download was gated: {_BLOCK_MSG}") from e
-            raise
-        if response.content.startswith(b"%PDF"):
-            return response.content
-        # A session that is neither entitled nor looking at an open-access article is sent
-        # back to the article page (an HTML body, never a 403).
-        landed = urlparse(str(response.url)).path or url
-        if open_access:
-            why = "the article is open access but the endpoint answered an HTML page"
-        elif self._entitled():
-            why = ("the session's institution token was not accepted (expired, or not "
-                   "subscribed to this title)")
-        else:
-            why = ("the session holds no institution token (sim-inst-token), so the download "
-                   "landed on the article page")
-        raise Paywalled(
-            f"[{self.name}] no PDF bytes: {why} (landed on {landed}) — open {url} in your "
-            "entitled browser, or refresh the cookie+user_agent pair from an authenticated tab")
+        return self._gated_download(url, page, landed)
+
+    def _refusal_reason(self, page: str, landed: str, response) -> str:
+        """Why the PDF endpoint answered HTML: the institution token is Springer's own state."""
+        if self.is_open_access(page):
+            return "the article is open access but the endpoint answered an HTML page"
+        if self._entitled():
+            return ("the session's institution token was not accepted (expired, or not "
+                    "subscribed to this title)")
+        return ("the session holds no institution token (sim-inst-token), so the download "
+                "landed on the article page")

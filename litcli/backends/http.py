@@ -208,14 +208,16 @@ class HttpBackend(Session, Backend):
             cache.put(key, body)
         return data
 
-    def fetch_text(self, url: str, **kw) -> str:
+    def fetch_text(self, url: str, *, cache_read: bool = True, **kw) -> str:
         """GET as text, through the response cache when this backend allows it.
 
         The retry/pacing path is skipped on a hit, which is the point: a repeated search
-        should not spend the site's budget again.
+        should not spend the site's budget again. ``cache_read=False`` fetches past a stored
+        entry but still stores the fresh body over it (a page read to clear a bot check must
+        not be answered from the stale one, and the real page has to replace it).
         """
         key = self._cache_slot(url, kw)
-        if key is not None:
+        if key is not None and cache_read:
             hit = cache.get(key)
             if hit is not None:
                 log(f"cache hit {self.name}: {debug.mask(url)}")

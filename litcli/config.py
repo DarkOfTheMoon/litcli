@@ -10,9 +10,10 @@ import copy
 import os
 import tomllib
 from functools import cache
-from importlib import import_module
 from pathlib import Path
 
+from .backends import import_errors as _IMPORT_ERRORS
+from .backends import load_module
 from .backends.base import Backend
 from .errors import BadInput
 from .paths import config_dir
@@ -60,22 +61,18 @@ def load_config(path: str | Path | None = None) -> dict:
     return copy.deepcopy(_INBUILT_DEFAULT)
 
 
-#: Why a backend's module could not be imported, by backend name. ``_registry`` swallows the
-#: exception to keep the rest alive; without this the failure would resurface only as
-#: "unknown backend type" and the real cause (a bad constant, say) would be lost.
-_IMPORT_ERRORS: dict[str, str] = {}
-
-
-def _try_import(reg: dict[str, type[Backend]], name: str, module: str, attr: str) -> None:
-    """Register ``attr`` of ``backends.<module>`` as ``name``, or record why it cannot be imported.
+def _try_import(reg: dict[str, type[Backend]], name: str, attr: str) -> None:
+    """Register ``attr`` of ``backends.<name>``, or record why it cannot be imported.
 
     Every optional backend is tried by itself: one that is not ready (a missing dependency, a
     syntax error, a bad constant) must cost only its own backend, not the whole registry. The
-    reason is kept in :data:`_IMPORT_ERRORS` — the swallow would otherwise surface as "unknown
-    backend type", a name the config plainly has.
+    import and its cached reason live in :func:`backends.load_module`, shared with
+    ``backends.publishers`` so both subsystems see one failure policy.
     """
+    mod = load_module(name)
+    if mod is None:
+        return
     try:
-        mod = import_module(f".backends.{module}", __package__)
         reg[name] = getattr(mod, attr)
     except Exception as e:
         _IMPORT_ERRORS[name] = f"{type(e).__name__}: {e}"
@@ -101,16 +98,17 @@ def _registry() -> dict[str, type[Backend]]:
 
     reg: dict[str, type[Backend]] = {"zotero_local": zotero_local.ZoteroLocalBackend}
     for name, attr in _OPTIONAL_BACKENDS:
-        _try_import(reg, name, name, attr)
+        _try_import(reg, name, attr)
     # Every entitled/guarded publisher: its name, module and class come from the one table, so
     # a registered reader cannot be missing from the chain (and vice versa).
+    publishers = load_module("publishers")
+    specs: tuple = ()
     try:
-        from .backends.publishers import _PUBLISHER_SPECS
-    except Exception as e:
+        specs = publishers._PUBLISHER_SPECS if publishers is not None else ()
+    except AttributeError as e:
         _IMPORT_ERRORS["publishers"] = f"{type(e).__name__}: {e}"
-        _PUBLISHER_SPECS = ()
-    for spec in _PUBLISHER_SPECS:
-        _try_import(reg, spec.name, spec.name, spec.backend)
+    for spec in specs:
+        _try_import(reg, spec.name, spec.backend)
     return reg
 
 
@@ -130,6 +128,17 @@ def _make_backend(name: str, cfg: dict) -> Backend:
 failed_backends: dict[str, str] = {}
 
 
+def section_disabled(name: str, cfg: dict) -> bool:
+    """True when ``[backends.<name>]`` is switched off (``enabled = false``).
+
+    One predicate for the whole codebase: every caller that walks the backends table has to
+    tell "the user switched it off" from "it is not configured" — and must not build the
+    section either way.
+    """
+    section = (cfg.get("backends") or {}).get(name)
+    return isinstance(section, dict) and section.get("enabled") is False
+
+
 def discover_backends(config: dict | None = None, strict: bool = False) -> dict[str, Backend]:
     """Instantiate every backend from config, skipping sections marked ``enabled = false``.
 
@@ -146,7 +155,7 @@ def discover_backends(config: dict | None = None, strict: bool = False) -> dict[
             if strict:
                 raise TypeError(f"[backends.{name}] is not a table")
             continue
-        if bcfg.get("enabled") is False:
+        if section_disabled(name, cfg):
             continue
         try:
             out[name] = _make_backend(name, bcfg)
@@ -160,7 +169,8 @@ def discover_backends(config: dict | None = None, strict: bool = False) -> dict[
 
 
 def get_backend(name: str = "zotero", config: dict | None = None) -> Backend:
-    backends = discover_backends(config)
+    cfg = config if config is not None else load_config()
+    backends = discover_backends(cfg)
     if name in backends:
         return backends[name]
     # It is configured but its section could not be built (a bad cookie_file, say): say so
@@ -169,9 +179,7 @@ def get_backend(name: str = "zotero", config: dict | None = None) -> Backend:
         raise RuntimeError(f"backend '{name}' failed to build: {failed_backends[name]}")
     # A section switched off must not come back through the registry: ``fetch`` rebuilds its
     # corpora and publisher steps here, so ``enabled = false`` has to be honoured too.
-    cfg = config if config is not None else load_config()
-    section = (cfg.get("backends") or {}).get(name)
-    if isinstance(section, dict) and section.get("enabled") is False:
+    if section_disabled(name, cfg):
         raise RuntimeError(f"backend '{name}' is disabled in the config (enabled = false)")
     # Allow a registered-but-unconfigured optional backend to be requested directly (e.g.
     # `search --backend douban` / `--backend cnki`) with default kwargs, rather than requiring

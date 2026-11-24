@@ -18,9 +18,9 @@ from ..models import AcademicItem
 from ._cf_gate import is_challenge_page
 from ._cf_gate import load_cookie as _load_cookie
 from ._cf_gate import parse_cookie as _parse_cookie
-from ._gated import OA_RE as _OA_RE
 from ._gated import GatedBackend
 from ._gated import extract_pdf_url as _extract_pdf_url
+from ._gated import is_open_access as is_open_access
 from ._gated import normalize_key as _normalize_key
 from ._gated import page_to_item as _page_to_item
 
@@ -46,14 +46,8 @@ def normalize_key(key: str) -> str:
                           embedded_doi_re=_URL_DOI_RE)
 
 
-def is_block_page(page_html: str, status: int = 200) -> bool:
-    """True when the body is the Cloudflare challenge page, or the status is a plain 403."""
-    return is_challenge_page(page_html, status)
-
-
-def is_open_access(page_html: str) -> bool:
-    """True when the page carries a CC licence block (its PDF needs no session)."""
-    return bool(_OA_RE.search(page_html or ""))
+#: The gate predicate, bound by name for the module's own API.
+is_block_page = is_challenge_page
 
 
 def extract_pdf_url(page_html: str, doi: str = "", want_id: str = "") -> str:
@@ -92,4 +86,3 @@ class AiaaBackend(GatedBackend):
     EMBEDDED_DOI_RE = _URL_DOI_RE
     PDF_PATH_RE = _PDF_PATH_RE
     PDF_URL_TEMPLATE = _SITE + "/doi/pdf/{doi}"
-    OA_RE = _OA_RE

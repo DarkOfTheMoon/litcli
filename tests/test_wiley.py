@@ -235,6 +235,10 @@ class WileyBackendTest(unittest.TestCase):
     def setUp(self):
         self.be = WileyBackend()
         speed_up(self.be)
+        # A sessioned instance: without a session the refusal is always "no clearance cookie",
+        # which would hide the entitlement wording these tests are about.
+        self.sessioned = WileyBackend(cookie="sessionid=abc", user_agent="UA/1")
+        speed_up(self.sessioned)
 
     def test_capabilities_are_read_only(self):
         self.assertEqual(self.be.capabilities, {"read"})
@@ -322,20 +326,20 @@ class WileyBackendTest(unittest.TestCase):
 
     def test_get_attachment_non_pdf_body_is_reported_as_not_entitled(self):
         # An unentitled session gets the PDF URL redirected to the abstract page (HTML).
-        stub(self.be, (200, CITATION_PAGE + _pdf_anchor(DOI)), (200, "<html>login</html>"))
+        stub(self.sessioned, (200, CITATION_PAGE + _pdf_anchor(DOI)), (200, "<html>login</html>"))
         with self.assertRaises(Exception) as ctx:
-            self.be.get_attachment(DOI)
+            self.sessioned.get_attachment(DOI)
         self.assertIn("not entitled", str(ctx.exception))
         self.assertIn("cookie+user_agent", str(ctx.exception))
 
     def test_access_denied_redirect_is_named(self):
         # Unentitled: pdfdirect 302s to /doi/abs/ with atypon-access-denied: true.
-        stub(self.be, (200, CITATION_PAGE + _pdf_anchor(DOI)),
+        stub(self.sessioned, (200, CITATION_PAGE + _pdf_anchor(DOI)),
              (302, "", {"location": f"https://onlinelibrary.wiley.com/doi/abs/{DOI}",
                         "atypon-access-denied": "true"}),
              (200, "<html>abstract only</html>"))
         with self.assertRaises(Exception) as ctx:
-            self.be.get_attachment(DOI)
+            self.sessioned.get_attachment(DOI)
         self.assertIn("atypon-access-denied", str(ctx.exception))
         self.assertIn(f"/doi/abs/{DOI}", str(ctx.exception))
 

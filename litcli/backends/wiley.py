@@ -29,11 +29,14 @@ from urllib.parse import urlparse
 
 from ..errors import BadInput, BotWall, Paywalled, Unavailable
 from ..models import AcademicItem, extract_year, normalize_author_name
+from ..pdf import is_pdf
 from ..transport import HttpError
 from ._cf_gate import gate_message, is_challenge_page
 from ._cf_gate import load_cookie as _load_cookie
 from ._cf_gate import parse_cookie as _parse_cookie
-from ._gated import GatedBackend
+from ._gated import GatedBackend, _clean_doi, _title_from_tag
+from ._gated import _metas as _all_metas
+from ._gated import doi_from as _doi_from
 
 _SITE = "https://onlinelibrary.wiley.com"
 
@@ -48,27 +51,14 @@ _COOKIE_HOSTS = ("onlinelibrary.wiley.com", "wiley.com")
 _ALLOWED_HOSTS = ("wiley.com",)
 
 _DOI_PREFIX_RE = re.compile(r"^(?:https?://(?:dx\.)?doi\.org/|doi:\s*|wiley:\s*)", re.I)
-_DOI_RE = re.compile(r"^10\.\d{4,9}/[^\s?#]+$")
-#: Characters a DOI picks up from a URL tail but does not own.
-_DOI_TAIL = ".,;:)]}/"
-#: A DOI in running text (a pasted link leaves the host before it).
-_DOI_FIND_RE = re.compile(r"10\.\d{4,9}/[^\s?#]+")
 
 
-def _clean(doi: str) -> str:
-    """Decode a DOI and drop the separators running text trails along it."""
-    return urllib.parse.unquote(doi or "").rstrip(_DOI_TAIL)
 #: A DOI inside an onlinelibrary URL (``/doi/<DOI>``, ``/doi/abs/<DOI>``, ``/doi/pdf/<DOI>``…).
 _URL_DOI_RE = re.compile(
     r"(?:/doi/|/doi/(?:abs|full|epdf|pdf|pdfdirect)/)(10\.\d{4,9}/[^?#\s]+)", re.I)
 
 _LD_RE = re.compile(
     r'<script\b[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.S | re.I)
-_META_TAG_RE = re.compile(r"<meta\b[^>]*>", re.I)
-_META_NAME_RE = re.compile(r"\bname=[\"']([^\"']+)[\"']", re.I)
-#: The value runs to the opening quote's own kind: an apostrophe in a title is content.
-_META_CONTENT_RE = re.compile(r"\bcontent=([\"'])(.*?)\1", re.I | re.S)
-_TITLE_TAG_RE = re.compile(r"<title\b[^>]*>(.*?)</title>", re.S | re.I)
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
 #: A PDF anchor on the page: ``/doi/pdfdirect/<DOI>?download=true`` or ``/doi/pdf/<DOI>``.
@@ -94,16 +84,8 @@ def _on_wiley(url: str) -> bool:
 # --- pure helpers (no network) ---
 
 def doi_from(key: str) -> str:
-    """Return a bare DOI from a DOI-shaped key (or a ``doi.org``/``wiley:`` form), else "".
-
-    A query tail (``?download=true``) or fragment is not part of the DOI.
-    """
-    k = re.split(r"[?#\s]", _DOI_PREFIX_RE.sub("", (key or "").strip()).strip(),
-                 maxsplit=1)[0].rstrip(_DOI_TAIL)
-    if _DOI_RE.match(k):
-        return k
-    found = _DOI_FIND_RE.search(key or "")
-    return _clean(found.group(0)) if found else ""
+    """Return a bare DOI from a DOI-shaped key (or the site's own prefix form), else ""."""
+    return _doi_from(key, prefix_re=_DOI_PREFIX_RE)
 
 
 def normalize_key(key: str) -> str:
@@ -117,7 +99,7 @@ def normalize_key(key: str) -> str:
         if not found:
             m = _URL_DOI_RE.search(text)
             if m:
-                found = m.group(1).rstrip(_DOI_TAIL)
+                found = _clean_doi(m.group(1))
         return found
 
     k = (key or "").strip()
@@ -129,9 +111,8 @@ def normalize_key(key: str) -> str:
     return f"doi:{doi}"
 
 
-def is_block_page(page_html: str, status: int = 200) -> bool:
-    """True when the body is a challenge page, or the status is a plain 403."""
-    return is_challenge_page(page_html, status)
+#: The gate predicate, bound by name for the module's own API.
+is_block_page = is_challenge_page
 
 
 def _to_pdfdirect(url: str) -> str:
@@ -205,15 +186,8 @@ def _as_list(value) -> list:
 
 
 def _metas(page_html: str) -> dict[str, list[str]]:
-    """Collect ``<meta name=… content=…>`` pairs by lower-case name."""
-    found: dict[str, list[str]] = {}
-    for tag in _META_TAG_RE.findall(page_html or ""):
-        name = _META_NAME_RE.search(tag)
-        content = _META_CONTENT_RE.search(tag)
-        if name and content:
-            key = name.group(1).lower()
-            found.setdefault(key, []).append(content.group(2))
-    return found
+    """Collect every ``<meta name=… content=…>`` pair (this parser reads non-item names too)."""
+    return _all_metas(page_html, keep=None)
 
 
 def _record_doi(rec: dict) -> str:
@@ -362,10 +336,7 @@ def page_to_item(page_html: str, key: str) -> AcademicItem:
     else:
         fields = _dc_fields(metas)
     if not fields["title"]:
-        title_tag = _TITLE_TAG_RE.search(page_html or "")
-        if title_tag:
-            title = _text(title_tag.group(1))
-            fields["title"] = re.sub(r"\s*-\s*Wiley Online Library\s*$", "", title).strip()
+        fields["title"] = _title_from_tag(page_html, "Wiley Online Library")
     if from_ld and doi and fields["doi"] and \
             fields["doi"].lower().rstrip(".") != doi.lower().rstrip("."):
         fields["doi"] = ""  # a related card's record, not this article's: the key is the truth
@@ -444,12 +415,12 @@ class WileyBackend(GatedBackend):
         behind a ``doi.org`` hop. The shared per-key memo is kept, so ``get`` and
         ``get_attachment`` share one request.
         """
-        body = self._memo_get(doi)
+        body = self._memo.get(doi)
         if body is not None:
             return body
         url = f"{_SITE}/doi/{urllib.parse.quote(doi)}"
         body = self._open(url).text
-        self._memo_put(doi, body)
+        self._memo[doi] = body
         return body
 
     # -- Backend ---------------------------------------------------------------
@@ -474,16 +445,15 @@ class WileyBackend(GatedBackend):
                                 attachments=[_tdm_url(doi)],
                                 extra={"tdm_url": _tdm_url(doi)}, item_type="article")
         item = page_to_item(body, f"doi:{doi}")
-        if not item.title:
-            raise RuntimeError(f"[{self.name}] could not parse the article page: doi:{doi}")
-        self._guard_sign_in(body, doi, item.title)
+        # No OA marking: Wiley records no open-access signal of its own in the page.
+        return self._finish_item(item, body, doi, mark_oa=False)
+
+    def _pdf_link(self, body: str, item: AcademicItem, landed: str) -> str:
+        # The key's DOI, not the page's ``citation_doi`` (a related card's may be parsed in).
         try:
-            pdf_url = extract_pdf_url(body, doi)
+            return extract_pdf_url(body, _doi_from(item.key))
         except RuntimeError:  # an odd host must not cost the metadata
-            pdf_url = ""
-        if pdf_url:
-            item.attachments = [pdf_url]
-        return item
+            return ""
 
     def _tdm_pdf(self, doi: str) -> tuple[bytes | None, str]:
         """Try the TDM API first when a token is configured.
@@ -503,7 +473,7 @@ class WileyBackend(GatedBackend):
                     f"(HTTP {e.status}): the token only buys what your institution subscribes "
                     "to — check that the token is valid and the article is covered")
             return None, ""  # 400/404/5xx: let the page route have it
-        if response.content.startswith(b"%PDF"):
+        if is_pdf(response.content):
             return response.content, ""
         return None, ""
 
@@ -514,7 +484,8 @@ class WileyBackend(GatedBackend):
         if data is not None:
             return data
         try:
-            url = extract_pdf_url(self._page(doi), doi)
+            page = self._page(doi)
+            url = extract_pdf_url(page, doi)
         except RuntimeError:  # the page is gated too: the token's answer is the useful one
             if not tdm_reason:
                 raise
@@ -524,21 +495,19 @@ class WileyBackend(GatedBackend):
                 f"[{self.name}] the article page carries no PDF link "
                 f"(not entitled, or the session needs an off-campus login)"))
         try:
-            response = self.fetch(url)
-        except HttpError as e:
-            if is_block_page(e.body, e.status):
-                raise Unavailable(tdm_reason or (
-                    f"[{self.name}] PDF download was gated: {_BLOCK_MSG}")) from e
-            raise
-        if response.content.startswith(b"%PDF"):
-            return response.content
-        # An unentitled session is silently redirected to the abstract page; the hop carries
-        # ``atypon-access-denied: true`` (a bare HTML body alone could also be a viewer shell).
-        denied = any(h.headers.get("atypon-access-denied") for h in response.history)
-        landed = urlparse(str(response.url)).path or url
-        why = ("the site marked the redirect access-denied (atypon-access-denied)"
-               if denied else "the endpoint answered an HTML page, not a PDF")
-        raise Paywalled(
-            f"[{self.name}] no PDF bytes: {why} (landed on {landed}) — the article is not "
-            "entitled on this session, or the session has expired: open "
-            f"{url} in your entitled browser, or refresh the cookie+user_agent pair")
+            # The item URL is where an unentitled session would have landed anyway.
+            return self._gated_download(url, page, f"{_SITE}/doi/{urllib.parse.quote(doi)}")
+        except Unavailable:
+            # The token's answer is the more useful one when the page route is gated too.
+            if not tdm_reason:
+                raise
+            raise Unavailable(tdm_reason) from None
+
+    def _not_entitled_reason(self, landed: str, response) -> str:
+        """Why an HTML answer means "not entitled" here (Wiley says so in a redirect header)."""
+        if any(h.headers.get("atypon-access-denied") for h in response.history):
+            # An unentitled session is silently redirected to the abstract page and the hop
+            # carries ``atypon-access-denied: true`` (a bare HTML body could also be a viewer
+            # shell, so the header is what names it).
+            return "the site marked the redirect access-denied (atypon-access-denied)"
+        return super()._not_entitled_reason(landed, response)

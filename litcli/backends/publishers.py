@@ -16,36 +16,19 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from importlib import import_module
 from typing import NamedTuple
 
 from ..errors import LitcliError
-
-#: Reader modules already imported (``None`` = it failed): one ``sys.modules`` lookup per use.
-_modules: dict[str, object] = {}
-
-
-def _module(name: str):
-    """The reader module, imported on first use; ``None`` when it cannot be imported.
-
-    A missing module raises ``ImportError``, but "not ready" also covers a syntax error, a bad
-    constant and a renamed attribute — none of them an ``ImportError`` — so anything the import
-    raises is caught (`KeyboardInterrupt`/`SystemExit` aside).
-    """
-    if name not in _modules:
-        try:
-            _modules[name] = import_module(f".{name}", __package__)
-        except Exception:
-            _modules[name] = None
-    return _modules[name]
+from . import load_module as _module
 
 
 def _normalizer(name: str) -> Callable[[str], str]:
-    """The named reader's key normalizer, resolved lazily (see :func:`_module`)."""
+    """The named reader's key normalizer, resolved lazily (see :func:`backends.load_module`)."""
     def normalize(target: str) -> str:
         module = _module(name)
         return "" if module is None else module.normalize_key(target)
     return normalize
+
 
 #: DOI prefixes owned by Elsevier (ScienceDirect, incl. the 10.1006/10.1053/10.1067 legacy ones).
 ELSEVIER_DOI_RE = ("10.1016/", "10.1006/", "10.1053/", "10.1067/")
@@ -94,18 +77,6 @@ _AIAA_LIKE_RE = re.compile(r"^(?:aiaa[:\/]|https?://(?:[\w-]+\.)*arc\.aiaa\.org/
 _IEEE_LIKE_RE = re.compile(r"^(?:ieee[:\/]|https?://(?:[\w-]+\.)*ieeexplore\.ieee\.org/)", re.I)
 
 
-def _sciencedirect_key(target: str) -> str:
-    """``pii:<ID>`` when the target is a ScienceDirect article URL or bare PII, else ``""``."""
-    module = _module("sciencedirect")
-    if module is None:
-        return ""
-    try:
-        normalized = module.normalize_key(target)
-    except LitcliError:
-        return ""
-    return normalized if normalized.startswith("pii:") else ""
-
-
 class _PublisherSpec(NamedTuple):
     """One guarded publisher step: how its targets are recognised and how it is reported."""
 
@@ -133,7 +104,7 @@ class _PublisherSpec(NamedTuple):
 #: Every guarded/entitled publisher, in chain order (a subscription copy outranks a page).
 _PUBLISHER_SPECS: tuple[_PublisherSpec, ...] = (
     _PublisherSpec(
-        "sciencedirect", "ScienceDirect", "ScienceDirectBackend", _sciencedirect_key,
+        "sciencedirect", "ScienceDirect", "ScienceDirectBackend", _normalizer("sciencedirect"),
         _SCIENCEDIRECT_LIKE_RE, ELSEVIER_DOI_RE,
         "  ScienceDirect needs a logged-in session: set [backends.sciencedirect] cookie"
         " (or cookie_file) from your browser's off-campus session",

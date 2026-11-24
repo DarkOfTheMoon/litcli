@@ -20,6 +20,11 @@ from .transport import client
 _ALLOWED_SCHEMES = frozenset({"http", "https"})
 
 
+def is_pdf(data: bytes) -> bool:
+    """True when ``data`` starts with the PDF magic number (the only "is it a file" test)."""
+    return (data or b"").startswith(b"%PDF")
+
+
 def download(url: str, timeout: int = 30,
              transport: httpx.BaseTransport | None = None) -> bytes:
     """Download a URL as bytes (http/https only)."""

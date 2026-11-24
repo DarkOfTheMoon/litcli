@@ -21,9 +21,9 @@ from urllib.parse import urlparse
 from ..models import AcademicItem
 from ._cf_gate import load_cookie as _load_cookie
 from ._cf_gate import parse_cookie as _parse_cookie
-from ._gated import OA_RE as _OA_RE
 from ._gated import GatedBackend
 from ._gated import extract_pdf_url as _extract_pdf_url
+from ._gated import is_open_access as is_open_access
 from ._gated import normalize_key as _normalize_key
 from ._gated import page_to_item as _page_to_item
 
@@ -53,11 +53,6 @@ def normalize_key(key: str) -> str:
 def is_block_page(page_html: str, status: int = 200) -> bool:
     """True when the body is the WAF challenge page or the status is 202/403."""
     return status in (202, 403) or "gokuProps" in (page_html or "")
-
-
-def is_open_access(page_html: str) -> bool:
-    """True when the page is marked open access (its PDF needs no entitlement)."""
-    return bool(_OA_RE.search(page_html or ""))
 
 
 def extract_pdf_url(page_html: str, doi: str = "", want_id: str = "") -> str:
@@ -99,16 +94,11 @@ class IeeeBackend(GatedBackend):
     PDF_PATH_RE = _PDF_PATH_RE
     PDF_URL_TEMPLATE = _SITE + "/stampPDF/getPDF.jsp?tp=&arnumber={id}"
     ITEM_ID_RE = re.compile(r"(?:/document/|arnumber=)(\d+)")
-    OA_RE = _OA_RE
 
-    def _refusal_reason(self, page: str, landed: str, response) -> str:
+    def _not_entitled_reason(self, landed: str, response) -> str:
         # UNVERIFIED: Xplore has no distinct short-page URL to gate on (no ``_short_page``), so a
         # related-card badge on a paywalled document is indistinguishable from the page's own
         # marker here. Checked against a real paywalled Xplore page carrying an OA neighbour.
-        if self.is_open_access(page):
-            return "the item is open access but the endpoint answered an HTML page"
-        if not self.has_session:
-            return "the session holds no clearance cookie"
         if "login.jsp" in str(response.url):
             return ("the endpoint redirected to the Xplore login page, so the session is not "
                     "entitled to this item (missing, expired, or not subscribed)")

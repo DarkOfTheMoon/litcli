@@ -7,6 +7,7 @@ from typing import ClassVar
 from unittest import mock
 
 from litcli import config
+from litcli.backends import _modules
 from litcli.errors import BadInput
 
 
@@ -109,6 +110,10 @@ class TestConfig(unittest.TestCase):
 
                 config._registry.cache_clear()
                 config._IMPORT_ERRORS.clear()
+                # The import cache is the one place a module is looked up: it, not
+                # ``sys.modules``, is what would serve the earlier instance without ``meta_path``.
+                _modules.pop(broken, None)
+                self.addCleanup(_modules.pop, broken, None)
                 config.failed_backends.clear()
                 self.addCleanup(config._registry.cache_clear)
                 # An imported module is served from ``sys.modules`` without asking ``meta_path``.

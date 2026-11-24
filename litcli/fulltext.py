@@ -300,14 +300,24 @@ def resolve_fulltext(doi: str, email: str = unpaywall.DEFAULT_EMAIL,
                      zenodo_backend=None,
                      publishers: dict | None = None,
                      resolvers: list[Resolver] | None = None,
-                     tail_only: bool = False) -> dict:
+                     tail_only: bool = False,
+                     # The five per-publisher keywords, still accepted (folded into
+                     # ``publishers``): dropping them outright broke any existing caller.
+                     sciencedirect_backend=None, wiley_backend=None, springer_backend=None,
+                     cambridge_backend=None, aip_backend=None) -> dict:
     """Find fulltext by DOI, priority: local store → OA sources → Sci-Hub (when injected).
 
     Returns a dict: on a hit ``{"has_fulltext": True, "kind", ...}`` (data for local, url for OA
     and Sci-Hub); when nothing works, ``{"has_fulltext": False}`` (with per-step failure
     reasons, for the CLI to point the user elsewhere). ``tail_only`` starts at the landing page,
-    i.e. skips every source that already answered earlier in the same run.
+    i.e. skips every source that already answered earlier in the same run. ``publishers`` maps a
+    publisher name to its backend; the older ``<name>_backend`` keywords still work.
     """
+    legacy = {"sciencedirect": sciencedirect_backend, "wiley": wiley_backend,
+              "springer": springer_backend, "cambridge": cambridge_backend,
+              "aip": aip_backend}
+    if any(legacy.values()):
+        publishers = {**{k: v for k, v in legacy.items() if v}, **(publishers or {})}
     if resolvers is None:
         resolvers = _default_resolvers(email, backends, openalex_backend, scihub_backend,
                                        europepmc_backend, zenodo_backend,

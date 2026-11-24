@@ -67,16 +67,6 @@ def _optional_backend(name: str, cfg):
         return None
 
 
-def _disabled_in_config(name: str, cfg) -> bool:
-    """True when the user switched this section off (``enabled = false``).
-
-    ``get_backend`` refuses such a section, so a caller that wants to tell "switched off" from
-    "broken" must ask before building it — and must not probe it either.
-    """
-    section = (cfg.get("backends") or {}).get(name)
-    return isinstance(section, dict) and section.get("enabled") is False
-
-
 def _verify(raw: bytes, fmt: str, url: str) -> None:
     """Refuse to call a 200 a file when the bytes are a paywall/error page.
 
@@ -207,12 +197,14 @@ def _probe_fulltext(cfg, args, target: str) -> _Probe | None:
     # chain. The publisher whose own shape it is reports the error — so the site the URL lives
     # on is asked first: a generic ``/article/<DOI>`` shape (SpringerLink's) would otherwise
     # swallow another publisher's URL and leave a sub-page (``/pdf``) on the DOI.
-    owned = sorted(_PUBLISHER_SPECS, key=lambda s: 0 if s.like.match(target.strip()) else 1)
-    for spec in owned:
+    stripped = target.strip()
+    owned = sorted(((bool(s.like.match(stripped)), s) for s in _PUBLISHER_SPECS),
+                   key=lambda pair: not pair[0])
+    for own, spec in owned:
         try:
             normalized = spec.normalize(key)
         except LitcliError as e:
-            if spec.like.match(target.strip()):
+            if own:
                 note(f"[error] {e}")
                 return 2
             continue
@@ -227,7 +219,7 @@ def _probe_fulltext(cfg, args, target: str) -> _Probe | None:
     # The legal corpus sources are keyless: consult them even when not enabled in config — but
     # a section the user switched off stays off.
     corpus = {name: backends.get(name) or (
-        None if _disabled_in_config(name, cfg) else _optional_backend(name, cfg))
+        None if config_mod.section_disabled(name, cfg) else _optional_backend(name, cfg))
         for name in ("europepmc", "zenodo")}
     # A publisher step starts for its own identifiers (a pasted page, or its DOI prefix) even
     # unconfigured: an unentitled or unconfigured run still has to say *why* it stopped.
@@ -238,7 +230,7 @@ def _probe_fulltext(cfg, args, target: str) -> _Probe | None:
         page = "" if _DOI_LIKE_RE.match(key) else spec.page_key(target)
         backend = backends.get(spec.name)
         if backend is None and (page or key.lower().startswith(spec.doi_re)):
-            if _disabled_in_config(spec.name, cfg):
+            if config_mod.section_disabled(spec.name, cfg):
                 # Say the user's own reason, and do not probe a source they switched off.
                 pub_errors[spec.name] = "disabled in the config (enabled = false)"
             else:
@@ -328,11 +320,8 @@ def _report_no_fulltext(probe: _Probe) -> int:
     return 1
 
 
-def _emit_fulltext(args, probe: _Probe) -> int:
-    """Render the hit, get its bytes and save them; fall back to the chain tail on a failure."""
-    key, publishers = probe.key, probe.publishers
-    info = probe.info
-    kind = info["kind"]
+def _announce_meta(info: dict, kind: str) -> None:
+    """Say what class of copy the hit is, and its title/status — before any file handling."""
     access = info.get("access", "")
     if access == provenance.PUBLIC:
         note(f"  note: {kind} copy — public copy, not an open-access licence")
@@ -344,6 +333,21 @@ def _emit_fulltext(args, probe: _Probe) -> int:
         note(f"  title: {info['title'][:70]}")
     if info.get("status"):
         note(f"  oa_status: {info['status']}")
+
+
+def _announce_hit(kind: str, info: dict, fmt: str) -> None:
+    """Say which step answered and with what, and warn when the answer is a page not a file."""
+    note(f"  source={kind}  {'PDF' if fmt == 'pdf' else fmt.upper()}: {info['url']}")
+    if fmt == "html":
+        note("  note: landing page, not a file — open it in a browser")
+
+
+def _emit_fulltext(args, probe: _Probe) -> int:
+    """Render the hit, get its bytes and save them; fall back to the chain tail on a failure."""
+    key, publishers = probe.key, probe.publishers
+    info = probe.info
+    kind = info["kind"]
+    _announce_meta(info, kind)
 
     if info.get("data") is not None:  # bytes in hand: local store, or an attachment backend
         source = info.get("source") or kind
@@ -360,22 +364,18 @@ def _emit_fulltext(args, probe: _Probe) -> int:
         return 0
 
     fmt = info.get("format") or "pdf"
-    note(f"  source={kind}  {'PDF' if fmt == 'pdf' else fmt.upper()}: {info['url']}")
-    if fmt == "html":
-        note("  note: landing page, not a file — open it in a browser")
+    _announce_hit(kind, info, fmt)
     if args.no_download or fmt == "html":
         out(info["url"])
         return 0
 
     raw = None
-    verified = False
-    # Where to send the reader when no byte comes at all (shown only if the whole chain fails).
-    link_hint = f"  open the PDF in your browser: {info['url']}"
     publisher = publishers.get(kind) or _publisher_for_url(publishers, info["url"])
+    # Where to send the reader when no byte comes at all (shown only if the whole chain fails).
+    link_hint = f"  open the PDF in your {'entitled ' if publisher else ''}browser: {info['url']}"
     if publisher is not None:
         # The PDF needs the same entitled session as the page (and may sit behind a second
         # gate), so downloading it through a plain client would only collect a challenge page.
-        link_hint = f"  open the PDF in your entitled browser: {info['url']}"
         try:
             raw = publisher.get_attachment(key)
         except (LitcliError, RuntimeError) as e:
@@ -386,7 +386,6 @@ def _emit_fulltext(args, probe: _Probe) -> int:
         try:
             raw = pdfutil.download(info["url"])
             _verify(raw, fmt, info["url"])
-            verified = True
         except (LitcliError, OSError) as e:
             # A 200 that is a paywall / login page is not a file either: verify inside the try
             # so the same fall-back covers it.
@@ -405,24 +404,20 @@ def _emit_fulltext(args, probe: _Probe) -> int:
             return 1
         info = tail
         kind = info["kind"]
+        _announce_meta(info, kind)
         fmt = info.get("format") or "pdf"
-        if info.get("access") == provenance.PUBLIC:
-            note(f"  note: {kind} copy — public copy, not an open-access licence")
-        if info.get("title"):
-            note(f"  title: {info['title'][:70]}")
-        note(f"  source={kind}  {'PDF' if fmt == 'pdf' else fmt.upper()}: {info['url']}")
-        if fmt == "html":
-            note("  note: landing page, not a file — open it in a browser")
+        _announce_hit(kind, info, fmt)
         if args.no_download or fmt == "html":
             out(info["url"])
             return 0
         raw = pdfutil.download(info["url"])
-    if not verified:  # the plain-download branch verified above already
-        # UNVERIFIED edge: a local-store hit carries no ``format``, so it is checked as a PDF.
-        # A local attachment that is an HTML snapshot would fail here; the parent-item path
-        # filters on ``contentType == application/pdf`` (see zotero_local), so it has not been
-        # observed — no real HTML-snapshot sample was run.
-        _verify(raw, fmt, info["url"])
+    # Always verified here, including the plain-download branch above (which also verifies, so a
+    # non-file never reaches the save): one place proves every saved byte.
+    # UNVERIFIED edge: a local-store hit carries no ``format``, so it is checked as a PDF. A
+    # local attachment that is an HTML snapshot would fail here; the parent-item path filters on
+    # ``contentType == application/pdf`` (see zotero_local), so it has not been observed — no
+    # real HTML-snapshot sample was run.
+    _verify(raw, fmt, info["url"])
     path = target_path(args.out, key, fmt)
     _save(raw, path, args.lines, extract=_TEXT_EXTRACTORS.get(fmt, pdfutil.extract_text))
     out(path)

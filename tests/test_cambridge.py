@@ -220,6 +220,10 @@ class BackendTest(unittest.TestCase):
     def setUp(self):
         self.be = CambridgeBackend()
         speed_up(self.be)
+        # A sessioned instance: without a session the refusal is always "no clearance cookie",
+        # which would hide the entitlement wording these tests are about.
+        self.sessioned = CambridgeBackend(cookie="sessionid=abc", user_agent="UA/1")
+        speed_up(self.sessioned)
 
     def test_capabilities_are_read_only(self):
         self.assertEqual(self.be.capabilities, {"read"})
@@ -317,24 +321,32 @@ class BackendTest(unittest.TestCase):
         self.assertTrue(self.be.get_attachment(f"url:{URL}").startswith(b"%PDF"))
 
     def test_an_html_answer_on_an_abs_page_names_the_entitlement(self):
-        stub(self.be, (200, CITATION_PAGE), (200, "<html>the article page</html>"))
+        stub(self.sessioned, (200, CITATION_PAGE), (200, "<html>the article page</html>"))
         with self.assertRaises(Paywalled) as ctx:
-            self.be.get_attachment(f"url:{ABS_URL}")
+            self.sessioned.get_attachment(f"url:{ABS_URL}")
         self.assertIn("not entitled", str(ctx.exception))
 
     def test_a_doi_that_redirects_to_the_abs_page_names_the_entitlement_too(self):
         # The real paywalled path: the DOI itself lands on /abs/, which is what is judged.
-        stub(self.be, (302, "", {"location": ABS_URL}), (200, CITATION_PAGE),
+        stub(self.sessioned, (302, "", {"location": ABS_URL}), (200, CITATION_PAGE),
              (200, "<html>the article page</html>"))
         with self.assertRaises(Paywalled) as ctx:
-            self.be.get_attachment(DOI)
+            self.sessioned.get_attachment(DOI)
         self.assertIn("/abs/ short page", str(ctx.exception))
 
     def test_an_html_answer_on_a_full_page_says_the_generic_reason(self):
-        stub(self.be, (200, CITATION_PAGE), (200, "<html>not a pdf</html>"))
+        stub(self.sessioned, (200, CITATION_PAGE), (200, "<html>not a pdf</html>"))
         with self.assertRaises(Paywalled) as ctx:
-            self.be.get_attachment(f"url:{URL}")
+            self.sessioned.get_attachment(f"url:{URL}")
         self.assertIn("instead of the PDF", str(ctx.exception))
+
+    def test_without_a_session_the_refusal_names_the_missing_cookie(self):
+        # The base's order asks for the session before the site's own wording: a configured
+        # cookie is the actionable step, and Cambridge has nothing more to say about it.
+        stub(self.be, (200, CITATION_PAGE), (200, "<html>the article page</html>"))
+        with self.assertRaises(Paywalled) as ctx:
+            self.be.get_attachment(f"url:{ABS_URL}")
+        self.assertIn("no clearance cookie", str(ctx.exception))
 
     def test_an_html_answer_on_an_open_access_page_says_so(self):
         stub(self.be, (200, OA_PAGE), (200, "<html>the article page</html>"))
@@ -344,10 +356,10 @@ class BackendTest(unittest.TestCase):
 
     def test_a_card_licence_on_the_short_page_does_not_blame_open_access(self):
         page = CITATION_PAGE.replace("</head>", f"{LICENCE}</head>")
-        stub(self.be, (302, "", {"location": ABS_URL}), (200, page),
+        stub(self.sessioned, (302, "", {"location": ABS_URL}), (200, page),
              (200, "<html>the article page</html>"))
         with self.assertRaises(Paywalled) as ctx:
-            self.be.get_attachment(DOI)
+            self.sessioned.get_attachment(DOI)
         self.assertIn("/abs/ short page", str(ctx.exception))
         self.assertNotIn("is open access", str(ctx.exception))
 

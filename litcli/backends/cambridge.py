@@ -26,9 +26,9 @@ from ..models import AcademicItem
 from ._cf_gate import is_challenge_page
 from ._cf_gate import load_cookie as _load_cookie
 from ._cf_gate import parse_cookie as _parse_cookie
-from ._gated import OA_RE as _OA_RE
 from ._gated import GatedBackend
 from ._gated import extract_pdf_url as _extract_pdf_url
+from ._gated import is_open_access as is_open_access
 from ._gated import normalize_key as _normalize_key
 from ._gated import page_to_item as _page_to_item
 
@@ -73,14 +73,8 @@ def normalize_key(key: str) -> str:
     return _normalize_key(key, tag="cambridge", url_re=_URL_RE, forms=_KEY_FORMS)
 
 
-def is_block_page(page_html: str, status: int = 200) -> bool:
-    """True when the body is a bot/entitlement gate, or the status is a plain 403."""
-    return is_challenge_page(page_html, status)
-
-
-def is_open_access(page_html: str) -> bool:
-    """True when the page carries an article licence (its PDF needs no session)."""
-    return bool(_OA_RE.search(page_html or ""))
+#: The gate predicate, bound by name for the module's own API.
+is_block_page = is_challenge_page
 
 
 def is_short_page(url: str) -> bool:
@@ -136,16 +130,13 @@ class CambridgeBackend(GatedBackend):
     URL_RE = _URL_RE
     PDF_PATH_RE = _PDF_PATH_RE
     ITEM_ID_RE = re.compile(r"/([A-Fa-f0-9]{32})/?$")
-    OA_RE = _OA_RE
 
     def _short_page(self, url: str) -> bool:
         return is_short_page(url)
 
-    def _refusal_reason(self, page: str, landed: str, response) -> str:
-        # A licence block on the paywalled ``/abs/`` page can be a related-item card's, so the
-        # OA claim only holds on a full page (an open-access item never lands on the short one).
-        if self.is_open_access(page) and not self._short_page(landed):
-            return "the item is open access but the endpoint answered an HTML page"
+    def _not_entitled_reason(self, landed: str, response) -> str:
+        # The inherited order already holds: a licence block on the paywalled ``/abs/`` page can
+        # be a related-item card's, so the OA claim only counts on a full page.
         if self._short_page(landed):
             return ("the item answers only its /abs/ short page, so the session is not entitled "
                     "to it (missing, expired, or not subscribed to this title)")

@@ -14,12 +14,12 @@ from __future__ import annotations
 import argparse
 
 from .backends.publishers import PUBLISHER_ORDER
+from .config import _OPTIONAL_BACKENDS
 
 # argparse does not encode these as ``choices``; supply the known values for completion. The
-# publisher block comes from the one table, so a reader cannot be offered without being real.
-BACKENDS = ["zotero", "arxiv", "crossref", "openalex", "openlibrary", "uspto", "cnki", "douban",
-            *PUBLISHER_ORDER,
-            "scihub", "zlibrary", "doaj", "europepmc", "doab", "zenodo"]
+# optional and publisher blocks come from their one registry each, so a reader cannot be
+# offered without being real (or be registered without being offered).
+BACKENDS = ["zotero", *(name for name, _cls in _OPTIONAL_BACKENDS), *PUBLISHER_ORDER]
 TYPES = ["article", "book", "chapter", "thesis", "report", "preprint", "paper",
          "patent", "document", "dataset", "software", "conference"]
 SHELL_CHOICES = ["bash", "zsh", "fish"]

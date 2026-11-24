@@ -27,13 +27,14 @@ import urllib.parse
 from typing import ClassVar
 from urllib.parse import urlparse
 
-from ..errors import BadInput, NotFound, Paywalled, Unavailable, for_status
+from ..errors import BadInput, NotFound, Paywalled, for_status
 from ..models import AcademicItem, extract_year, normalize_author_name
-from ..transport import HttpError
 from ._cf_gate import gate_message, is_challenge_page
 from ._cf_gate import load_cookie as _load_cookie
 from ._cf_gate import parse_cookie as _parse_cookie
-from ._gated import GatedBackend
+from ._gated import GatedBackend, _title_from_tag
+from ._gated import _metas as _all_metas
+from ._gated import doi_from as _doi_from
 
 _SITE = "https://www.sciencedirect.com"
 _ARTICLE = f"{_SITE}/science/article"
@@ -45,16 +46,8 @@ _UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
 _BLOCK_MSG = gate_message("ScienceDirect", "sciencedirect")
 
 _DOI_PREFIX_RE = re.compile(r"^(?:https?://(?:dx\.)?doi\.org/|doi:\s*)", re.I)
-_DOI_RE = re.compile(r"^10\.\d{4,9}/[^\s?#]+$")
-#: Characters a DOI picks up from a URL tail but does not own.
-_DOI_TAIL = ".,;:)]}/"
-#: A DOI in running text (a pasted link leaves the host before it).
-_DOI_FIND_RE = re.compile(r"10\.\d{4,9}/[^\s?#]+")
 
 
-def _clean(doi: str) -> str:
-    """Decode a DOI and drop the separators running text trails along it."""
-    return urllib.parse.unquote(doi or "").rstrip(_DOI_TAIL)
 #: A bare PII: "S" + digits (an "X" checksum may appear) + more digits. Elsevier prints the
 #: separators in URLs (``S0045-7825(05)00073-3``) and PIIs are also written without them.
 _PII_RE = re.compile(r"^S[\dX]{4,}[0-9X]\d+$", re.I)
@@ -87,11 +80,6 @@ _PDFFT_RE = re.compile(
 _PDF_GATE_MSG = ("the PDF sits behind a second ScienceDirect acceptance gate that only a "
                  "browser clears: open the article in your entitled browser and download the "
                  "PDF from there")
-_META_TAG_RE = re.compile(r"<meta\b[^>]*>", re.I)
-_META_NAME_RE = re.compile(r"\bname=[\"']([^\"']+)[\"']", re.I)
-#: The value runs to the opening quote's own kind: an apostrophe in a title is content.
-_META_CONTENT_RE = re.compile(r"\bcontent=([\"'])(.*?)\1", re.I | re.S)
-_TITLE_TAG_RE = re.compile(r"<title\b[^>]*>(.*?)</title>", re.S | re.I)
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
 
@@ -99,16 +87,8 @@ _WS_RE = re.compile(r"\s+")
 # --- pure helpers (no network) ---
 
 def doi_from(key: str) -> str:
-    """Return a bare DOI from a DOI-shaped key (or a ``doi.org`` URL), else "".
-
-    A query tail (``?download=true``) or fragment is not part of the DOI.
-    """
-    k = re.split(r"[?#\s]", _DOI_PREFIX_RE.sub("", (key or "").strip()).strip(),
-                 maxsplit=1)[0].rstrip(_DOI_TAIL)
-    if _DOI_RE.match(k):
-        return k
-    found = _DOI_FIND_RE.search(key or "")
-    return _clean(found.group(0)) if found else ""
+    """Return a bare DOI from a DOI-shaped key (or the site's own prefix form), else ""."""
+    return _doi_from(key, prefix_re=_DOI_PREFIX_RE)
 
 
 def normalize_key(key: str) -> str:
@@ -165,8 +145,8 @@ def extract_pdf_url(page_html: str, pii: str = "") -> str:
     text = page_html or ""
     want = _canonical_pii(pii)
     raw = ""
-    for candidate in _PDFURL_RE.findall(text):
-        candidate = _unescaped_when_safe(candidate)
+    for match in _PDFURL_RE.finditer(text):
+        candidate = _unescaped_when_safe(match.group(1))
         if not candidate:
             continue
         # The asset URL embeds the PII (``1-s2.0-<PII>/main.pdf``): a card's URL does not match.
@@ -177,10 +157,11 @@ def extract_pdf_url(page_html: str, pii: str = "") -> str:
         raw = _unescaped_when_safe((_metas(text).get("citation_pdf_url") or [""])[0])
     if not raw:
         first = ""
-        for candidate, link_pii in _PDFFT_RE.findall(text):
+        for match in _PDFFT_RE.finditer(text):
+            candidate = match.group(1)
             if not first:
                 first = candidate
-            if not want or _canonical_pii(link_pii) == want:
+            if not want or _canonical_pii(match.group(2)) == want:
                 raw = _unescaped_when_safe(candidate)
                 break
         if not raw and not want:
@@ -209,17 +190,8 @@ def _as_list(value) -> list:
 
 
 def _metas(page_html: str) -> dict[str, list[str]]:
-    """Collect ``citation_*`` / ``dc.*`` meta values, keyed by lowercased name."""
-    found: dict[str, list[str]] = {}
-    for tag in _META_TAG_RE.findall(page_html or ""):
-        name = _META_NAME_RE.search(tag)
-        content = _META_CONTENT_RE.search(tag)
-        if not name or not content:
-            continue
-        key = name.group(1).lower()
-        if key.startswith(("citation_", "dc.")):
-            found.setdefault(key, []).append(content.group(2))
-    return found
+    """Collect the item meta values (``citation_*`` / ``dc.*``) by lower-case name."""
+    return _all_metas(page_html)
 
 
 def _json_ld(page_html: str):
@@ -312,7 +284,11 @@ def _ld_is_this_article(rec: dict, fields: dict, want_doi: str, pii: str) -> boo
     got = doi_from(fields["doi"]).lower().rstrip(".")
     if got:
         return bool(want_doi) and got == want_doi
-    return bool(pii) and pii in _canonical_pii(json.dumps(rec))
+    if not pii:
+        return False
+    # Only the identity slots, not the whole record (which carries the abstract).
+    where = rec.get("url") or rec.get("@id") or rec.get("identifier")
+    return pii in _canonical_pii(where if isinstance(where, str) else json.dumps(where))
 
 
 def page_to_item(page_html: str, key: str) -> AcademicItem:
@@ -328,20 +304,25 @@ def page_to_item(page_html: str, key: str) -> AcademicItem:
     metas = _metas(text)
     fields = _meta_fields(metas)
     want_doi = doi_from(fields["doi"]).lower().rstrip(".")
-    records = [(_ld_fields(rec), rec) for rec in _json_ld(text)]
-    matched = next((cand for cand, rec in records
-                    if cand["title"] and _ld_is_this_article(rec, cand, want_doi, pii)), None)
+    # Parsed lazily and stopped at the first record naming this article: an article page also
+    # carries one record per related-article card.
+    first = matched = None
+    for rec in _json_ld(text):
+        cand = _ld_fields(rec)
+        if first is None:
+            first = cand
+        if cand["title"] and _ld_is_this_article(rec, cand, want_doi, pii):
+            matched = cand
+            break
     if matched is not None:
         for name, value in fields.items():  # meta may still hold something the record lacks
             if value and not matched[name]:
                 matched[name] = value
         fields = matched
-    elif not fields["title"] and records:
-        fields = records[0][0]  # no identity meta at all: a record is the only source
+    elif not fields["title"] and first is not None:
+        fields = first  # no identity meta at all: a record is the only source
     if not fields["title"]:
-        title_tag = _TITLE_TAG_RE.search(text)
-        if title_tag:
-            fields["title"] = _text(title_tag.group(1))
+        fields["title"] = _title_from_tag(text, "ScienceDirect")
     creators = [normalize_author_name(a) for a in fields["creators"]]
     # A dc.identifier may be a doi.org URL; keep the bare DOI when it is one.
     doi = doi_from(fields["doi"]) or fields["doi"].strip()
@@ -391,6 +372,8 @@ class ScienceDirectBackend(GatedBackend):
 
     DEFAULT_NAME = "sciencedirect"
     SITE_NAME = "ScienceDirect"
+    #: A PDF download is answered by Elsevier's own second gate, not the page gate.
+    PDF_GATE_MSG = _PDF_GATE_MSG
     KEY_PREFIX = "sciencedirect"
     KEY_FORMS = "a DOI, a PII or a ScienceDirect URL"
     UA = _UA
@@ -443,12 +426,12 @@ class ScienceDirectBackend(GatedBackend):
         under a DOI: the resolved PII arrives here already. The shared per-key memo is kept, so
         the fulltext chain's ``get`` and ``get_attachment`` share one request.
         """
-        body = self._memo_get(pii)
+        body = self._memo.get(pii)
         if body is not None:
             return body
         url = f"{_ARTICLE}/pii/{urllib.parse.quote(pii)}"
         body = self._open(url).text
-        self._memo_put(pii, body)
+        self._memo[pii] = body
         return body
 
     # -- Backend ---------------------------------------------------------------
@@ -464,36 +447,29 @@ class ScienceDirectBackend(GatedBackend):
         pii = self._pii(key)
         body = self._page(pii)
         item = page_to_item(body, f"pii:{pii}")
-        if not item.title and not item.doi:
-            raise RuntimeError(f"[{self.name}] could not parse the article page: pii:{pii}")
-        self._guard_sign_in(body, f"pii:{pii}", item.title)
+        # A DOI key has already been resolved to this PII, so the identity holds without a
+        # title; and the page records no OA signal of its own (the pdfUrl is the only one).
+        return self._finish_item(item, body, f"pii:{pii}", mark_oa=False, require_title=False)
+
+    def _pdf_link(self, body: str, item: AcademicItem, landed: str) -> str:
         try:
-            pdf_url = extract_pdf_url(body, pii)
+            return extract_pdf_url(body, item.key[len("pii:"):])
         except RuntimeError:  # an odd host must not cost the metadata
-            pdf_url = ""
-        if pdf_url:
-            item.attachments = [pdf_url]
-        return item
+            return ""
 
     def get_attachment(self, key: str) -> bytes:
         """Download the article PDF (only an entitled session serves the link).
 
-        Replaces the inherited ``get_attachment``: the link is picked from the article page and
-        the PDF itself sits behind Elsevier's second acceptance gate, which only a browser
-        clears — so a non-PDF answer is a refusal, reported as :class:`Paywalled`.
+        Elsevier serves the PDF behind its own second acceptance gate, so both a gate and a
+        non-PDF answer are reported with that gate's wording (see :attr:`PDF_GATE_MSG`).
         """
         pii = self._pii(key)
-        url = extract_pdf_url(self._page(pii), pii)
+        page = self._page(pii)
+        url = extract_pdf_url(page, pii)
         if not url:
             raise Paywalled(f"[{self.name}] the article page carries no PDF link "
                             f"(not entitled, or the session needs an off-campus login)")
-        try:
-            data = self.fetch_bytes(url)
-        except HttpError as e:
-            if e.status in (302, 403) or is_block_page(e.body, e.status):
-                raise Unavailable(f"[{self.name}] PDF download was gated: {_PDF_GATE_MSG}") from e
-            raise
-        if not data.startswith(b"%PDF"):
-            raise Paywalled(f"[{self.name}] the PDF link did not return a PDF: {url} — "
-                            f"{_PDF_GATE_MSG}")
-        return data
+        return self._gated_download(url, page, f"{_SITE}/science/article/pii/{pii}")
+
+    def _not_entitled_reason(self, landed: str, response) -> str:
+        return _PDF_GATE_MSG

@@ -133,7 +133,7 @@ def is_sign_in_page(page_html: str, title: str) -> bool:
 
 
 def gate_message(site: str, name: str) -> str:
-    """The one message both readers raise when the gate meets them."""
+    """The one message every gated reader raises when the gate meets it."""
     return (f"{site} served its bot/entitlement gate instead of the article "
             "(CPE00001 / Cloudflare challenge): open the article once in an authenticated "
             f"browser tab on your off-campus session, then copy that session's cookies into "

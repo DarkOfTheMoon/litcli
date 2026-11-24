@@ -265,6 +265,10 @@ class ScienceDirectBackendTest(unittest.TestCase):
     def setUp(self):
         self.be = ScienceDirectBackend()
         speed_up(self.be)
+        # A sessioned instance: without a session the refusal is always "no clearance cookie",
+        # which would hide the second-gate wording ScienceDirect turns an HTML answer into.
+        self.sessioned = ScienceDirectBackend(cookie="sessionid=abc", user_agent="UA/1")
+        speed_up(self.sessioned)
 
     def test_capabilities_are_read_only(self):
         self.assertEqual(self.be.capabilities, {"read"})
@@ -393,11 +397,17 @@ class ScienceDirectBackendTest(unittest.TestCase):
         self.assertIn("no PDF link", str(ctx.exception))
 
     def test_get_attachment_non_pdf_body_raises(self):
+        stub(self.sessioned, (200, PDF_PAGE), (200, "<html>login</html>"))
+        with self.assertRaises(Exception) as ctx:
+            self.sessioned.get_attachment(PII)
+        self.assertIn("no PDF bytes", str(ctx.exception))
+        self.assertIn("second ScienceDirect acceptance gate", str(ctx.exception))
+
+    def test_without_a_session_the_refusal_names_the_missing_cookie(self):
         stub(self.be, (200, PDF_PAGE), (200, "<html>login</html>"))
         with self.assertRaises(Exception) as ctx:
             self.be.get_attachment(PII)
-        self.assertIn("did not return a PDF", str(ctx.exception))
-        self.assertIn("second ScienceDirect acceptance gate", str(ctx.exception))
+        self.assertIn("no clearance cookie", str(ctx.exception))
 
     def test_get_attachment_from_a_pdfft_link(self):
         rec = stub(self.be, (200, DC_PAGE + _pdf_anchor(PII, "a" * 32)), (200, b"%PDF-1.7 bytes"))

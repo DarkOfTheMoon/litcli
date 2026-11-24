@@ -76,6 +76,15 @@ OA_MARKERS = ("is an open access article",
 OA_RE = re.compile("|".join(OA_MARKERS), re.I)
 
 
+def is_open_access(page_html: str) -> bool:
+    """True when the page carries one of the open-access markers.
+
+    Module-level so a site module can re-export it (the markers are shared); the class method
+    is the same check.
+    """
+    return bool(OA_RE.search(page_html or ""))
+
+
 def _unescaped_when_safe(url: str) -> str:
     return html_mod.unescape((url or "").replace("\\/", "/")).strip()
 
@@ -105,8 +114,17 @@ def _text(value) -> str:
     return _WS_RE.sub(" ", html_mod.unescape(_TAG_RE.sub(" ", str(value or "")))).strip()
 
 
-def _metas(page_html: str) -> dict[str, list[str]]:
-    """Collect ``citation_*`` / ``dc.*`` meta values, keyed by lowercased name."""
+def _is_item_meta(name: str) -> bool:
+    return name.startswith(("citation_", "dc."))
+
+
+def _metas(page_html: str, keep=_is_item_meta) -> dict[str, list[str]]:
+    """Collect ``<meta name=… content=…>`` values, keyed by lowercased name.
+
+    ``keep`` filters the names — the default keeps the item fields (``citation_*``, ``dc.*``);
+    a parser that reads other names too passes ``keep=None``. One tokenizer for every site, so
+    a quoting fix lands everywhere at once.
+    """
     found: dict[str, list[str]] = {}
     for tag in _META_TAG_RE.findall(page_html or ""):
         name = _META_NAME_RE.search(tag)
@@ -114,7 +132,7 @@ def _metas(page_html: str) -> dict[str, list[str]]:
         if not name or not content:
             continue
         key = name.group(1).lower()
-        if key.startswith(("citation_", "dc.")):
+        if keep is None or keep(key):
             found.setdefault(key, []).append(content.group(2))
     return found
 
@@ -123,6 +141,27 @@ def _pages(first: str, last: str, single: str) -> str:
     if first and last and first != last:
         return f"{first}-{last}"
     return single or first
+
+
+def _title_from_tag(page_html: str, title_suffix: str = "") -> str:
+    """The page's ``<title>`` as an item title, or "" when it has none.
+
+    A library-platform title tag is ``<title> | <journal> | <site>``: drop the site and journal
+    chrome, but keep a subtitle segment (``| Part II``) — that one is content, and a greedy
+    tail strip used to eat it along with the rest. Only a *trailing* site name is chrome, so a
+    dash inside the title itself survives.
+    """
+    title_tag = _TITLE_TAG_RE.search(page_html or "")
+    if not title_tag:
+        return ""
+    title = _text(title_tag.group(1))
+    if not title_suffix:
+        return title
+    title = re.sub(rf"\s*(?:[|—–-]\s*)?{re.escape(title_suffix)}\s*$", "", title, flags=re.I)
+    segments = [s.strip() for s in _TITLE_SEP_RE.split(title) if s.strip()]
+    while len(segments) > 1 and not _SUBTITLE_RE.match(segments[-1]):
+        segments.pop()
+    return " | ".join(segments).strip()
 
 
 def _fields(metas: dict[str, list[str]]) -> dict:
@@ -160,15 +199,16 @@ def _clean_doi(value: str) -> str:
         re.split(r"[?#\s]", value or "", maxsplit=1)[0]).rstrip(_DOI_TAIL)
 
 
-def doi_from(key: str) -> str:
+def doi_from(key: str, *, prefix_re: re.Pattern | None = None) -> str:
     """Return a bare DOI from a DOI-shaped key (a ``doi.org``/``site:`` form included).
 
     A plain page URL is searched too: the prefix strip leaves ``//host/...`` behind, which is
     not DOI-shaped, yet the path may well carry the DOI the page names. Either way a query
     tail (``?download=true``), a fragment and a trailing separator are cut off: ``doi.org``
-    would otherwise be handed ``xyz.123%3Fdownload=true``.
+    would otherwise be handed ``xyz.123%3Fdownload=true``. ``prefix_re`` is the site's own
+    documented prefix form, where it names one.
     """
-    k = _clean_doi(_DOI_PREFIX_RE.sub("", (key or "").strip()).strip())
+    k = _clean_doi((prefix_re or _DOI_PREFIX_RE).sub("", (key or "").strip()).strip())
     if _DOI_RE.match(k):
         return k
     found = _DOI_FIND_RE.search(key or "")
@@ -204,11 +244,11 @@ def normalize_key(key: str, *, tag: str, url_re: re.Pattern, forms: str,
                 embedded = (embedded_doi_re.search(urllib.parse.unquote(candidate))
                             if embedded_doi_re else None)
             if embedded:
-                return f"doi:{urllib.parse.unquote(embedded.group(1)).rstrip('/.,;:')}"
+                return f"doi:{urllib.parse.unquote(embedded.group(1)).rstrip(_DOI_TAIL)}"
             return f"url:{candidate.split('#', 1)[0]}"
-        doi = doi_from(candidate)
+        doi = doi_from(candidate)  # already cut out of ``_DOI_TAIL``
         if doi:
-            return f"doi:{doi.rstrip('/.,;:')}"
+            return f"doi:{doi}"
     raise BadInput(f"[{tag}] not a DOI, {forms}: {key!r}")
 
 
@@ -226,21 +266,7 @@ def page_to_item(page_html: str, key: str, url: str = "", *, source: str, title_
     page = page_html or ""
     fields = _fields(_metas(page))
     if not fields["title"]:
-        title_tag = _TITLE_TAG_RE.search(page)
-        if title_tag:
-            raw_title = title = _text(title_tag.group(1))
-            if title_suffix:
-                # A library-platform title tag is ``<title> | <journal> | <site>``: drop the
-                # site and journal chrome, but keep a subtitle segment (``| Part II``) — that
-                # one is content, and a greedy tail strip used to eat it along with the rest.
-                segments = [s.strip() for s in _TITLE_SEP_RE.split(raw_title) if s.strip()]
-                if segments and segments[-1].lower() == title_suffix.lower():
-                    segments.pop()
-                while len(segments) > 1 and not _SUBTITLE_RE.match(segments[-1]) \
-                        and segments[-1].lower() != title_suffix.lower():
-                    segments.pop()
-                title = " | ".join(segments).strip()
-            fields["title"] = title
+        fields["title"] = _title_from_tag(page, title_suffix)
     doi = fields["doi"] or doi_from(key.split(":", 1)[-1])
     creators = [normalize_author_name(a) for a in fields["creators"]]
     return AcademicItem(
@@ -287,8 +313,6 @@ class GatedBackend(EntitledBackend):
     PDF_URL_TEMPLATE = ""
     #: The item id in a landed URL, for correlating the PDF anchor with this item.
     ITEM_ID_RE: ClassVar[re.Pattern | None] = None
-    #: The open-access licence block, which only open-access pages carry.
-    OA_RE: ClassVar[re.Pattern] = OA_RE
     #: The documented key forms, spelled into the bad-key message.
     KEY_FORMS = "a DOI or an article URL"
     #: The ``source``/prefix name (``acm:``, ``acm/``, ``doi:``).
@@ -339,8 +363,8 @@ class GatedBackend(EntitledBackend):
         return match.group(1) if match else ""
 
     def is_open_access(self, page_html: str) -> bool:
-        """Overrides the base default with the site's own licence-block marker."""
-        return bool(self.OA_RE.search(page_html or ""))
+        """The shared marker set (a site with another marker overrides this)."""
+        return is_open_access(page_html)
 
     def extract_pdf_url(self, page_html: str, doi: str = "", want_id: str = "") -> str:
         return extract_pdf_url(page_html, doi=doi, want_id=want_id, site=self.SITE,
@@ -351,21 +375,50 @@ class GatedBackend(EntitledBackend):
         """The item type for a landed URL (a site that has more than articles overrides it)."""
         return "article"
 
+    def _pdf_link(self, body: str, item: AcademicItem, landed: str) -> str:
+        """The page's PDF link, or "" (an unexpected host must not cost the metadata)."""
+        try:
+            return self.extract_pdf_url(body, item.doi, self.item_id(landed))
+        except RuntimeError:
+            return ""
+
+    def _finish_item(self, item: AcademicItem, body: str, landed: str, *,
+                     mark_oa: bool = True, require_title: bool = True) -> AcademicItem:
+        """Guard a sign-in wall, attach the PDF link and, when the page says so, mark the item OA.
+
+        The one tail every ``get`` shares. ``mark_oa`` is off for a site that records no
+        open-access signal, ``require_title`` for one whose identity can be complete without a
+        title (ScienceDirect resolves a DOI to its PII, so an untitled page still has one).
+        """
+        if not item.title and (require_title or not item.doi):
+            raise RuntimeError(f"[{self.name}] could not parse the item page: {landed}")
+        self._guard_sign_in(body, landed, item.title)
+        pdf_url = self._pdf_link(body, item, landed)
+        if pdf_url:
+            item.attachments = [pdf_url]
+        if mark_oa and self.is_open_access(body) and not self._short_page(landed):
+            # The chain labels the hit from this: an open-access item is not a subscription
+            # copy, so its note and its "needs a session" advice would both be wrong. A licence
+            # block on the paywalled *short* page can be a related-item card's, hence the check.
+            item.extra = {**item.extra, "open_access": True}
+            item.access = provenance.OA
+        return item
+
     def page_to_item(self, page_html: str, key: str, url: str = "") -> AcademicItem:
         return page_to_item(page_html, key, url, source=self.name, title_suffix=self.TITLE_SUFFIX,
                             item_type=lambda u, k: self.item_type(u, k))
 
     # -- network ---------------------------------------------------------------
 
-    def _page(self, key: str) -> tuple[str, str]:
+    def _page(self, normalized: str) -> tuple[str, str]:
         """Fetch the item page as ``(html, landed url)``, turning a gate into one clear error.
 
-        The page is memoized per key: the PDF download and the item read share one request. A
-        DOI goes through ``doi.org``; the landed URL is kept because the item id in it is not
-        derivable from the DOI.
+        ``normalized`` is an already-normalized key (:meth:`normalize_key`); the callers
+        normalize once and pass the result. The page is memoized per key: the PDF download and
+        the item read share one request. A DOI goes through ``doi.org``; the landed URL is kept
+        because the item id in it is not derivable from the DOI.
         """
-        normalized = self.normalize_key(key)
-        hit = self._memo_get(normalized)
+        hit = self._memo.get(normalized)
         if hit is not None:
             return hit
         if normalized.startswith("url:"):
@@ -377,8 +430,8 @@ class GatedBackend(EntitledBackend):
         if not self._on_site(landed):
             raise NotFound(f"[{self.name}] DOI does not resolve to an {self.SITE_NAME} item: "
                            f"{normalized}")
-        self._memo_put(normalized, (response.text, landed))
-        return self._memo_get(normalized)
+        self._memo[normalized] = (response.text, landed)
+        return response.text, landed
 
     # -- Backend ---------------------------------------------------------------
 
@@ -400,23 +453,8 @@ class GatedBackend(EntitledBackend):
             # The URL named only an internal id; the page named the real identity, which also
             # becomes the memo key so the PDF download reuses this page.
             item.key = f"doi:{item.doi}"
-            self._memo_put(f"doi:{item.doi}", (body, landed))
-        if not item.title:
-            raise RuntimeError(f"[{self.name}] could not parse the item page: {landed}")
-        self._guard_sign_in(body, landed, item.title)
-        try:
-            pdf_url = self.extract_pdf_url(body, item.doi, self.item_id(landed))
-        except RuntimeError:  # an odd host must not cost the metadata
-            pdf_url = ""
-        if pdf_url:
-            item.attachments = [pdf_url]
-        if self.is_open_access(body) and not self._short_page(landed):
-            # The chain labels the hit from this: an open-access item is not a subscription
-            # copy, so its note and its "needs a session" advice would both be wrong. A licence
-            # block on the paywalled *short* page can be a related-item card's, hence the check.
-            item.extra = {**item.extra, "open_access": True}
-            item.access = provenance.OA
-        return item
+            self._memo[f"doi:{item.doi}"] = (body, landed)
+        return self._finish_item(item, body, landed)
 
     def get_attachment(self, key: str) -> bytes:
         """Download the item PDF (only a session the site lets through serves it)."""

@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 
 from ..errors import BadInput, BotWall, NotFound, Paywalled, Unavailable
 from ..models import AcademicItem
+from ..pdf import is_pdf
 from ..transport import HttpError
 from ._cf_gate import is_challenge_page, is_sign_in_page, session_cookie
 from .http import HttpBackend
@@ -41,6 +42,9 @@ class EntitledBackend(HttpBackend):
     GATE_NAME = "the session cookie"
     #: The one message raised whenever a gate meets a request.
     BLOCK_MSG = ""
+    #: The message when the *PDF* download is gated (a site with a second gate of its own, like
+    #: ScienceDirect's acceptance gate, says that instead; empty means :attr:`BLOCK_MSG`).
+    PDF_GATE_MSG = ""
     #: ``cf`` (Cloudflare managed challenge) or ``waf`` (AWS WAF challenge).
     GATE_KIND = "cf"
 
@@ -85,15 +89,6 @@ class EntitledBackend(HttpBackend):
         """Whether a session cookie was configured at all (the site still decides entitlement)."""
         return bool(self.cookie)
 
-    # -- page memo -------------------------------------------------------------
-
-    def _memo_get(self, key: str):
-        """The page already fetched under ``key``, or ``None``."""
-        return self._memo.get(key)
-
-    def _memo_put(self, key: str, value) -> None:
-        self._memo[key] = value
-
     # -- gate detection --------------------------------------------------------
 
     def _is_gate(self, body: str, status: int) -> bool:
@@ -130,13 +125,25 @@ class EntitledBackend(HttpBackend):
         return False
 
     def _refusal_reason(self, page: str, landed: str, response) -> str:
-        """Why the PDF endpoint answered something that is not a PDF."""
+        """Why the PDF endpoint answered something that is not a PDF.
+
+        The order is the same for every site (an OA claim on the *full* page first, then the
+        missing-session case), so a site only overrides how "not entitled" is spelled.
+        """
         # A licence block seen on the item's *short* page may belong to a related-item card,
         # so there the entitlement checks below are the honest answer, not the OA claim.
         if self.is_open_access(page) and not self._short_page(landed):
             return "the item is open access but the endpoint answered an HTML page"
         if not self.has_session:
             return "the session holds no clearance cookie"
+        return self._not_entitled_reason(landed, response)
+
+    def _not_entitled_reason(self, landed: str, response) -> str:
+        """How this site words "the session reached the endpoint but is not entitled".
+
+        ``landed`` is the URL the endpoint sent the client to, which is where a site's own
+        short-page (or sign-in) shape shows.
+        """
         if self._short_page(landed):
             return ("the item answers only its short page, so the session is not entitled to it "
                     "(missing, expired, or not subscribed)")
@@ -182,17 +189,18 @@ class EntitledBackend(HttpBackend):
         ``page`` is the memoized item page and ``landed`` its own landed URL; ``url`` is the
         PDF endpoint, whose path is what the message points the reader at.
         """
+        gate_msg = self.PDF_GATE_MSG or self.BLOCK_MSG
         try:
             response = self.fetch(url, headers={"Accept": "application/pdf"})
         except HttpError as e:
             if self._is_gate(e.body, e.status):
-                raise Unavailable(f"[{self.name}] PDF download was gated: {self.BLOCK_MSG}") from e
+                raise Unavailable(f"[{self.name}] PDF download was gated: {gate_msg}") from e
             raise
-        if response.content.startswith(b"%PDF"):
+        if is_pdf(response.content):
             return response.content
         if self._is_gate(response.text, response.status_code):
             # Cloudflare serves its interstitial with a 200 too: that is the gate, not a refusal.
-            raise Unavailable(f"[{self.name}] PDF download was gated: {self.BLOCK_MSG}")
+            raise Unavailable(f"[{self.name}] PDF download was gated: {gate_msg}")
         landed_on = urlparse(str(response.url)).path or url
         why = self._refusal_reason(page, landed, response)
         raise Paywalled(
