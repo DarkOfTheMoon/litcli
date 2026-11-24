@@ -386,9 +386,10 @@ class ScienceDirectBackend(GatedBackend):
     BLOCK_MSG = _BLOCK_MSG
 
     def __init__(self, name: str = "sciencedirect", timeout: float = 30.0,
-                 cookie: str = "", cookie_file: str = "", user_agent: str = "", **_unused):
+                 cookie: str = "", cookie_file: str = "", user_agent: str = "",
+                 session=None, **_unused):
         super().__init__(name=name, timeout=timeout, cookie=cookie,
-                         cookie_file=cookie_file, user_agent=user_agent)
+                         cookie_file=cookie_file, user_agent=user_agent, session=session)
 
     def normalize_key(self, key: str) -> str:
         """Replaces the inherited constant-driven hook: the key is a PII (or a DOI awaiting a

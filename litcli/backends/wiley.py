@@ -394,9 +394,9 @@ class WileyBackend(GatedBackend):
 
     def __init__(self, name: str = "wiley", timeout: float = 30.0, delay: float = 10.0,
                  cookie: str = "", cookie_file: str = "", user_agent: str = "",
-                 tdm_token: str = "", **_unused):
+                 tdm_token: str = "", session=None, **_unused):
         super().__init__(name=name, timeout=timeout, delay=delay, cookie=cookie,
-                         cookie_file=cookie_file, user_agent=user_agent)
+                         cookie_file=cookie_file, user_agent=user_agent, session=session)
         #: Optional Wiley TDM token: downloads go through ``api.wiley.com`` and skip Cloudflare.
         self.tdm_token = (tdm_token or "").strip()
 

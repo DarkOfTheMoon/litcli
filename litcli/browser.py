@@ -29,12 +29,30 @@ class BrowserUnavailable(External):
 
 @dataclass
 class PageResponse:
-    """What :meth:`Session.page` hands back — the four fields callers of a page need."""
+    """What :meth:`Session.page` hands back — the fields callers of a page need.
+
+    Shaped like the ``httpx`` response the HTTP path returns, so a reader can switch between the
+    two without caring which one it got: the same ``status``/``status_code``, ``text``,
+    ``content``, ``url`` and ``headers``. ``history`` is empty (the browser follows redirects
+    inside ``goto`` and only the landing is observable).
+    """
 
     status: int
     text: str
     url: str
     headers: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def status_code(self) -> int:
+        return self.status
+
+    @property
+    def content(self) -> bytes:
+        return self.text.encode("utf-8", "replace")
+
+    @property
+    def history(self) -> tuple:
+        return ()
 
 
 class _Runtime:

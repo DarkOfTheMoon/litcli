@@ -16,8 +16,20 @@ class FakeResponse:
         self.url = url
 
     @property
+    def status_code(self) -> int:
+        return self.status
+
+    @property
     def text(self) -> str:
         return self._body
+
+    @property
+    def content(self) -> bytes:
+        return self._body.encode("utf-8", "replace")
+
+    @property
+    def history(self) -> tuple:
+        return ()
 
 
 class FakeDownload:

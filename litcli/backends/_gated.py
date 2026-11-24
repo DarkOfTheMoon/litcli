@@ -308,14 +308,14 @@ class GatedBackend(EntitledBackend):
 
     def __init__(self, name: str = "", timeout: float | None = None,
                  delay: float | None = None, cookie: str = "", cookie_file: str = "",
-                 user_agent: str = "", **_unused):
+                 user_agent: str = "", session=None, **_unused):
         name = name or self.DEFAULT_NAME
         self.GATE_NAME = self.GATE_NAME or _GATE_NAMES.get(self.GATE_KIND, "") \
             or "the session cookie"
         if not self.BLOCK_MSG:
             self.BLOCK_MSG = self._gate_message(name)
         super().__init__(name=name, timeout=timeout, delay=delay, cookie=cookie,
-                         cookie_file=cookie_file, user_agent=user_agent)
+                         cookie_file=cookie_file, user_agent=user_agent, session=session)
 
     def _gate_message(self, name: str) -> str:
         if self.GATE_KIND == "waf":

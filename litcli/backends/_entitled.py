@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import ClassVar
 from urllib.parse import urlparse
 
+from ..browser import PageResponse
 from ..errors import BadInput, BotWall, NotFound, Paywalled, Unavailable
 from ..models import AcademicItem
 from ..pdf import is_pdf
@@ -50,7 +51,11 @@ class EntitledBackend(HttpBackend):
 
     def __init__(self, name: str = "", timeout: float | None = None,
                  delay: float | None = None, cookie: str = "", cookie_file: str = "",
-                 user_agent: str = "", **_unused):
+                 user_agent: str = "", session=None, **_unused):
+        #: A live browser session owned by the caller (:class:`litcli.browser.Session`). While it
+        #: is alive it serves every page and PDF; a dead or absent one leaves the cookie path
+        #: below exactly as it was, so existing configurations keep working.
+        self.session = session
         # Fail early: a bad cookie_file, or a cookie without its UA, is a config error. A site
         # that sets only ALLOWED_HOSTS still keeps its rows instead of silently keeping none.
         hosts = self.COOKIE_HOSTS or self.ALLOWED_HOSTS
@@ -86,8 +91,12 @@ class EntitledBackend(HttpBackend):
 
     @property
     def has_session(self) -> bool:
-        """Whether a session cookie was configured at all (the site still decides entitlement)."""
-        return bool(self.cookie)
+        """Whether a session was configured at all (cookie or browser; the site still decides)."""
+        return bool(self.cookie) or self.session is not None
+
+    def _session_live(self) -> bool:
+        """True while a configured browser session is alive and can serve this request."""
+        return self.session is not None and self.session.alive()
 
     # -- gate detection --------------------------------------------------------
 
@@ -100,8 +109,16 @@ class EntitledBackend(HttpBackend):
     def _open(self, url: str, **kw):
         """GET ``url``; a gate in the status, the body or a header becomes :class:`BotWall`.
 
-        The plain raise-for-status is kept, so a 5xx still reaches the retry path.
+        A live browser session serves the page (that is the whole point: its clearance is real
+        and renews itself); without one the cookie path is taken unchanged. The plain
+        raise-for-status is kept, so a 5xx still reaches the retry path.
         """
+        if self._session_live():
+            answer = self.session.page(url)
+            if self._is_gate(answer.text, answer.status) \
+                    or (self.GATE_KIND == "cf" and answer.headers.get("cf-mitigated")):
+                raise BotWall(self.BLOCK_MSG)
+            return answer
         try:
             response = self.fetch(url, **kw)
         except HttpError as e:
@@ -189,6 +206,8 @@ class EntitledBackend(HttpBackend):
         PDF endpoint, whose path is what the message points the reader at.
         """
         gate_msg = self.PDF_GATE_MSG or self.BLOCK_MSG
+        if self._session_live():
+            return self._session_download(url, page, landed, gate_msg)
         try:
             response = self.fetch(url, headers={"Accept": "application/pdf"})
         except HttpError as e:
@@ -202,6 +221,24 @@ class EntitledBackend(HttpBackend):
             raise Unavailable(f"[{self.name}] PDF download was gated: {gate_msg}")
         landed_on = urlparse(str(response.url)).path or url
         why = self._refusal_reason(page, landed, response)
+        raise Paywalled(
+            f"[{self.name}] no PDF bytes: {why} (landed on {landed_on}) — open {url} in your "
+            "entitled browser, or refresh the cookie+user_agent pair from a cleared tab")
+
+    def _session_download(self, url: str, page: str, landed: str, gate_msg: str) -> bytes:
+        """The browser-session half of :meth:`_gated_download`: same verdicts, bytes from Chrome.
+
+        A download that is not a PDF is the endpoint's HTML answer, so it goes through the same
+        gate-then-refusal order — the site answers its gate with a file download too.
+        """
+        data = self.session.download(url)
+        if is_pdf(data):
+            return data
+        answer = PageResponse(200, data.decode("utf-8", "replace"), url)
+        if self._is_gate(answer.text, answer.status):
+            raise Unavailable(f"[{self.name}] PDF download was gated: {gate_msg}")
+        landed_on = urlparse(answer.url).path or url
+        why = self._refusal_reason(page, landed, answer)
         raise Paywalled(
             f"[{self.name}] no PDF bytes: {why} (landed on {landed_on}) — open {url} in your "
             "entitled browser, or refresh the cookie+user_agent pair from a cleared tab")

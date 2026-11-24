@@ -414,9 +414,10 @@ class SpringerBackend(GatedBackend):
     BLOCK_MSG = _BLOCK_MSG
 
     def __init__(self, name: str = "springer", timeout: float = 30.0, delay: float = 1.0,
-                 cookie: str = "", cookie_file: str = "", user_agent: str = "", **_unused):
+                 cookie: str = "", cookie_file: str = "", user_agent: str = "",
+                 session=None, **_unused):
         super().__init__(name=name, timeout=timeout, delay=delay, cookie=cookie,
-                         cookie_file=cookie_file, user_agent=user_agent)
+                         cookie_file=cookie_file, user_agent=user_agent, session=session)
 
     def normalize_key(self, key: str) -> str:
         """Replaces the inherited constant-driven hook: a Nature URL carries a slug rather than
