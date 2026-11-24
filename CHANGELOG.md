@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - 11 家出版社订阅全文阅读器：ScienceDirect、Wiley、SpringerLink、Cambridge Core、AIP Publishing、ACM、APS、
   IOPscience、Taylor & Francis、AIAA、IEEE Xplore。只读、只按 DOI / 文章 URL 解析，`fetch` 仅对各自 DOI 前缀
-  自动尝试一次；命中标 `kind` 与 `access=entitled`，被 Cloudflare / AWS WAF 闸拦下时报因并由链尾续接。
+  自动尝试一次；命中标 `kind` 与 `access=entitled`，被 Cloudflare / WAF 闸拦下时报因并由链尾续接。
   会话按 `cookie` + `user_agent` 成对配置，OA / 金 OA 条目免配置。
 
 - 结果里出现 `[public]` 副本（Sci-Hub / Z-Library 等镜像）时，stderr 打一行说明「不是开放获取授权，许可见标签」，
@@ -64,6 +64,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- IEEE Xplore 换了闸：除了 AWS WAF，又多一层 F5 拦截页（`200` + `<APM_DO_NOT_TOUCH>` + `/TSPD/…`
+  脚本，正文只有导航与标题、没有 `citation_*`）。此前它当普通页面解析，于是报「未订阅」；现在按 WAF 闸
+  认下，报的是「该站要 JS、请用带会话的浏览器」。闸提示与构造期报错同时把 `TS*` cookie 与 `aws-waf-token` 并列。
+- Windows 上 `backends authorize` 写回的 api_key 含非 ASCII 字符时回读乱码（按系统默认的 cp1252 解码
+  UTF-8 文件）：配置读写与测试回读一律显式 UTF-8，跨 locale 的子进程调用同样命名编码。
+- 构建依赖的 `setuptools` 上限从 `<81` 前移到 `<85`：CI 镜像自带的 84 会被 `--no-isolation` 的轮子
+  内容测试判为 unmet dependency，连续把 master 打红。
 - `fetch fulltext <doi>` / `fetch --download`（0.1 的旧写法，老文档与旧技能副本仍在教）不再报一句裸
   argparse usage 让人以为是 DOI 不被接受：`fulltext` / `book` 被当作旧动词认下，`--download` 作为
   无操作别名保留（下载本就是默认）；顺带未加引号的书名也能直接给。

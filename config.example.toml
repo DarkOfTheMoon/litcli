@@ -128,7 +128,7 @@ type = "aip"
 
 # 可选:以下六家同为「订阅全文、只按 DOI / 页面 URL 解析、无关键词检索」的出版社阅读器。
 # 与 AIP 一样**全部在机器人闸后面**（ACM/APS/IOP/Taylor & Francis/AIAA 是 Cloudflare 托管挑战,
-# IEEE Xplore 是 AWS WAF 挑战),页面与 PDF 端点对裸客户端一律 403/202,未配已清关的 cookie +
+# IEEE Xplore 是 WAF 挑战),页面与 PDF 端点对裸客户端一律 403/202,未配已清关的 cookie +
 # user_agent 基本取不到;OA 条目同样先过闸,配了会话后可直接下。doi.org 上的假 DOI 一律
 # 404,可直接验证连通。清关 cookie 是 HttpOnly,手抄 Cookie 头容易漏:更稳的是把浏览器导出
 # 的 Netscape cookies.txt 原样指给 cookie_file(导出里的 #HttpOnly_ 行会被读),user_agent 仍

@@ -169,14 +169,15 @@ CNKI / 豆瓣另需浏览器依赖。
 | `iop` | 读 | 订阅内容，凭你的机构授权（不是 OA）；站点在 Cloudflare 挑战后 | IOPscience DOI 的全文 PDF；只对 `10.1088` 前缀自动尝试 |
 | `tandf` | 读 | 订阅内容，凭你的机构授权（不是 OA）；站点在 Cloudflare 挑战后 | Taylor & Francis DOI 的全文 PDF；只对 `10.1080` 前缀自动尝试 |
 | `aiaa` | 读 | 订阅内容，凭你的机构授权（不是 OA）；站点在 Cloudflare 挑战后 | AIAA DOI 的全文 PDF；只对 `10.2514` 前缀自动尝试 |
-| `ieee` | 读 | 订阅内容，凭你的机构授权（不是 OA）；站点在 AWS WAF 挑战后 | IEEE Xplore 文章的全文 PDF；只对 `10.1109` 前缀自动尝试 |
+| `ieee` | 读 | 订阅内容，凭你的机构授权（不是 OA）；站点在 WAF 挑战后 | IEEE Xplore 文章的全文 PDF；只对 `10.1109` 前缀自动尝试 |
 | `scihub` | 读 | 公开副本（非 OA 授权），只按 DOI | PDF；加 `--scihub` 才兜底（复制 `config.example.toml` 也会启用，因为示例里留着 `[backends.scihub]` 段） |
 | `zlibrary` | 读 | 公开副本（非 OA 授权） | 书目 + PDF；匿名每日有下载配额 |
 
 反爬说明：被 403 不等于你的 IP 被封。`www.sciencedirect.com` 对无 JS 客户端先给 Cloudflare 挑战、再按会话判权限（`CPE00001`），
 所以它不像其它源那样"免配置即通"：在用**已认证**（机构登录 / 校园网）的浏览器标签里打开一次文章，把会话 Cookie 连同该浏览器的 UA 配进
 `[backends.sciencedirect]`（`cookie` / `cookie_file` + `user_agent`，二者缺一不可——清关 Cookie 同时绑定 **UA 与出口 IP**，
-寿命分钟到小时级、服务端随时可能吊销，换机器回放会直接失效）；未认证的标签页只会得到 "Purchase PDF"，且 `/pii/` 会被静默改写成 `/abs/`；
+寿命分钟到小时级、服务端随时可能吊销，换机器回放会直接失效）；该区甚至不认无头浏览器——同一份 Cookie、同一个 UA 放进无头 Chromium
+仍是 `CPE00001` 或挑战页（2026-11-24 实测），所以它只认你在**可见**浏览器里拿到的那份会话；未认证的标签页只会得到 "Purchase PDF"，且 `/pii/` 会被静默改写成 `/abs/`；
 `onlinelibrary.wiley.com` 是同一套形态、同一套配置法（`[backends.wiley]`；它的清关 Cookie 虽可存活一年，仍随会话吊销，未订阅时 PDF 端点会静默跳到摘要页）；
 Wiley 另有 **TDM token**（`[backends.wiley].tdm_token`，免费申请）：走 `api.wiley.com`，不经过 Cloudflare，只放行机构已订阅的文章；
 `link.springer.com`（`[backends.springer]`）**没有 Cloudflare**、是另一种形态：文章页匿名就能读，题录与 PDF 链接恒在，金 OA 的 PDF 匿名也能下载，
@@ -188,9 +189,10 @@ Wiley 另有 **TDM token**（`[backends.wiley].tdm_token`，免费申请）：�
 因此 AIP 基本必须配 `[backends.aip]` 的 `cookie` + `user_agent`（`cf_clearance` 绑 UA 与出口 IP，过期就重取），未配时报的是这道门而不是 IP 被封；
 ACM（`dl.acm.org`）、APS（`link.aps.org`）、IOPscience（`iopscience.iop.org`）、Taylor & Francis
 （`tandfonline.com`）、AIAA（`arc.aiaa.org`）与 AIP 同一形态：都在 Cloudflare 托管挑战后，页面与 PDF 端点对裸客户端一律 403，
-必须成对配置 `cookie` + `user_agent`；IEEE Xplore（`ieeexplore.ieee.org`，`[backends.ieee]`）换了一种闸——AWS WAF 的 JS 挑战
-（空 202 包体 + `gokuProps`，靠 `aws-waf-token` 清关），未授权会话的 PDF 端点会 302 到 `/Xplore/login.jsp?…&authDecision=…`；
-这六家同样只取机构已订阅或 OA 的正文，单 DOI、低频。
+必须成对配置 `cookie` + `user_agent`；IEEE Xplore（`ieeexplore.ieee.org`，`[backends.ieee]`）换了一种闸——WAF 的 JS 挑战
+（AWS WAF 的空 202 包体 + `gokuProps`，靠 `aws-waf-token` 清关；2026-11 起又叠了一层 F5 的
+`<APM_DO_NOT_TOUCH>` 拦截页，带 200 与文章标题、只靠 `/TSPD/…` 脚本放行，靠 `TS*` cookie）——未授权会话的 PDF 端点
+会 302 到 `/Xplore/login.jsp?…&authDecision=…`；这六家同样只取机构已订阅或 OA 的正文，单 DOI、低频。
 `europepmc.org` 的网页在 Cloudflare challenge 后面，所以走 EBI 的 REST；
 DOAB 的 `/rest` 拒绝无 JS 客户端，所以走它的 Atom feed；DOAB 详情页、Sci-Hub、Z-Library 用可解的工作量证明，
 litcli 在本地做题后复用 cookie，不改写、不绕过。知网与豆瓣的滑块交你在可见浏览器手动完成。

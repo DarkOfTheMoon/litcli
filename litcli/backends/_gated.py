@@ -1,9 +1,10 @@
 """The shared shape of the *guarded* publisher readers.
 
-ACM, APS, IOP, Taylor & Francis, AIAA (Cloudflare managed challenge) and IEEE Xplore (AWS WAF
-challenge) serve the article only to a session that got past the site's bot gate — and, beyond
-it, only to a session the user entitled in their own browser. They share one body of logic:
-the key shapes, the Highwire ``citation_*`` page parse, the PDF link pick and the OA marker.
+ACM, APS, IOP, Taylor & Francis, AIAA (Cloudflare managed challenge) and IEEE Xplore (AWS WAF,
+and now F5's traffic shield) serve the article only to a session that got past the site's bot
+gate — and, beyond it, only to a session the user entitled in their own browser. They share
+one body of logic: the key shapes, the Highwire ``citation_*`` page parse, the PDF link pick
+and the OA marker.
 
 What stays with a subclass is only what is site-specific: its host, its URL shapes, its PDF
 path, its title suffix, and — where a site differs — a hook override. The page parse and the
@@ -37,7 +38,7 @@ _DEFAULT_UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like 
 #: The cookie that actually carries the clearance, named in the construction error.
 _GATE_NAMES = {
     "cf": "the Cloudflare clearance cookie (cf_clearance)",
-    "waf": "the AWS WAF token cookie (aws-waf-token)",
+    "waf": "the WAF token cookies (aws-waf-token, or F5's TS*/incap_ses_*)",
 }
 
 _TITLE_TAG_RE = re.compile(r"<title\b[^>]*>(.*?)</title>", re.S | re.I)

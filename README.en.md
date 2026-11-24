@@ -184,7 +184,7 @@ without any config. The keyless OA corpora (`doaj`/`europepmc`/`doab`/`zenodo`) 
 | `iop` | subscription content via your institution's entitlement (not OA); Cloudflare challenge | fulltext PDF for IOPscience DOIs; tried automatically for the `10.1088` prefix |
 | `tandf` | subscription content via your institution's entitlement (not OA); Cloudflare challenge | fulltext PDF for Taylor & Francis DOIs; tried automatically for the `10.1080` prefix |
 | `aiaa` | subscription content via your institution's entitlement (not OA); Cloudflare challenge | fulltext PDF for AIAA DOIs; tried automatically for the `10.2514` prefix |
-| `ieee` | subscription content via your institution's entitlement (not OA); AWS WAF challenge | fulltext PDF for IEEE Xplore items; tried automatically for the `10.1109` prefix |
+| `ieee` | subscription content via your institution's entitlement (not OA); WAF challenge | fulltext PDF for IEEE Xplore items; tried automatically for the `10.1109` prefix |
 | `scihub` | public copy (non-OA), DOI only | PDF, opt-in via `--scihub` (copying `config.example.toml` also enables it — the example keeps the `[backends.scihub]` section) |
 | `zlibrary` | public copy (non-OA) | records + PDF; anonymous daily quota |
 
@@ -198,7 +198,9 @@ plus a per-session entitlement decision (`CPE00001`), so it is not plug-and-play
 an **authenticated** browser tab (institutional login / campus network), then put that session's cookies and
 the browser's own User-Agent into `[backends.sciencedirect]` (`cookie` / `cookie_file` + `user_agent` — both
 are required: the clearance cookie is bound to the UA *and the egress IP*, and the server may drop it at any
-time, so replaying it from another machine fails). A tab that was not authenticated only offers "Purchase PDF",
+time, so replaying it from another machine fails). The zone does not even accept a headless browser: the same
+cookies and the same UA in headless Chromium still get `CPE00001` or a challenge page (measured 2026-11-24), so
+only the session you minted in a *visible* browser counts. A tab that was not authenticated only offers "Purchase PDF",
 and `/pii/` is silently rewritten to `/abs/`. Wiley is the same mechanism and the same setup
 (`[backends.wiley]`; its clearance cookie may live a year yet is revoked with the session, and an unentitled
 PDF URL is silently redirected to the abstract page). Wiley also offers a free **TDM token**
@@ -223,9 +225,10 @@ a blocked IP.
 
 ACM (`dl.acm.org`), APS (`link.aps.org`), IOPscience (`iopscience.iop.org`), Taylor & Francis
 (`tandfonline.com`) and AIAA (`arc.aiaa.org`) share that Cloudflare shape, cookie plus `user_agent` included.
-IEEE Xplore (`ieeexplore.ieee.org`, `[backends.ieee]`) sits behind a different gate — an AWS WAF JS challenge
-(an empty `202` body carrying `gokuProps`, cleared by `aws-waf-token`) — and an unentitled session's PDF endpoint
-redirects to `/Xplore/login.jsp?…&authDecision=…`. All six take only institutionally subscribed or OA fulltext,
+IEEE Xplore (`ieeexplore.ieee.org`, `[backends.ieee]`) sits behind a different gate — a WAF JS challenge
+(an empty `202` body carrying `gokuProps`, cleared by `aws-waf-token`; since 2026-11 also an F5
+`<APM_DO_NOT_TOUCH>` interstitial served with a `200` and the item title, released only by a `/TSPD/…` script and
+cleared by `TS*` cookies) — and an unentitled session's PDF endpoint redirects to `/Xplore/login.jsp?…&authDecision=…`. All six take only institutionally subscribed or OA fulltext,
 one DOI at a time, at low frequency.
 
 ## Configuration

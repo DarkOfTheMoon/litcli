@@ -1,10 +1,12 @@
 """IEEE Xplore reader (ieeexplore.ieee.org), read-only.
 
-The site answers a plain HTTP client with an **AWS WAF** JavaScript challenge (verified
-2026-11-23: an empty ``202`` body carrying ``window.gokuProps``), so the backend carries in
-the cookies of a session the user already passed in their own browser — chiefly
-``aws-waf-token`` — together with that browser's own ``.user_agent``, which the token is bound
-to (``[backends.ieee] .cookie``/``.cookie_file``).
+The site answers a plain HTTP client with a **WAF JavaScript challenge** (verified 2026-11-23,
+and again 2026-11-24 after Xplore moved behind an F5 traffic-shield domain: an empty ``202``
+carrying ``window.gokuProps``, or a ``200`` page carrying ``<APM_DO_NOT_TOUCH>`` and a
+``/TSPD/…`` script instead of the article), so the backend carries in the cookies of a session
+the user already passed in their own browser — chiefly ``aws-waf-token`` — together with that
+browser's own ``.user_agent``, which the token is bound to
+(``[backends.ieee] .cookie``/``.cookie_file``).
 
 A key is a DOI or an ``ieeexplore.ieee.org/document/<arnumber>`` URL; unlike the DOI-in-path
 publishers the URL carries an internal article number, so a URL key stays a URL until the page
@@ -79,7 +81,7 @@ class IeeeBackend(GatedBackend):
     SITE = _SITE
     SITE_NAME = "IEEE Xplore"
     GATE_KIND = "waf"
-    GATE_NAME = "the IEEE Xplore AWS WAF token cookie"
+    GATE_NAME = "the IEEE Xplore WAF token cookies (aws-waf-token, or F5's TS* ones)"
     KEY_PREFIX = "ieee"
     KEY_FORMS = _KEY_FORMS
     TITLE_SUFFIX = "IEEE Xplore"

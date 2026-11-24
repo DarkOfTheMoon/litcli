@@ -73,9 +73,9 @@ description: 用 litcli 与用户的学术资料互操作——检索、读取�
 - **SpringerLink 没有 Cloudflare**：文章页匿名可读、题录恒在，金 OA 的 PDF 匿名直取；只有付费文章的 PDF 要会话（端点先 303 到 `idp.springer.com` 换身份 cookie，未订阅会落回文章页），同样配 `[backends.springer]` 的 `cookie` + `user_agent` 成对使用。
 - **Cambridge / AIP 同样走机构订阅**：`fetch` 对 `10.1017`（Cambridge）、`10.1063` / `10.1121`（AIP）各自动试一次。Cambridge 无 Cloudflare，匿名页题录恒在、CC 许可 OA 的 PDF 匿名直取，付费条目只到 `/abs/` 短页、PDF 端点回跳条目页；AIP 在 Cloudflare 挑战后，几乎必须配 `[backends.aip]` 的 `cookie` + `user_agent`。两者都只取机构已订阅或 OA 的正文，单 DOI、低频。
 - **ACM / APS / IOP / Taylor & Francis / AIAA / IEEE 同属一道闸**：前五家与 AIP 一样在 Cloudflare 托管挑战后（`fetch` 分别对
-  `10.1145` / `10.1103` / `10.1088` / `10.1080` / `10.2514` 自动试一次），IEEE（`10.1109`）是 AWS WAF JS 挑战、靠 `aws-waf-token`。
+  `10.1145` / `10.1103` / `10.1088` / `10.1080` / `10.2514` 自动试一次），IEEE（`10.1109`）是 WAF JS 挑战、靠 `aws-waf-token`（另有 F5 的 `TS*` 拦截页）。
   六家都必须成对配 `cookie` + `user_agent`，未配会话时报的就是这道门。清关 cookie 是 HttpOnly（`cf_clearance` /
-  `aws-waf-token`），**手抄 Cookie 头很容易漏掉**：更稳的是用浏览器扩展/`curl` 导出 Netscape `cookies.txt` 原样指给
+  `aws-waf-token` / `TS*`），**手抄 Cookie 头很容易漏掉**：更稳的是用浏览器扩展/`curl` 导出 Netscape `cookies.txt` 原样指给
   `cookie_file`，导出里的 `#HttpOnly_` 行 litcli 会读。
 - **Sci-Hub 是可选兜底、默认不介入**：`fetch` 仍先走本地库/Unpaywall/OpenAlex，只有加 `--scihub`（或配置启用）才试公开副本；输出标 `source=scihub` 且注明非 OA 授权。镜像用 ALTCHA 验人，litcli 用本地 `hashlib` 解同一道题（不绕过），每次单 DOI、低频。
 - **Z-Library 给的是公开副本（非 OA 授权）**：`fetch --book` 用来找 Sci-Hub 没有的图书（Sci-Hub 只按 DOI 解析论文）。无需 Playwright，但用前要过站点“Checking your browser”工作量证明——litcli 用本地 `hashlib` 解同一道题（不绕过）。**匿名每日下载有配额**，超限会明确提示，可在 `[backends.zlibrary]` 配 `email`/`password` 登录放宽。只取公开书目元数据与公开 PDF 直链。

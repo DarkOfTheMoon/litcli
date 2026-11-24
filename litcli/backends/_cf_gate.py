@@ -35,13 +35,21 @@ def is_challenge_page(page_html: str, status: int = 200) -> bool:
     return any(marker in (page_html or "") for marker in CHALLENGE_MARKERS)
 
 
-def is_waf_page(page_html: str, status: int = 200) -> bool:
-    """True when the body is an AWS WAF challenge page, or the status is 202/403.
+#: Markers of the WAF's own interstitial, which is served *instead of* the page and never on
+#: top of one: AWS WAF's ``gokuProps`` and, since IEEE moved Xplore behind an F5 traffic-shield
+#: domain, its ``<APM_DO_NOT_TOUCH>`` element (verified 2026-11-24: a 200 page carrying only
+#: nav chrome, the item title and a ``/TSPD/…`` script).
+_WAF_MARKERS = ("gokuProps", "APM_DO_NOT_TOUCH")
 
-    The WAF serves its JS challenge as an empty 202 carrying ``gokuProps``; the site never
-    serves a real article on 202. A plain 403 is both gates' default answer.
+
+def is_waf_page(page_html: str, status: int = 200) -> bool:
+    """True when the body is a WAF interstitial, or the status is 202/403.
+
+    Both WAF shapes arrive as a JS challenge: AWS WAF as an empty 202 carrying ``gokuProps``,
+    F5's as a 200 carrying ``APM_DO_NOT_TOUCH``. The site never serves a real article that way,
+    and a plain 403 is both gates' default answer.
     """
-    return status in (202, 403) or "gokuProps" in (page_html or "")
+    return status in (202, 403) or any(m in (page_html or "") for m in _WAF_MARKERS)
 
 
 def parse_cookie(raw: str, hosts: tuple[str, ...]) -> dict[str, str]:
@@ -155,12 +163,13 @@ def gate_message(site: str, name: str) -> str:
 
 
 def waf_gate_message(site: str, name: str) -> str:
-    """The message an AWS WAF challenge raises (the IEEE shape of :func:`gate_message`)."""
-    return (f"{site} served its AWS WAF challenge instead of the article: open the article once "
+    """The message a WAF challenge raises (the IEEE shape of :func:`gate_message`)."""
+    return (f"{site} served its WAF challenge instead of the article: open the article once "
             f"in an authenticated browser tab on your off-campus session, then copy that "
             f"session's cookies into [backends.{name}] cookie / cookie_file — with the "
-            "browser's own user_agent, and from the same machine: the aws-waf-token cookie is "
-            "bound to both the UA and the egress IP and the server may drop it at any time "
+            "browser's own user_agent, and from the same machine: the gate cookies "
+            "(aws-waf-token, or F5's TS* ones) are bound to both the UA and the egress IP and "
+            "the server may drop them at any time "
             "(or retry from an entitled network)")
 
 

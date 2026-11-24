@@ -58,6 +58,9 @@ SITES = (
 
 #: The WAF page the site answers a JS-less client (empty body, 202 in the real response).
 WAF_PAGE = '<html><head><script>window.gokuProps = {"key":"x"};</script></head></html>'
+#: The same gate from F5's traffic shield: served *instead of* the page, with a 200 (Xplore).
+TSPD_PAGE = ("<html><APM_DO_NOT_TOUCH>\n<script src=\"/TSPD/0807dc11?type=9\"></script>"
+             "<head><title>Ieee title | IEEE Journals</title></head><body></body></html>")
 BLOCK_PAGE = "<html><head><title>Just a moment...</title></head></html>"
 
 
@@ -496,6 +499,16 @@ class IeeeTest(unittest.TestCase):
         self.assertTrue(is_waf_page("", 202))
         self.assertFalse(is_waf_page("<html>article</html>", 200))
 
+    def test_the_traffic_shield_interstitial_is_a_gate(self):
+        # F5 serves it with a 200 and the item title in it; parsing it as the item used to look
+        # like a bare "not entitled" refusal instead of the gate it is.
+        self.assertTrue(is_waf_page(TSPD_PAGE, 200))
+        be = self.make()
+        stub(be, (200, TSPD_PAGE))
+        with self.assertRaises(BotWall) as ctx:
+            be.get(self.URL)
+        self.assertIn("WAF", str(ctx.exception))
+
     def test_a_sign_in_page_is_not_accepted_as_the_item(self):
         # Xplore redirects an unentitled session to /Xplore/login.jsp with a 200.
         be = self.make()
@@ -527,7 +540,7 @@ class IeeeTest(unittest.TestCase):
         stub(be, (202, WAF_PAGE))
         with self.assertRaises(BotWall) as ctx:
             be.get(self.URL)
-        self.assertIn("AWS WAF", str(ctx.exception))
+        self.assertIn("WAF challenge", str(ctx.exception))
         self.assertIn("aws-waf-token", str(ctx.exception))
 
     def test_an_arnumber_url_stays_a_url_then_becomes_the_page_doi(self):
