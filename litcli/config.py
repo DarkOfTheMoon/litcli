@@ -59,6 +59,12 @@ def load_config(path: str | Path | None = None) -> dict:
     return copy.deepcopy(_INBUILT_DEFAULT)
 
 
+#: Why a backend's module could not be imported, by backend name. ``_registry`` swallows the
+#: exception to keep the rest alive; without this the failure would resurface only as
+#: "unknown backend type" and the real cause (a bad constant, say) would be lost.
+_IMPORT_ERRORS: dict[str, str] = {}
+
+
 @cache
 def _registry() -> dict[str, type[Backend]]:
     """Backend type registry (type string -> class). Cached per-process: the try-import
@@ -133,8 +139,8 @@ def _registry() -> dict[str, type[Backend]]:
         try:
             module = import_module(f".backends.{spec.name}", __package__)
             reg[spec.name] = getattr(module, spec.backend)
-        except Exception:
-            pass
+        except Exception as e:
+            _IMPORT_ERRORS[spec.name] = f"{type(e).__name__}: {e}"
     try:
         from .backends import zlibrary
 
@@ -207,7 +213,9 @@ def discover_backends(config: dict | None = None, strict: bool = False) -> dict[
         except Exception as e:
             if strict:
                 raise
-            failed_backends[name] = f"{type(e).__name__}: {e}"
+            # The registry already knows the import-time cause when there is one: "unknown
+            # backend type" alone would hide it behind a name the config plainly mentions.
+            failed_backends[name] = _IMPORT_ERRORS.get(name) or f"{type(e).__name__}: {e}"
     return out
 
 

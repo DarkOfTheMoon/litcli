@@ -84,6 +84,39 @@ class TestConfig(unittest.TestCase):
                                       corpora=True)
         self.assertNotIn("europepmc", out)
 
+    def test_a_reader_that_cannot_be_imported_reports_its_own_cause(self):
+        # Keeping the rest alive must not cost the reason: the registry swallowed the exception,
+        # so the report fell back to "unknown backend type 'acm'" — a name the config plainly
+        # has — while the real cause (a bad constant) vanished.
+        import importlib.abc
+        import importlib.machinery
+        import sys
+
+        class Boom(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+            def find_spec(self, name, path=None, target=None):
+                if name == "litcli.backends.acm":
+                    return importlib.machinery.ModuleSpec(name, self)
+
+            def create_module(self, spec):
+                return None
+
+            def exec_module(self, module):
+                raise ValueError("bad constant in acm")
+
+        config._registry.cache_clear()
+        config._IMPORT_ERRORS.clear()
+        self.addCleanup(config._registry.cache_clear)
+        # A module already imported is served from ``sys.modules`` without asking ``sys.meta_path``.
+        cached = sys.modules.pop("litcli.backends.acm", None)
+        if cached is not None:
+            self.addCleanup(sys.modules.__setitem__, "litcli.backends.acm", cached)
+        with mock.patch.object(sys, "meta_path", [Boom(), *sys.meta_path]):
+            out = config.discover_backends({"backends": {"acm": {"type": "acm"},
+                                                         "arxiv": {"type": "arxiv"}}})
+        self.assertIn("arxiv", out)
+        self.assertIn("bad constant in acm", config.failed_backends["acm"])
+        self.assertNotIn("unknown backend type", config.failed_backends["acm"])
+
     def test_a_broken_backend_does_not_take_the_others_down(self):
         class _B:
             capabilities: ClassVar[set[str]] = {"read"}
