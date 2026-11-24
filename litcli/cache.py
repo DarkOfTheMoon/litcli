@@ -27,9 +27,24 @@ MAX_ENTRIES = 4000
 
 _DISABLED = os.environ.get("LITCLI_NO_CACHE", "").lower() in {"1", "true", "yes", "on"}
 
+#: Hit/miss counters since the last :func:`reset_stats`. A survey hop resets them at its start
+#: and refunds its hits in full — a cached answer cost no request, so it must cost no quota.
+_STATS = {"hits": 0, "misses": 0}
+
 
 def enabled() -> bool:
     return not _DISABLED
+
+
+def stats() -> dict[str, int]:
+    """The hit/miss counters since the last reset (a copy)."""
+    return dict(_STATS)
+
+
+def reset_stats() -> None:
+    """Zero both counters."""
+    _STATS["hits"] = 0
+    _STATS["misses"] = 0
 
 
 def disable() -> None:
@@ -46,6 +61,12 @@ def get(key: str) -> str | None:
     """The cached body for ``key``, or ``None`` when absent, stale or unreadable."""
     if _DISABLED:
         return None
+    body = _read(key)
+    _STATS["hits" if body is not None else "misses"] += 1
+    return body
+
+
+def _read(key: str) -> str | None:
     try:
         with _path(key).open(encoding="utf-8") as f:
             entry = json.load(f)
@@ -64,6 +85,7 @@ def put(key: str, body: str) -> None:
     """Store ``body`` under ``key``; a failure here never fails the request."""
     if _DISABLED or body is None:
         return
+    _STATS["misses"] += 1
     path = _path(key)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)

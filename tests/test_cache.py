@@ -177,3 +177,27 @@ class FlagTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StatsTest(_TmpCache):
+    """The counters a survey hop reads to refund its cache hits."""
+
+    def setUp(self):
+        super().setUp()
+        cache.reset_stats()
+
+    def test_a_miss_and_a_put_both_count_as_misses(self):
+        cache.get("absent")
+        cache.put("k", "body")
+        self.assertEqual(cache.stats(), {"hits": 0, "misses": 2})
+
+    def test_a_hit_counts_as_a_hit(self):
+        cache.put("k", "body")
+        cache.reset_stats()
+        cache.get("k")
+        self.assertEqual(cache.stats(), {"hits": 1, "misses": 0})
+
+    def test_reset_clears_both(self):
+        cache.put("k", "body")
+        cache.reset_stats()
+        self.assertEqual(cache.stats(), {"hits": 0, "misses": 0})

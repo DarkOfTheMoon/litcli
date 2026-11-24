@@ -94,8 +94,9 @@ def build_parser() -> argparse.ArgumentParser:
     srv = sub.add_parser("survey", help="a research subject kept on disk: build a corpus around "
                                         "a question, one hop at a time")
     srvsub = srv.add_subparsers(dest="survey_cmd", required=True)
-    from .survey import add_new_parser
+    from .survey import add_new_parser, add_run_parser
     add_new_parser(srvsub.add_parser("new", help="create a project from a question and seeds"))
+    add_run_parser(srvsub.add_parser("run", help="walk the graph from the last checkpoint"))
 
     b = sub.add_parser("browser", help="the shared browser session entitled reads go through "
                                        "(sign in once, no cookie copying)")
