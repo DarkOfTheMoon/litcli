@@ -192,7 +192,7 @@ class TestConfig(unittest.TestCase):
         cfg = d / "config.toml"
         cfg.unlink(missing_ok=True)
         config.write_backend_key("zotero", "KEY1", path=cfg)
-        text = cfg.read_text()
+        text = cfg.read_text(encoding="utf-8")
         self.assertIn("[backends.zotero]", text)
         self.assertIn("api_key = \"KEY1\"", text)
         # The skeleton should keep the default backends, so write_backend_key doesn't drop the other backends
@@ -207,7 +207,7 @@ class TestConfig(unittest.TestCase):
         cfg.write_text("[backends.zotero]\ntype = \"zotero_local\"\nbase = \"http://x\"\n"
                        "api_key = \"OLD\"\n\n[backends.arxiv]\ntype = \"arxiv\"\n", encoding="utf-8")
         config.write_backend_key("zotero", "NEW", path=cfg)
-        text = cfg.read_text()
+        text = cfg.read_text(encoding="utf-8")
         self.assertIn("api_key = \"NEW\"", text)
         self.assertNotIn("api_key = \"OLD\"", text)
         # Other sections and type fields untouched
@@ -220,7 +220,7 @@ class TestConfig(unittest.TestCase):
         cfg = d / "config.toml"
         cfg.write_text("[backends.zotero]\ntype = \"zotero_local\"\n", encoding="utf-8")
         config.write_backend_key("uspto", "KEY2", path=cfg)
-        text = cfg.read_text()
+        text = cfg.read_text(encoding="utf-8")
         self.assertIn("[backends.uspto]", text)
         self.assertIn("api_key = \"KEY2\"", text)
         # Original zotero section preserved
@@ -231,7 +231,7 @@ class TestConfig(unittest.TestCase):
         cfg = d / "config.toml"
         cfg.write_text("[backends.zotero]\n", encoding="utf-8")
         config.write_backend_key("zotero", 'a"b\\c', path=cfg)
-        self.assertIn("api_key = \"a\\\"b\\\\c\"", cfg.read_text())
+        self.assertIn("api_key = \"a\\\"b\\\\c\"", cfg.read_text(encoding="utf-8"))
 
     def test_write_backend_key_escapes_control_characters(self):
         # A raw tab/newline in a basic string is invalid TOML; the file must still parse back.
@@ -242,8 +242,8 @@ class TestConfig(unittest.TestCase):
         cfg.write_text("[backends.zotero]\n", encoding="utf-8")
         key = 'a\tb\nc\rd\x7fé'
         config.write_backend_key("zotero", key, path=cfg)
-        self.assertNotIn("\n", cfg.read_text().split("api_key = ", 1)[1].splitlines()[0])
-        self.assertEqual(tomllib.loads(cfg.read_text())["backends"]["zotero"]["api_key"], key)
+        self.assertNotIn("\n", cfg.read_text(encoding="utf-8").split("api_key = ", 1)[1].splitlines()[0])
+        self.assertEqual(tomllib.loads(cfg.read_text(encoding="utf-8"))["backends"]["zotero"]["api_key"], key)
 
     def test_a_missing_explicit_path_is_loud(self):
         # It used to fall back to the defaults while ``write_backend_key`` wrote the typo'd
@@ -283,7 +283,7 @@ class TestConfig(unittest.TestCase):
             self.assertEqual(config.load_config(), {"backends": {"arxiv": {"type": "arxiv"}}})
             target = config.write_backend_key("zotero", "K")
         self.assertEqual(target, d / "litcli" / "config.toml")
-        self.assertIn("[backends.zotero]", (d / "litcli" / "config.toml").read_text())
+        self.assertIn("[backends.zotero]", (d / "litcli" / "config.toml").read_text(encoding="utf-8"))
 
     @unittest.skipIf(os.name == "nt", "chmod only clears the read-only bit on Windows")
     def test_write_backend_key_restricts_permissions(self):

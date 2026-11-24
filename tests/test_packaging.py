@@ -40,7 +40,7 @@ class InstallerTemplateTest(unittest.TestCase):
 
     @unittest.skipUnless(BASH, "no POSIX shell")
     def test_header_parses_as_a_shell_script(self):
-        rc = subprocess.run([BASH, "-n", HEADER], capture_output=True, text=True)
+        rc = subprocess.run([BASH, "-n", HEADER], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(rc.returncode, 0, rc.stderr)
 
     def test_uninstall_paths_are_covered(self):
@@ -68,7 +68,7 @@ class PlaceholderTest(unittest.TestCase):
         for placeholder in ("@VERSION@", "@PREFIX@"):
             self.assertIn(placeholder, exprs, f"{placeholder} is never substituted")
         script = f"VERSION=1.2.3 PREFIX=/tmp/x; sed {exprs} {HEADER!r}"
-        rc = subprocess.run([BASH, "-c", script], capture_output=True, text=True)
+        rc = subprocess.run([BASH.encode(), "-c", script.encode()], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(rc.returncode, 0, rc.stderr)
         self.assertNotIn("@", rc.stdout)
         self.assertIn("1.2.3", rc.stdout)
@@ -86,7 +86,7 @@ class WheelContentTest(unittest.TestCase):
         work = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, work, True)
         rc = subprocess.run([sys.executable, "-m", "build", "--wheel", "--no-isolation",
-                             "--outdir", work], cwd=ROOT, capture_output=True, text=True)
+                             "--outdir", work], cwd=ROOT, capture_output=True, text=True, encoding="utf-8")
         if rc.returncode != 0 and "No module named build" in rc.stderr:
             self.skipTest("the `build` module is not installed")
         self.assertEqual(rc.returncode, 0, rc.stderr[-2000:])
@@ -142,7 +142,7 @@ class CiWiringTest(unittest.TestCase):
 
     @unittest.skipUnless(BASH, "no POSIX shell")
     def test_release_script_parses(self):
-        rc = subprocess.run([BASH, "-n", RELEASE], capture_output=True, text=True)
+        rc = subprocess.run([BASH, "-n", RELEASE], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(rc.returncode, 0, rc.stderr)
 
     @unittest.skipUnless(BASH, "no POSIX shell")
@@ -159,7 +159,7 @@ class CiWiringTest(unittest.TestCase):
             with open(os.path.join(work, rel), "w", encoding="utf-8") as f:
                 f.write("x")
         script = f"set -euo pipefail; cd {work!r}\n{helper}\nwrite_sums"
-        rc = subprocess.run([BASH, "-c", script], capture_output=True, text=True)
+        rc = subprocess.run([BASH.encode(), "-c", script.encode()], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(rc.returncode, 0, rc.stderr)
         sums = _read(os.path.join(work, "dist", "SHA256SUMS"))
         self.assertIn("  litcli-1.0.tar.gz", sums)
@@ -170,7 +170,7 @@ class CiWiringTest(unittest.TestCase):
         for rel in ("dist/SHA256SUMS", "dist/litcli-1.0.tar.gz", "dist/bin/litcli-1.0.run"):
             shutil.copy(os.path.join(work, rel), flat)
         rc = subprocess.run([BASH, "-c", f"cd {flat!r} && sha256sum -c --quiet SHA256SUMS"],
-                            capture_output=True, text=True)
+                            capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(rc.returncode, 0, rc.stderr)
 
 

@@ -71,7 +71,7 @@ class PublisherTableTest(unittest.TestCase):
             "from litcli import config\n"
             "assert 'ieee' not in config._registry(), 'the broken reader stayed registered'\n"
             "raise SystemExit(litcli.cli.main(['--help']))\n")
-        return subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+        return subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, encoding="utf-8",
                               cwd=os.path.join(os.path.dirname(__file__), ".."))
 
     def test_a_missing_reader_does_not_break_the_cli(self):

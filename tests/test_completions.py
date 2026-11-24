@@ -129,7 +129,7 @@ run litcli completions ""
 run litcli search --backend ""
 run litcli data add --p
 '''
-            proc = subprocess.run([BASH, "-c", probe, "_", path], capture_output=True, text=True)
+            proc = subprocess.run([BASH, "-c", probe, "_", path], capture_output=True, text=True, encoding="utf-8")
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)  # keep the reason in the message
             out = proc.stdout.splitlines()
             self.assertEqual(out[0].strip(), "completions")
