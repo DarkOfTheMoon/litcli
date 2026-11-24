@@ -21,12 +21,13 @@ from litcli.commands.parser import build_parser
 #: The surface the docs, the skill and the completion scripts all promise.
 EXPECTED = {
     "search", "refs", "citing", "related", "export", "completions", "backends", "data", "fetch",
-    "browser",
+    "browser", "survey",
 }
 EXPECTED_PARENTS = {
     "data": {"get", "add", "set", "del", "attach", "tree", "members"},
     "backends": {"list", "status", "authorize", "install-browser"},
     "browser": {"login", "status"},
+    "survey": {"new"},
 }
 
 
@@ -67,10 +68,12 @@ class CliSurfaceTest(unittest.TestCase):
         dispatched = set(cli._TOP_LEVEL_COMMANDS) | set(graph.EDGE_METHODS)
         dispatched |= set(cli._DATA_COMMANDS)
         dispatched |= set(cli._BROWSER_COMMANDS)
-        dispatched |= {"data", "fetch", "backends", "browser"}
+        dispatched |= set(cli._SURVEY_COMMANDS)
+        dispatched |= {"data", "fetch", "backends", "browser", "survey"}
         self.assertEqual(set(_subparsers(self.parser)) - dispatched, set())
         self.assertEqual(set(cli._DATA_COMMANDS), EXPECTED_PARENTS["data"])
         self.assertEqual(set(cli._BROWSER_COMMANDS), EXPECTED_PARENTS["browser"])
+        self.assertEqual(set(cli._SURVEY_COMMANDS), EXPECTED_PARENTS["survey"])
 
     def test_every_nested_command_has_a_handler(self):
         """``backends`` children each reach a function (or the documented ``list`` fallback)."""

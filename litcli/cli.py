@@ -15,6 +15,7 @@ from . import cache
 from .commands import browser as browser_cmd
 from .commands import data as data_cmd
 from .commands import diagnostics, export, fetch, graph, search
+from .commands import survey as survey_cmd
 from .commands.parser import build_parser
 from .config import load_config
 from .debug import enabled as debug_enabled
@@ -29,6 +30,10 @@ _TOP_LEVEL_COMMANDS = {
     "export": export.cmd_export,
     "completions": diagnostics.cmd_completions,
     "backends": diagnostics.cmd_backends,
+}
+
+_SURVEY_COMMANDS = {
+    "new": survey_cmd.cmd_survey_new,
 }
 
 _BROWSER_COMMANDS = {
@@ -141,6 +146,8 @@ def main(argv=None) -> int:
             return _TOP_LEVEL_COMMANDS[args.cmd](cfg, args)
         if args.cmd in graph.EDGE_METHODS:
             return graph.cmd_edge(cfg, args, graph.EDGE_METHODS[args.cmd])
+        if args.cmd == "survey":
+            return _SURVEY_COMMANDS[args.survey_cmd](cfg, args)
         if args.cmd == "browser":
             return _BROWSER_COMMANDS[args.browser_cmd](cfg, args)
         if args.cmd == "data":

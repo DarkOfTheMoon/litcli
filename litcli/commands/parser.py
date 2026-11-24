@@ -91,6 +91,12 @@ def build_parser() -> argparse.ArgumentParser:
     bi.add_argument("--with-deps", action="store_true",
                     help="also apt-install the OS libraries the browser needs (Debian/Ubuntu)")
 
+    srv = sub.add_parser("survey", help="a research subject kept on disk: build a corpus around "
+                                        "a question, one hop at a time")
+    srvsub = srv.add_subparsers(dest="survey_cmd", required=True)
+    from .survey import add_new_parser
+    add_new_parser(srvsub.add_parser("new", help="create a project from a question and seeds"))
+
     b = sub.add_parser("browser", help="the shared browser session entitled reads go through "
                                        "(sign in once, no cookie copying)")
     bsub = b.add_subparsers(dest="browser_cmd")

@@ -78,7 +78,7 @@ class RenderTest(unittest.TestCase):
         out = render("bash", _spec())
         self.assertTrue(out.startswith("#!/usr/bin/env bash"))
         self.assertIn("complete -F _litcli_complete litcli", out)
-        self.assertIn('echo "search refs citing related export completions backends browser data fetch"', out)
+        self.assertIn('echo "search refs citing related export completions backends survey browser data fetch"', out)
         self.assertIn('grep -qx -- "$2"', out)
 
     def test_zsh_skeleton(self):
