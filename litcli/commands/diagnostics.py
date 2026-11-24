@@ -103,8 +103,8 @@ def cmd_backends_authorize(cfg, args) -> int:
     return 0
 
 
-def _browser_launch_check() -> int:
-    """Launch Chromium headless and report its version.
+def _browser_launch_check(name: str) -> int:
+    """Launch ``name`` headless and report its version.
 
     Playwright's cache can hold a half-extracted or wrong-versioned tree that ``install``
     happily accepts; only an actual launch proves the download is usable (this is what the
@@ -119,16 +119,16 @@ def _browser_launch_check() -> int:
     apply_browser_cache()  # a frozen driver would otherwise look inside the bundle
     try:
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True)
+            browser = getattr(pw, name).launch(headless=True)
             try:
                 version = browser.version
             finally:
                 browser.close()
     except Exception as e:  # missing browser, broken tree, no display
-        print(f"[error] chromium does not launch: {e}")
-        print("        run `litcli backends install-browser` first")
+        print(f"[error] {name} does not launch: {e}")
+        print(f"        run `litcli backends install-browser {name}` first")
         return 2
-    print(f"[ok] chromium {version} launches")
+    print(f"[ok] {name} {version} launches")
     return 0
 
 
@@ -140,9 +140,9 @@ def cmd_backends_install_browser(cfg, args) -> int:
     or ``%LOCALAPPDATA%\\ms-playwright``), so installing a new litcli build keeps it.
     ``--check`` skips the download and launches the browser instead.
     """
-    if getattr(args, "check", False):
-        return _browser_launch_check()
     browser = getattr(args, "browser", "chromium") or "chromium"
+    if getattr(args, "check", False):
+        return _browser_launch_check(browser)
     try:
         from playwright._impl._driver import compute_driver_executable
     except ImportError:

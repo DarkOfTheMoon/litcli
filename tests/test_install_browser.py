@@ -84,6 +84,20 @@ class InstallBrowserTest(unittest.TestCase):
         page.chromium.launch.assert_called_once_with(headless=True)
         self.assertIn("123.0.1", out)
 
+    def test_check_launches_the_named_browser(self):
+        # ``--check`` used to launch chromium whatever browser was asked for.
+        page = mock.MagicMock()
+        page.webkit.launch.return_value.version = "17.4"
+        module = mock.MagicMock()
+        module.sync_playwright.return_value.__enter__.return_value = page
+        with mock.patch.dict(sys.modules, {"playwright": module,
+                                           "playwright.sync_api": module}):
+            rc, out = _run(["backends", "install-browser", "webkit", "--check"])
+        self.assertEqual(rc, 0)
+        page.webkit.launch.assert_called_once_with(headless=True)
+        page.chromium.launch.assert_not_called()
+        self.assertIn("webkit 17.4 launches", out)
+
     def test_check_reports_a_browser_that_will_not_launch(self):
         page = mock.MagicMock()
         page.chromium.launch.side_effect = RuntimeError("Executable doesn't exist")

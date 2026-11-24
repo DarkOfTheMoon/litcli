@@ -62,6 +62,28 @@ class MaskTest(unittest.TestCase):
         self.assertNotIn("SECRET", masked)
         self.assertNotIn("me@x.org", masked)
 
+    def test_mailto_is_hidden_too(self):
+        # Crossref / OpenAlex / Unpaywall spell the same personal address ``mailto``.
+        masked = debug.mask("https://api.example/x?mailto=me@x.org&per-page=10")
+        self.assertIn("mailto=***", masked)
+        self.assertIn("per-page=10", masked)
+        self.assertNotIn("me@x.org", masked)
+
+    def test_argv_with_a_mailto_url_is_masked_in_the_trace(self):
+        import contextlib
+        import io
+
+        from litcli import cli
+
+        err = io.StringIO()
+        with mock.patch.dict(cli._TOP_LEVEL_COMMANDS, {"search": mock.Mock(return_value=0)}), \
+                mock.patch.object(cli, "load_config", return_value={}), \
+                mock.patch.object(cli, "_apply_proxy"), \
+                contextlib.redirect_stderr(err):
+            cli.main(["--debug", "search", "https://api.example/x?mailto=me@x.org"])
+        self.assertIn("mailto=***", err.getvalue())
+        self.assertNotIn("me@x.org", err.getvalue())
+
 
 class HookTest(unittest.TestCase):
     def setUp(self):

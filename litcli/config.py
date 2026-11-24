@@ -13,10 +13,11 @@ from functools import cache
 from pathlib import Path
 
 from .backends.base import Backend
+from .errors import BadInput
 from .paths import config_dir
 
-# Key: built-in default backends when nothing is configured (local Zotero read/write + arXiv read-only,
-# works out of the box)
+# Built-in default backends used when no config file exists: local Zotero (read/write) plus the
+# three keyless metadata sources, which work out of the box.
 _INBUILT_DEFAULT = {"backends": {
     "zotero": {"type": "zotero_local", "base": "http://localhost:23119/api"},
     "arxiv": {"type": "arxiv"},
@@ -35,12 +36,24 @@ def default_config_path() -> Path:
 
 def load_config(path: str | Path | None = None) -> dict:
     """Load config; precedence: explicit path > env var LITCLI_CONFIG > the per-user default
-    (``%APPDATA%\\litcli`` on Windows, ``~/.config/litcli`` elsewhere) > built-in default."""
-    for candidate in (path, Path(os.environ[CONFIG_ENV]) if CONFIG_ENV in os.environ else None,
-                      default_config_path()):
-        if candidate and Path(candidate).exists():
-            with open(candidate, "rb") as f:
-                return tomllib.load(f)
+    (``%APPDATA%\\litcli`` on Windows, ``~/.config/litcli`` elsewhere) > built-in default.
+
+    An explicitly named file (argument or ``LITCLI_CONFIG``) must exist: ``write_backend_key``
+    writes to that same path, so silently falling back to the defaults here would have a
+    mistyped variable create the file it never read.
+    """
+    explicit = Path(path) if path is not None else (
+        Path(os.environ[CONFIG_ENV]) if CONFIG_ENV in os.environ else None)
+    if explicit is not None:
+        if not explicit.exists():
+            source = " (from LITCLI_CONFIG)" if path is None else ""
+            raise BadInput(f"config file not found: {explicit}{source}")
+        with open(explicit, "rb") as f:
+            return tomllib.load(f)
+    default = default_config_path()
+    if default.exists():
+        with open(default, "rb") as f:
+            return tomllib.load(f)
     # Deep copy: callers patch the dict (api_key, proxy), and the module constant must not leak
     # those edits into the next load.
     return copy.deepcopy(_INBUILT_DEFAULT)
@@ -49,8 +62,8 @@ def load_config(path: str | Path | None = None) -> dict:
 @cache
 def _registry() -> dict[str, type[Backend]]:
     """Backend type registry (type string -> class). Cached per-process: the try-import
-    blocks are static, and the registry is rebuilt on every backend instantiation and again
-    on the ``get_backend`` fallback path, so caching avoids redoing the imports.
+    blocks are static, while every backend instantiation and the ``get_backend`` fallback
+    path consult the registry, so caching avoids redoing the imports each time.
     """
     from .backends import zotero_local
 
@@ -103,72 +116,21 @@ def _registry() -> dict[str, type[Backend]]:
         reg["scihub"] = scihub.ScihubBackend
     except ImportError:
         pass
-    try:
-        from .backends import sciencedirect
+    # Every entitled/guarded publisher: its name, module and class come from the one table, so
+    # a registered reader cannot be missing from the chain (and vice versa).
+    from importlib import import_module
 
-        reg["sciencedirect"] = sciencedirect.ScienceDirectBackend
+    try:  # the table imports every publisher module: one missing must not sink the registry
+        from .backends.publishers import _PUBLISHER_SPECS
     except ImportError:
-        pass
-    try:
-        from .backends import wiley
+        _PUBLISHER_SPECS = ()
 
-        reg["wiley"] = wiley.WileyBackend
-    except ImportError:
-        pass
-    try:
-        from .backends import springer
-
-        reg["springer"] = springer.SpringerBackend
-    except ImportError:
-        pass
-    try:
-        from .backends import cambridge
-
-        reg["cambridge"] = cambridge.CambridgeBackend
-    except ImportError:
-        pass
-    try:
-        from .backends import aip
-
-        reg["aip"] = aip.AipBackend
-    except ImportError:
-        pass
-    try:
-        from .backends import acm
-
-        reg["acm"] = acm.AcmBackend
-    except ImportError:
-        pass
-    try:
-        from .backends import aps
-
-        reg["aps"] = aps.ApsBackend
-    except ImportError:
-        pass
-    try:
-        from .backends import iop
-
-        reg["iop"] = iop.IopBackend
-    except ImportError:
-        pass
-    try:
-        from .backends import tandf
-
-        reg["tandf"] = tandf.TandfBackend
-    except ImportError:
-        pass
-    try:
-        from .backends import aiaa
-
-        reg["aiaa"] = aiaa.AiaaBackend
-    except ImportError:
-        pass
-    try:
-        from .backends import ieee
-
-        reg["ieee"] = ieee.IeeeBackend
-    except ImportError:
-        pass
+    for spec in _PUBLISHER_SPECS:
+        try:
+            module = import_module(f".backends.{spec.name}", __package__)
+            reg[spec.name] = getattr(module, spec.backend)
+        except ImportError:
+            pass
     try:
         from .backends import zlibrary
 
@@ -207,7 +169,9 @@ def _make_backend(name: str, cfg: dict) -> Backend:
     backend_type = cfg.get("type", "zotero_local")
     if backend_type not in reg:
         raise KeyError(f"unknown backend type '{backend_type}' (available: {sorted(reg)})")
-    kwargs = {k: v for k, v in cfg.items() if k != "type"}
+    # ``name`` and ``enabled`` are config-only keys; the section name is the backend's identity
+    # and a constructor knows neither, so they must not reach ``**kwargs``.
+    kwargs = {k: v for k, v in cfg.items() if k not in ("type", "name", "enabled")}
     return reg[backend_type](name=name, **kwargs)
 
 
@@ -217,19 +181,25 @@ failed_backends: dict[str, str] = {}
 
 
 def discover_backends(config: dict | None = None, strict: bool = False) -> dict[str, Backend]:
-    """Instantiate all enabled backends from config.
+    """Instantiate every backend from config, skipping sections marked ``enabled = false``.
 
-    One broken backend (missing optional dependency, bad config value) must not take the
-    others down, so construction failures are collected in :data:`failed_backends` instead
-    of propagating - unless ``strict``.
+    One broken backend (missing optional dependency, bad config value, unknown type) must not
+    take the others down, so construction failures are collected in :data:`failed_backends`
+    instead of propagating — unless ``strict``. ``get_backend`` still raises when a named
+    backend is the one that failed.
     """
     cfg = config if config is not None else load_config()
     out: dict[str, Backend] = {}
     for name, bcfg in (cfg.get("backends") or {}).items():
+        if not isinstance(bcfg, dict):
+            failed_backends[name] = f"TypeError: section is a {type(bcfg).__name__}, not a table"
+            if strict:
+                raise TypeError(f"[backends.{name}] is not a table")
+            continue
+        if bcfg.get("enabled") is False:
+            continue
         try:
             out[name] = _make_backend(name, bcfg)
-        except KeyError:  # an unknown type is a config error, always worth stopping for
-            raise
         except Exception as e:
             if strict:
                 raise
@@ -245,6 +215,12 @@ def get_backend(name: str = "zotero", config: dict | None = None) -> Backend:
     # instead of silently handing back a default instance that ignores the section.
     if name in failed_backends:
         raise RuntimeError(f"backend '{name}' failed to build: {failed_backends[name]}")
+    # A section switched off must not come back through the registry: ``fetch`` rebuilds its
+    # corpora and publisher steps here, so ``enabled = false`` has to be honoured too.
+    cfg = config if config is not None else load_config()
+    section = (cfg.get("backends") or {}).get(name)
+    if isinstance(section, dict) and section.get("enabled") is False:
+        raise RuntimeError(f"backend '{name}' is disabled in the config (enabled = false)")
     # Allow a registered-but-unconfigured optional backend to be requested directly (e.g.
     # `search --backend douban` / `--backend cnki`) with default kwargs, rather than requiring
     # it to be enabled in config. Optional backends have type == canonical name; the built-in
@@ -269,16 +245,29 @@ def get_all_backends(config: dict | None = None, corpora: bool = False) -> dict[
             continue
         try:
             out[name] = get_backend(name, config)
-        except KeyError:
+        except (KeyError, RuntimeError):  # unregistered, or its section failed to build
             continue
     return out
 
 
 # --- Write back to config.toml (for `backends authorize` to persist the key) ---
 
+#: TOML basic-string escapes (a literal tab/newline in a key would otherwise break the file).
+_TOML_ESCAPES = {"\\": "\\\\", '"': '\\"', "\b": "\\b", "\t": "\\t", "\n": "\\n",
+                 "\f": "\\f", "\r": "\\r"}
+
+
 def _toml_string(text: str) -> str:
-    """Write a value as a TOML basic string (escaping quotes / backslashes / control chars)."""
-    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    """Write a value as a TOML basic string, escaping quotes, backslashes and control chars."""
+    parts = []
+    for ch in text:
+        if ch in _TOML_ESCAPES:
+            parts.append(_TOML_ESCAPES[ch])
+        elif ch < " " or ch == "\x7f":
+            parts.append(f"\\u{ord(ch):04X}")
+        else:
+            parts.append(ch)
+    return '"' + "".join(parts) + '"'
 
 
 def _upsert_key(text: str, section: str, key: str, value: str) -> str:

@@ -7,6 +7,7 @@ reported here as ``[skipped]``.
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 
@@ -16,7 +17,7 @@ from .commands import diagnostics, export, fetch, graph, search
 from .commands.parser import build_parser
 from .config import load_config
 from .debug import enabled as debug_enabled
-from .debug import log, set_enabled, set_verbose
+from .debug import log, mask, set_enabled, set_verbose
 from .errors import LitcliError
 from .transport import set_proxy
 
@@ -121,7 +122,8 @@ def main(argv=None) -> int:
     args = parser.parse_args(quiet)
     if debug_flag or getattr(args, "debug", False):
         set_enabled()
-        log(f"litcli {quiet}")
+        # The argv line carries any URL the user pasted, including its ``mailto=`` address.
+        log(f"litcli {mask(' '.join(quiet))}")
     if verbose_flag or getattr(args, "verbose", False):
         set_verbose()
     if "--no-cache" in raw or getattr(args, "no_cache", False):
@@ -147,6 +149,14 @@ def main(argv=None) -> int:
         if e.hint:
             print(f"[hint] {e.hint}", file=sys.stderr)
         return e.exit_code
+    except BrokenPipeError:
+        # ``litcli ... | head`` closes the pipe first. The work is done, so this is not a
+        # failure: exit 0 quietly, and point stdout at devnull so the interpreter's final
+        # flush does not print an "Exception ignored" traceback.
+        with contextlib.suppress(OSError, ValueError, AttributeError):
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, sys.stdout.fileno())
+        return 0
     except KeyError as e:
         print(f"[error] {e}", file=sys.stderr)
         return 2

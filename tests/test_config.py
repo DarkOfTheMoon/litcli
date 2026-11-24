@@ -7,9 +7,14 @@ from typing import ClassVar
 from unittest import mock
 
 from litcli import config
+from litcli.errors import BadInput
 
 
 class TestConfig(unittest.TestCase):
+    def setUp(self):
+        config.failed_backends.clear()
+        self.addCleanup(config.failed_backends.clear)
+
     def test_discover_inbuilt(self):
         backends = config.discover_backends(
             {"backends": {"zotero": {"type": "zotero_local", "base": "http://x"}}})
@@ -17,9 +22,67 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(sorted(backends["zotero"].capabilities),
                          ["attachment", "read", "write"])
 
-    def test_unknown_type_raises(self):
+    def test_unknown_type_is_collected_like_any_other_failure(self):
+        # It used to re-raise past ``strict`` and take every other backend down with it.
+        out = config.discover_backends({"backends": {"good": {"type": "arxiv"},
+                                                     "x": {"type": "nope"}}})
+        self.assertIn("good", out)
+        self.assertIn("unknown backend type", config.failed_backends["x"])
+
+    def test_unknown_type_still_raises_under_strict(self):
         with self.assertRaises(KeyError):
-            config.discover_backends({"backends": {"x": {"type": "nope"}}})
+            config.discover_backends({"backends": {"x": {"type": "nope"}}}, strict=True)
+
+    def test_an_explicit_backend_that_failed_still_raises(self):
+        cfg = {"backends": {"x": {"type": "nope"}}}
+        with self.assertRaises(RuntimeError) as caught:
+            config.get_backend("x", config=cfg)
+        self.assertIn("unknown backend type", str(caught.exception))
+
+    def test_enabled_false_skips_the_backend(self):
+        out = config.discover_backends({
+            "backends": {"on": {"type": "arxiv"},
+                         "off": {"type": "arxiv", "enabled": False}}})
+        self.assertIn("on", out)
+        self.assertNotIn("off", out)
+        self.assertNotIn("off", config.failed_backends)
+
+    def test_enabled_true_is_just_another_config_key(self):
+        # ``enabled`` must not reach the constructor as a kwarg (it used to kill the backend).
+        out = config.discover_backends({"backends": {"a": {"type": "arxiv", "enabled": True}}})
+        self.assertIn("a", out)
+
+    def test_a_name_key_does_not_collide_with_the_section_identity(self):
+        out = config.discover_backends({"backends": {"a": {"type": "arxiv", "name": "other"}}})
+        self.assertEqual(out["a"].name, "a")
+
+    def test_a_non_table_section_is_collected(self):
+        out = config.discover_backends({"backends": {"good": {"type": "arxiv"}, "bad": "x"}})
+        self.assertIn("good", out)
+        self.assertIn("not a table", config.failed_backends["bad"])
+
+    def test_corpora_loop_tolerates_a_broken_optional_source(self):
+        def fake(name, cfg):
+            if name == "doaj":
+                raise RuntimeError("broken doaj section")
+            return mock.Mock(name=name)
+
+        with mock.patch.object(config, "get_backend", side_effect=fake):
+            out = config.get_all_backends({"backends": {}}, corpora=True)
+        self.assertNotIn("doaj", out)
+        self.assertIn("europepmc", out)
+
+    def test_a_disabled_backend_is_not_rebuilt_by_get_backend(self):
+        # ``fetch`` rebuilds its corpora and publisher steps through ``get_backend``; the
+        # registry fallback used to hand a switched-off section straight back.
+        with self.assertRaises(RuntimeError) as got:
+            config.get_backend("europepmc", {"backends": {"europepmc": {"enabled": False}}})
+        self.assertIn("disabled", str(got.exception))
+
+    def test_a_disabled_corpus_is_not_added_by_the_corpora_loop(self):
+        out = config.get_all_backends({"backends": {"europepmc": {"enabled": False}}},
+                                      corpora=True)
+        self.assertNotIn("europepmc", out)
 
     def test_a_broken_backend_does_not_take_the_others_down(self):
         class _B:
@@ -126,6 +189,33 @@ class TestConfig(unittest.TestCase):
         cfg.write_text("[backends.zotero]\n", encoding="utf-8")
         config.write_backend_key("zotero", 'a"b\\c', path=cfg)
         self.assertIn("api_key = \"a\\\"b\\\\c\"", cfg.read_text())
+
+    def test_write_backend_key_escapes_control_characters(self):
+        # A raw tab/newline in a basic string is invalid TOML; the file must still parse back.
+        import tomllib
+
+        d = Path(tempfile.mkdtemp())
+        cfg = d / "config.toml"
+        cfg.write_text("[backends.zotero]\n", encoding="utf-8")
+        key = 'a\tb\nc\rd\x7fé'
+        config.write_backend_key("zotero", key, path=cfg)
+        self.assertNotIn("\n", cfg.read_text().split("api_key = ", 1)[1].splitlines()[0])
+        self.assertEqual(tomllib.loads(cfg.read_text())["backends"]["zotero"]["api_key"], key)
+
+    def test_a_missing_explicit_path_is_loud(self):
+        # It used to fall back to the defaults while ``write_backend_key`` wrote the typo'd
+        # path, so a mistyped LITCLI_CONFIG looked like it worked until the next write.
+        missing = Path(tempfile.mkdtemp()) / "nope.toml"
+        with self.assertRaises(BadInput) as caught:
+            config.load_config(missing)
+        self.assertIn(str(missing), str(caught.exception))
+
+    def test_a_missing_env_path_says_where_it_came_from(self):
+        missing = Path(tempfile.mkdtemp()) / "nope.toml"
+        with mock.patch.dict(os.environ, {config.CONFIG_ENV: str(missing)}), \
+                self.assertRaises(BadInput) as caught:
+            config.load_config()
+        self.assertIn("LITCLI_CONFIG", str(caught.exception))
 
     @unittest.skipIf(os.name == "nt", "chmod only clears the read-only bit on Windows")
     def test_defaults_do_not_leak_between_loads(self):

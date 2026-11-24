@@ -9,6 +9,11 @@ from ..models import AcademicItem
 from ..provenance import tag
 
 
+def flatten(text: str) -> str:
+    """Collapse every whitespace run (newlines included) to one space: one record, one line."""
+    return " ".join((text or "").split())
+
+
 def _authors(item: AcademicItem) -> str:
     """Family names only, capped: a 40-author paper must not push the title off the screen."""
     names = [i.get("family", "") for i in item.creators if i.get("family")]
@@ -31,9 +36,10 @@ def present(item: AcademicItem, fmt: str = "table", no_cite: bool = False,
     if fmt == "csl":
         return json.dumps(item.to_csl(), ensure_ascii=False)
     label = tag(item.access)
-    line = f"{item.source}/{item.key}  {label + ' ' if label else ''}{_authors(item)}  {item.year or '-'}  {item.title}"
+    line = (f"{item.source}/{item.key}  {label + ' ' if label else ''}{_authors(item)}  "
+            f"{item.year or '-'}  {flatten(item.title)}")
     if item.container_title:
-        line += f"  — {item.container_title}"
+        line += f"  — {flatten(item.container_title)}"
     if item.doi:
         line += f"  doi:{item.doi}"
     if item.cited_by_count:

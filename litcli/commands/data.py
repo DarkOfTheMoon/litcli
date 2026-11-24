@@ -16,7 +16,7 @@ from ..errors import BadInput
 from ..models import AcademicItem
 from ..provenance import stamp
 from .keys import normalize_export_key, resolve_backend
-from .render import present
+from .render import flatten, present
 
 
 def _resolve(cfg, args):
@@ -58,10 +58,11 @@ def cmd_data_add(cfg, args) -> int:
     """
     backend = get_backend(args.backend or "zotero", cfg)
     _writable(backend)
-    item = None
+    items: list[AcademicItem] = []
     if args.pdf:
         item = metadata.extract_metadata(args.pdf)
         item.source = backend.name
+        items = [item]
         print("--- Heuristic extraction from PDF first page (for review) ---")
         print(f"  title: {item.title}")
         print(f"  authors: {', '.join(a.get('family','') for a in item.creators) or '-'}")
@@ -70,6 +71,15 @@ def cmd_data_add(cfg, args) -> int:
             print(f"  abstract: {item.abstract[:120]}")
         if not (item.title or item.creators or item.year):
             print("[warning] No fields were extracted; use --csl or fill them in by hand instead of writing blindly")
+    elif args.csl:
+        # A ``--format csljson`` export is a JSON array: take every record in it.
+        with open(args.csl, encoding="utf-8") as f:
+            csl = json.load(f)
+        records = csl if isinstance(csl, list) else [csl]
+        items = [AcademicItem.from_csl(record, source=backend.name) for record in records]
+        if not items:
+            print("[skipped] the CSL file holds no items")
+            return 2
     else:
         creators = []
         for c in args.creator:
@@ -77,32 +87,35 @@ def cmd_data_add(cfg, args) -> int:
             fam = parts[0]
             giv = parts[1] if len(parts) > 1 else ""
             creators.append({"family": fam, "given": giv})
-        item = AcademicItem(
+        items = [AcademicItem(
             source=backend.name, title=args.title, creators=creators, year=args.year,
             doi=args.doi, url=args.url, abstract=args.abstract, item_type=args.type,
-        )
-        if args.csl:
-            with open(args.csl, encoding="utf-8") as f:
-                csl = json.load(f)
-            item = AcademicItem.from_csl(csl, source=backend.name)
+        )]
 
-    # Dedup / completeness gate (skipped only with --force)
-    if not args.force:
-        try:
-            existing = backend.search(item.doi or item.title, limit=20)
-        except Exception as exc:
-            # An empty list would read as "no duplicate"; say the check did not run.
-            existing = []
-            print(f"[warning] duplicate check failed ({exc}); continuing unchecked", file=sys.stderr)
-        ok, reason = fulltext_mod.should_import(item, existing)
-        if not ok:
-            print(f"[skipped] {reason}")
-            print("  To force-add, use --force")
-            return 2
+    # Dedup / completeness gate, per record (skipped only with --force): a batch import keeps
+    # the records that pass and names the ones it dropped. Gated before the review prompt, so a
+    # record the library already has does not ask for a confirmation it will not use.
+    kept = []
+    skipped = 0
+    for item in items:
+        if not args.force:
+            try:
+                existing = backend.search(item.doi or item.title, limit=20)
+            except Exception as exc:
+                # An empty list would read as "no duplicate"; say the check did not run.
+                existing = []
+                print(f"[warning] duplicate check failed ({exc}); continuing unchecked",
+                      file=sys.stderr)
+            ok, reason = fulltext_mod.should_import(item, existing)
+            if not ok:
+                print(f"[skipped] {reason}")
+                skipped += 1
+                continue
+        kept.append(item)
 
     # Heuristic metadata (--pdf) is noisy: confirm before mutating the library, unless --yes/--force.
     # In a non-interactive context (no TTY, piped) input() raises EOFError -> cancel (safe default).
-    if args.pdf and not (args.force or args.yes):
+    if kept and args.pdf and not (args.force or args.yes):
         if not sys.stdin.isatty():
             raise BadInput("no terminal for the y/N review; re-run with --yes to write the candidate as is")
         print("  Confirm writing this item to the library? [y/N]", end=" ", flush=True)
@@ -114,8 +127,12 @@ def cmd_data_add(cfg, args) -> int:
             print("[skipped] user cancelled")
             return 2
 
-    key = backend.add(item)
-    print(f"Added [{backend.name}] key={key}")
+    for item in kept:
+        key = backend.add(item)
+        print(f"Added [{backend.name}] key={key}")
+    if skipped:
+        print("  To force-add the skipped records, use --force")
+        return 2
     return 0
 
 
@@ -217,16 +234,18 @@ def cmd_data_members(cfg, args) -> int:
     backend = get_backend(args.backend or "zotero", cfg)
     recursive = not getattr(args, "no_recursive", False)
     items = backend.collection_items(args.coll_key, recursive=recursive)
+    # A limit of 0 or a negative one means "no cap" (``items[:-1]`` used to slice the tail off).
+    shown = items[: args.limit] if (args.limit or 0) > 0 else items
 
     if args.format == "json":
-        for it in (items[: args.limit] if args.limit else items):
+        for it in shown:
             print(present(it, "json"))
         return 0
 
     path_map = _collection_path_map(backend)
     sel = path_map.get(args.coll_key, args.coll_key)
-    shown = items[: args.limit] if args.limit else items
-    note = f"(of {len(items)} items, showing first {len(shown)})" if args.limit and len(items) > len(shown) else ""
+    note = (f"(of {len(items)} items, showing first {len(shown)})"
+            if len(items) > len(shown) else "")
     print(f"[{sel}] matched {len(items)} items {note}")
     for it in shown:
         colls = it.extra.get("collections", []) or []
@@ -238,5 +257,5 @@ def cmd_data_members(cfg, args) -> int:
             cite = ""
         names = [i.get("family", "") for i in it.creators if i.get("family")]
         authors = (", ".join(names[:3]) + (" et al." if len(names) > 3 else "")) or "Anon"
-        print(f"  {it.key}  {authors}  {it.year or '-'}  {it.title} | {subs}  {cite}")
+        print(f"  {it.key}  {authors}  {it.year or '-'}  {flatten(it.title)} | {subs}  {cite}")
     return 0

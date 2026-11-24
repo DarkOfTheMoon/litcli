@@ -10,6 +10,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from typing import ClassVar
+from unittest import mock
 
 from litcli.backends.base import Backend, NotSupportedError
 from litcli.commands.keys import arxiv_id_from_key, normalize_export_key, normalize_related_key
@@ -180,6 +181,17 @@ class TableRowTest(unittest.TestCase):
     def test_no_snippet_without_the_flag(self):
         self.assertEqual(len(present(self._item(abstract="x"), no_cite=True).splitlines()), 1)
 
+    def test_embedded_newlines_in_the_title_are_collapsed(self):
+        # A multi-line title must not break the one-record-per-line table.
+        row = present(self._item(title="first line\nsecond   line"), no_cite=True)
+        self.assertEqual(len(row.splitlines()), 1)
+        self.assertIn("first line second line", row)
+
+    def test_embedded_newlines_in_the_container_are_collapsed(self):
+        row = present(self._item(container_title="Journal\nof Things"), no_cite=True)
+        self.assertEqual(len(row.splitlines()), 1)
+        self.assertIn("Journal of Things", row)
+
     def test_a_long_author_list_is_capped(self):
         creators = [{"family": f} for f in "ABCDE"]
         row = present(self._item(creators=creators), no_cite=True)
@@ -264,6 +276,22 @@ class PrintItemsTest(unittest.TestCase):
             rc = print_items([], "json", False, "[no related]")
         self.assertEqual(rc, 0)
         self.assertEqual(buf.getvalue().strip(), "[]")
+
+
+class BrokenPipeTest(unittest.TestCase):
+    def test_a_closed_pipe_exits_0_quietly(self):
+        # ``litcli ... | head`` closes the pipe first; that is not a failure.
+        import contextlib
+        import io
+
+        import litcli.cli as cli
+
+        err = io.StringIO()
+        with mock.patch.object(cli, "load_config", side_effect=BrokenPipeError(32, "Broken pipe")), \
+                mock.patch.object(cli, "_apply_proxy"), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            rc = cli.main(["search", "x"])
+        self.assertEqual((rc, err.getvalue()), (0, ""))
 
 
 class FetchBookTest(unittest.TestCase):
@@ -435,6 +463,63 @@ class FetchFulltextTest(unittest.TestCase):
         self.assertEqual((rc, out, files), (2, "", []))
         self.assertIn("[error] not a PDF from https://x/wall", err)
 
+    @unittest.skipIf(os.name == "nt", "POSIX mode bits only")
+    def test_a_saved_paper_is_readable_by_others_not_0600(self):
+        # mkstemp opens 0600; a downloaded paper is not a credential, so it must take the
+        # ordinary umask-derived mode.
+        info = {"has_fulltext": True, "kind": "local", "access": "local", "data": b"%PDF-1.4 x",
+                "source": "zotero", "key": "K1"}
+        old = os.umask(0o022)
+        try:
+            rc, _out, _err, files = self._run(["fetch", "10.1/x", "--lines", "0"], info)
+        finally:
+            os.umask(old)
+        self.assertEqual((rc, files), (0, ["10.1_x.pdf"]))
+        self.assertEqual(os.stat(os.path.join(self.dir, "10.1_x.pdf")).st_mode & 0o777, 0o644)
+
+    def test_a_wall_served_instead_of_the_pdf_falls_through_to_the_tail(self):
+        # The URL said PDF but the OA host answered a login page: the rest of the chain (and
+        # --scihub) still deserves its turn instead of the command ending on a verify error.
+        import litcli.cli as cli
+
+        head = {"has_fulltext": True, "kind": "unpaywall", "format": "pdf",
+                "url": "https://legal/wall"}
+        tail = {"has_fulltext": True, "kind": "scihub", "url": "https://sci/x.pdf",
+                "access": "public"}
+        with mock.patch("litcli.commands.fetch.pdfutil.download",
+                        side_effect=[b"<html>sign in</html>", b"%PDF-1.4 sci"]) as download, \
+             mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext",
+                        side_effect=[head, tail]) as resolve:
+            rc = cli.main(["fetch", "10.1/x", "--lines", "0"])
+        self.assertEqual(rc, 0)
+        self.assertTrue(resolve.call_args.kwargs.get("tail_only"))
+        self.assertIn("public copy", self.err.getvalue())
+        self.assertEqual(download.call_count, 2)
+        self.assertEqual(os.listdir(self.dir), ["10.1_x.pdf"])
+
+    def test_a_failed_download_falls_through_to_the_tail(self):
+        import litcli.cli as cli
+        from litcli.errors import Unavailable
+
+        head = {"has_fulltext": True, "kind": "openalex", "format": "pdf", "url": "https://x/p.pdf"}
+        tail = {"has_fulltext": True, "kind": "zenodo", "url": "https://z/p.pdf"}
+        with mock.patch("litcli.commands.fetch.pdfutil.download",
+                        side_effect=[Unavailable("connection reset"), b"%PDF-1.4 z"]), \
+             mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext",
+                        side_effect=[head, tail]) as resolve:
+            rc = cli.main(["fetch", "10.1/x", "--lines", "0"])
+        self.assertEqual(rc, 0)
+        self.assertTrue(resolve.call_args.kwargs.get("tail_only"))
+        self.assertIn("connection reset", self.err.getvalue())
+
+    def test_an_empty_tail_after_a_failed_download_gives_the_link_and_exits_1(self):
+        info = {"has_fulltext": True, "kind": "openalex", "format": "pdf", "url": "https://x/wall"}
+        rc, out, err, files = self._run(["fetch", "10.1/x"], info,
+                                        download=b"<html>wall</html>",
+                                        tail={"has_fulltext": False})
+        self.assertEqual((rc, out, files), (1, "", []))
+        self.assertIn("https://x/wall", err)
+
     def test_a_save_leaves_no_part_file_and_overwrites_cleanly(self):
         info = {"has_fulltext": True, "kind": "local", "access": "local", "data": b"%PDF-1.4 new",
                 "source": "zotero", "key": "K1"}
@@ -482,6 +567,28 @@ class FetchFulltextTest(unittest.TestCase):
                         return_value={"has_fulltext": False}) as resolve:
             cli.main(["fetch", target])
         return resolve.call_args.kwargs["publishers"].get("wiley")
+
+    def test_a_disabled_publisher_is_reported_as_switched_off_and_not_probed(self):
+        # ``enabled = false`` raises out of ``get_backend``, so the report used to call the
+        # user's own switch a broken backend — and still built and probed it.
+        import contextlib
+        import io
+        from unittest import mock
+
+        import litcli.cli as cli
+
+        cfg = {"backends": {"wiley": {"type": "wiley", "enabled": False}}}
+        err = io.StringIO()
+        with mock.patch("litcli.cli.load_config", return_value=cfg), \
+             mock.patch("litcli.commands.fetch._optional_backend",
+                        return_value=None) as optional, \
+             mock.patch("litcli.commands.fetch.fulltext_mod.resolve_fulltext",
+                        return_value={"has_fulltext": False}), \
+             contextlib.redirect_stderr(err):
+            cli.main(["fetch", "10.1002/nme.1628", "--no-download"])
+        self.assertIn("10.1002/nme.1628", err.getvalue())
+        self.assertIn("disabled in the config", err.getvalue())
+        self.assertNotIn("wiley", [c.args[0] for c in optional.call_args_list])
 
     def test_a_wiley_doi_probes_wiley_even_unconfigured(self):
         self.assertIsNotNone(self._wiley_probe("10.1002/nme.1628"))

@@ -120,6 +120,9 @@ class Session:
         return next((c.value for c in self.client.cookies.jar if c.name == name), "")
 
     def close(self) -> None:
-        if self._client is not None:
-            self._client.close()
-            self._client = None
+        # Under the builder's lock: a close racing a first use must not drop a client the
+        # property is still constructing (it would be built and then never closed).
+        with self._client_lock:
+            if self._client is not None:
+                self._client.close()
+                self._client = None

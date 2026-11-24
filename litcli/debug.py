@@ -16,7 +16,9 @@ import time
 
 #: Truthy values of ``LITCLI_DEBUG``.
 _TRUTHY = {"1", "true", "yes", "on"}
-_SECRET = re.compile(r"(\b(?:api_key|apikey|key|token|email)=)[^&]+", re.I)
+# ``mailto`` is the polite-pool parameter name (Crossref / OpenAlex / Unpaywall) for the same
+# personal address ``email`` carries elsewhere.
+_SECRET = re.compile(r"(\b(?:api_key|apikey|key|token|email|mailto)=)[^&\s]+", re.I)
 
 _ENABLED = os.environ.get("LITCLI_DEBUG", "").lower() in _TRUTHY
 _VERBOSE = os.environ.get("LITCLI_VERBOSE", "").lower() in _TRUTHY
@@ -51,7 +53,7 @@ def set_enabled(flag: bool = True) -> None:
 
 
 def mask(url: str) -> str:
-    """Hide query values that are credentials or a personal address."""
+    """Hide query/token values that are credentials or a personal address (also used on argv)."""
     return _SECRET.sub(r"\1***", url)
 
 

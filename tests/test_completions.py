@@ -87,6 +87,18 @@ class RenderTest(unittest.TestCase):
         self.assertIn("compdef _litcli litcli", out)
         self.assertIn("compadd --", out)
 
+    def test_zsh_walks_the_path_words_and_offsets_rel_correctly(self):
+        # ``words[1]`` is the command itself, so the loop starts at 2 (bash starts at
+        # COMP_WORDS[1] because index 0 is the command) and CURRENT counts that command word,
+        # which makes the argument position ``CURRENT - ncmd - 1``.
+        out = render("zsh", _spec())
+        self.assertIn("for ((i=2; i<CURRENT; i++))", out)
+        self.assertIn("rel=$((CURRENT - ncmd - 1))", out)
+        # The cache it reads must be assigned under a key that changes when earlier words do
+        # (a current-word-only key served a stale path after a cursor move back).
+        self.assertIn('typeset -g _litcli_key="$key" _litcli_path="$path" _litcli_ncmd=$ncmd', out)
+        self.assertIn('key="$CURRENT|${(j:,:)words}"', out)
+
     def test_fish_skeleton(self):
         out = render("fish", _spec())
         self.assertIn("complete -c litcli", out)

@@ -56,7 +56,7 @@ class AcademicItem:
     """
 
     source: str = ""                      # "zotero" / "arxiv" / ...
-    access: str = ""                      # copy provenance: oa / public / local (litcli.provenance)
+    access: str = ""                      # copy provenance: oa / entitled / public / local (litcli.provenance)
     key: str = ""                         # unique id within the backend: zotero item key / arxiv id
     title: str = ""
     creators: list[dict] = field(default_factory=list)

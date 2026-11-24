@@ -14,6 +14,11 @@ class TestCitation(unittest.TestCase):
         it = AcademicItem(source="x", key="k", title="T", creators=[], year="2002")
         self.assertEqual(render_intext([it]), ["(Anon 2002)"])
 
+    def test_intext_yearless_has_no_trailing_space(self):
+        # It used to render "(Anon )".
+        it = AcademicItem(source="x", key="k", title="T", creators=[], year="")
+        self.assertEqual(render_intext([it]), ["(Anon)"])
+
     def test_intext_two(self):
         it = AcademicItem(source="x", key="k", title="T",
                           creators=[{"family": "A"}, {"family": "B"}], year="2002")

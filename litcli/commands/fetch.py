@@ -2,7 +2,7 @@
 
 One command, one target. ``fetch <doi|arxiv-id|publisher-url|isbn>`` walks the legitimate chain
 (local store → Unpaywall/OpenAlex → Europe PMC/Zenodo → ScienceDirect / Wiley / Springer /
-Cambridge / AIP when entitled → landing page) and
+Cambridge / AIP / ACM / APS / IOP / Taylor & Francis / AIAA / IEEE when entitled → landing page) and
 **saves the file by default**, printing
 exactly one line on stdout: the path. Everything else (what source answered, notes, previews) goes
 to stderr so ``f=$(litcli fetch <id>)`` stays clean. Exit codes: 0 file saved, 1 nothing found,
@@ -15,24 +15,14 @@ import os
 import re
 import sys
 import tempfile
-from collections.abc import Callable
 from typing import NamedTuple
 
+from .. import config as config_mod
 from .. import fulltext as fulltext_mod
 from .. import pdf as pdfutil
 from .. import provenance, unpaywall
-from ..backends.acm import normalize_key as acm_key
-from ..backends.aiaa import normalize_key as aiaa_key
-from ..backends.aip import normalize_key as aip_key
-from ..backends.aps import normalize_key as aps_key
 from ..backends.base import Backend, NotSupportedError
-from ..backends.cambridge import normalize_key as cambridge_key
-from ..backends.ieee import normalize_key as ieee_key
-from ..backends.iop import normalize_key as iop_key
-from ..backends.sciencedirect import normalize_key as sciencedirect_key
-from ..backends.springer import normalize_key as springer_key
-from ..backends.tandf import normalize_key as tandf_key
-from ..backends.wiley import normalize_key as wiley_key
+from ..backends.publishers import _PUBLISHER_SPECS, _PublisherSpec
 from ..config import get_all_backends, get_backend
 from ..errors import LitcliError, Unavailable
 from ..paths import target_path
@@ -40,90 +30,8 @@ from .keys import normalize_related_key
 
 _ISBN_RE = re.compile(r"^(?:97[89][\d-]{10,17}|\d{9}[\dXx])$")
 
-#: DOI prefixes owned by Elsevier (ScienceDirect, incl. the 10.1006/10.1053/10.1067 legacy ones).
-ELSEVIER_DOI_RE = ("10.1016/", "10.1006/", "10.1053/", "10.1067/")
-
-#: DOI prefixes owned by Wiley (the Online Library, incl. the 10.1046/10.1096 legacy ones and
-#: the Physiological Society's 10.1113/10.1114).
-WILEY_DOI_RE = ("10.1002/", "10.1111/", "10.1113/", "10.1114/", "10.1046/", "10.1096/")
-
-#: Targets that are Wiley by shape: a ``wiley:`` key, or a Wiley / doi.org URL.
-_WILEY_LIKE_RE = re.compile(r"^(?:wiley:|https?://(?:[\w-]+\.)*(?:wiley\.com|doi\.org)/)", re.I)
-
-#: DOI prefixes owned by Springer Nature (SpringerLink, BMC/SpringerOpen, EPJ, Nature-branded
-#: content, and the Palgrave/Materials & Structures legacies).
-SPRINGER_DOI_RE = ("10.1007/", "10.1186/", "10.1140/", "10.1038/", "10.1617/", "10.1057/")
-
-#: Targets that are Springer by shape: a ``springer:`` key, or a SpringerLink / Nature URL.
-_SPRINGER_LIKE_RE = re.compile(
-    r"^(?:springer[:\/]|https?://(?:[\w-]+\.)*(?:springer\.com|springernature\.com|nature\.com|"
-    r"biomedcentral\.com|doi\.org)/)", re.I)
-
-#: DOI prefix owned by Cambridge University Press (Cambridge Core journals and books).
-CAMBRIDGE_DOI_RE = ("10.1017/",)
-
-#: DOI prefixes hosted on pubs.aip.org (AIP Publishing itself and the Acoustical Society of
-#: America, whose journals AIP serves).
-AIP_DOI_RE = ("10.1063/", "10.1121/")
-
-#: Targets that are AIP by shape: an ``aip:`` key, or a pubs.aip.org / aip.scitation.org URL.
-_AIP_LIKE_RE = re.compile(
-    r"^(?:aip[:/]|https?://(?:[\w-]+\.)*(?:pubs\.aip\.org|aip\.scitation\.org)/)", re.I)
-
-#: Targets that are Cambridge by shape: a ``cambridge:`` key, or a Cambridge Core URL.
-_CAMBRIDGE_LIKE_RE = re.compile(r"^(?:cambridge[:\/]|https?://(?:[\w-]+\.)*cambridge\.org/)", re.I)
-
-#: DOI prefixes owned by the guarded publishers added in 2026-11 (ACM, APS, IOP, Taylor &
-#: Francis, AIAA, IEEE Xplore). Each sits behind a bot challenge, so its step only starts for
-#: its own prefixes or a pasted page URL.
-ACM_DOI_RE = ("10.1145/",)
-APS_DOI_RE = ("10.1103/",)
-IOP_DOI_RE = ("10.1088/",)
-TANDF_DOI_RE = ("10.1080/",)
-AIAA_DOI_RE = ("10.2514/",)
-IEEE_DOI_RE = ("10.1109/",)
-
-_SCIENCEDIRECT_LIKE_RE = re.compile(
-    r"^(?:sciencedirect[\:/]|https?://(?:[\w-]+\.)*sciencedirect\.com/)", re.I)
-_ACM_LIKE_RE = re.compile(r"^(?:acm[:\/]|https?://(?:[\w-]+\.)*dl\.acm\.org/)", re.I)
-_APS_LIKE_RE = re.compile(r"^(?:aps[:\/]|https?://(?:[\w-]+\.)*link\.aps\.org/)", re.I)
-_IOP_LIKE_RE = re.compile(r"^(?:iop[:\/]|https?://(?:[\w-]+\.)*iopscience\.iop\.org/)", re.I)
-_TANDF_LIKE_RE = re.compile(r"^(?:tandf[:\/]|https?://(?:[\w-]+\.)*tandfonline\.com/)", re.I)
-_AIAA_LIKE_RE = re.compile(r"^(?:aiaa[:\/]|https?://(?:[\w-]+\.)*arc\.aiaa\.org/)", re.I)
-_IEEE_LIKE_RE = re.compile(r"^(?:ieee[:\/]|https?://(?:[\w-]+\.)*ieeexplore\.ieee\.org/)", re.I)
-
 #: A target that already is a DOI (an arXiv id has been turned into one by normalization).
 _DOI_LIKE_RE = re.compile(r"^10\.\d{4,9}/")
-
-
-def _sciencedirect_key(target: str) -> str:
-    """``pii:<ID>`` when the target is a ScienceDirect article URL or bare PII, else ``""``."""
-    try:
-        normalized = sciencedirect_key(target)
-    except LitcliError:
-        return ""
-    return normalized if normalized.startswith("pii:") else ""
-
-
-class _PublisherSpec(NamedTuple):
-    """One guarded publisher step: how its targets are recognised and how it is reported."""
-
-    name: str
-    label: str
-    normalize: Callable[[str], str]
-    like: re.Pattern
-    doi_re: tuple[str, ...]
-    hint: Callable[[], None]
-    #: The key kind a pasted page URL yields (``pii:`` on ScienceDirect, else ``url:``); the
-    #: page step is what turns it into a DOI the rest of the chain can key on.
-    page_prefix: str = "url:"
-
-    def page_key(self, target: str) -> str:
-        try:
-            normalized = self.normalize(target)
-        except LitcliError:
-            return ""
-        return normalized if normalized.startswith(self.page_prefix) else ""
 
 
 def out(text: str) -> None:
@@ -134,36 +42,6 @@ def out(text: str) -> None:
 def note(text: str) -> None:
     """Diagnostics, sources and notes — stderr, so stdout stays a single value."""
     print(text, file=sys.stderr)
-
-def _acm_hint() -> None:
-    note("  ACM is behind a Cloudflare challenge: set [backends.acm] cookie"
-         " (or cookie_file) and user_agent from a browser tab that cleared it")
-
-
-def _aps_hint() -> None:
-    note("  APS is behind a Cloudflare challenge: set [backends.aps] cookie"
-         " (or cookie_file) and user_agent from a browser tab that cleared it")
-
-
-def _iop_hint() -> None:
-    note("  IOPscience is behind a Cloudflare challenge: set [backends.iop] cookie"
-         " (or cookie_file) and user_agent from a browser tab that cleared it"
-         " (the gate covers open-access items too)")
-
-
-def _tandf_hint() -> None:
-    note("  Taylor & Francis is behind a Cloudflare challenge: set [backends.tandf] cookie"
-         " (or cookie_file) and user_agent from a browser tab that cleared it")
-
-
-def _aiaa_hint() -> None:
-    note("  AIAA is behind a Cloudflare challenge: set [backends.aiaa] cookie"
-         " (or cookie_file) and user_agent from a browser tab that cleared it")
-
-
-def _ieee_hint() -> None:
-    note("  IEEE Xplore is behind an AWS WAF challenge: set [backends.ieee] cookie"
-         " (or cookie_file) and user_agent from a browser tab that passed it")
 
 
 #: Preview extractor per fulltext format (PDF falls through to pdftotext).
@@ -178,11 +56,25 @@ def _resolve_oa_email(cfg, args) -> str:
 
 
 def _optional_backend(name: str, cfg):
-    """Instantiate a registered optional backend, or None when it is not available at all."""
+    """Instantiate a registered optional backend, or None when it is not available at all.
+
+    A section that is present but cannot be built (bad cookie_file, unknown type) raises out of
+    ``get_backend``; the optional steps of the chain must tolerate that and keep walking.
+    """
     try:
         return get_backend(name, cfg)
-    except KeyError:
+    except (KeyError, RuntimeError):
         return None
+
+
+def _disabled_in_config(name: str, cfg) -> bool:
+    """True when the user switched this section off (``enabled = false``).
+
+    ``get_backend`` refuses such a section, so a caller that wants to tell "switched off" from
+    "broken" must ask before building it — and must not probe it either.
+    """
+    section = (cfg.get("backends") or {}).get(name)
+    return isinstance(section, dict) and section.get("enabled") is False
 
 
 def _verify(raw: bytes, fmt: str, url: str) -> None:
@@ -212,6 +104,11 @@ def _save(raw: bytes, path: str, lines: int, verb: str = "Downloaded",
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(raw)
+        # mkstemp opens 0600; a downloaded paper is not a credential, so give it the usual
+        # 0666 & ~umask (the rename carries the mode over).
+        mask = os.umask(0)
+        os.umask(mask)
+        os.chmod(tmp, 0o666 & ~mask)
         os.replace(tmp, path)
     except BaseException:
         with contextlib.suppress(OSError):
@@ -248,54 +145,6 @@ def cmd_fetch(cfg, args) -> int:
     return _fetch_fulltext(cfg, args, target)
 
 
-def _sciencedirect_hint() -> None:
-    note("  ScienceDirect needs a logged-in session: set [backends.sciencedirect] cookie"
-         " (or cookie_file) from your browser's off-campus session")
-
-
-def _wiley_hint() -> None:
-    note("  Wiley needs a logged-in session: set [backends.wiley] cookie"
-         " (or cookie_file) and user_agent from your browser's off-campus session,"
-         " or set a free tdm_token (its PDF route skips Cloudflare)")
-
-
-def _springer_hint() -> None:
-    note("  SpringerLink PDFs need a session: set [backends.springer] cookie"
-         " (or cookie_file) and user_agent from an authenticated browser tab"
-         " (open-access articles download without one)")
-
-
-def _cambridge_hint() -> None:
-    note("  Cambridge Core PDFs need a session: set [backends.cambridge] cookie"
-         " (or cookie_file) and user_agent from an authenticated browser tab"
-         " (open-access articles download without one)")
-
-
-def _aip_hint() -> None:
-    note("  AIP is behind a Cloudflare challenge: set [backends.aip] cookie"
-         " (or cookie_file) and user_agent from a browser tab that cleared it")
-
-
-#: Every guarded/entitled publisher, in chain order (a subscription copy outranks a page).
-_PUBLISHER_SPECS = (
-    _PublisherSpec("sciencedirect", "ScienceDirect", _sciencedirect_key, _SCIENCEDIRECT_LIKE_RE,
-                   ELSEVIER_DOI_RE, _sciencedirect_hint, page_prefix="pii:"),
-    _PublisherSpec("wiley", "Wiley", wiley_key, _WILEY_LIKE_RE, WILEY_DOI_RE, _wiley_hint),
-    _PublisherSpec("springer", "SpringerLink", springer_key, _SPRINGER_LIKE_RE, SPRINGER_DOI_RE,
-                   _springer_hint),
-    _PublisherSpec("cambridge", "Cambridge Core", cambridge_key, _CAMBRIDGE_LIKE_RE,
-                   CAMBRIDGE_DOI_RE, _cambridge_hint),
-    _PublisherSpec("aip", "AIP", aip_key, _AIP_LIKE_RE, AIP_DOI_RE, _aip_hint),
-    _PublisherSpec("acm", "ACM Digital Library", acm_key, _ACM_LIKE_RE, ACM_DOI_RE, _acm_hint),
-    _PublisherSpec("aps", "APS", aps_key, _APS_LIKE_RE, APS_DOI_RE, _aps_hint),
-    _PublisherSpec("iop", "IOPscience", iop_key, _IOP_LIKE_RE, IOP_DOI_RE, _iop_hint),
-    _PublisherSpec("tandf", "Taylor & Francis Online", tandf_key, _TANDF_LIKE_RE, TANDF_DOI_RE,
-                   _tandf_hint),
-    _PublisherSpec("aiaa", "AIAA", aiaa_key, _AIAA_LIKE_RE, AIAA_DOI_RE, _aiaa_hint),
-    _PublisherSpec("ieee", "IEEE Xplore", ieee_key, _IEEE_LIKE_RE, IEEE_DOI_RE, _ieee_hint),
-)
-
-
 def _publisher_for_url(publishers: dict, url: str):
     """The configured publisher whose site ``url`` lives on, if any.
 
@@ -310,11 +159,47 @@ def _publisher_for_url(publishers: dict, url: str):
     return None
 
 
+class _Probe(NamedTuple):
+    """What the probe step established: a chain answer, or nothing plus where it stopped.
+
+    ``info is None`` means a pasted page the chain could not key on (``unresolved`` says which
+    steps never ran and why); an ``info`` without ``has_fulltext`` is a clean miss, which the
+    probe reports from ``pub_errors``/``errors`` rather than through a page.
+    """
+
+    key: str
+    info: dict | None
+    email: str
+    scihub_backend: object
+    publishers: dict[str, Backend]
+    pub_errors: dict[str, str]
+    unresolved: list[tuple[_PublisherSpec, bool]]
+    pages: dict[str, str]
+
+
 def _fetch_fulltext(cfg, args, target: str) -> int:
     """Walk the legitimate fulltext chain for ``target`` and save the file (or print the link).
 
-    Sci-Hub is opt-in (``--scihub``, or by configuring the ``scihub`` backend) and stays last:
-    it is a public copy without an open licence, so its hits say so.
+    Sequencing only: the probe step turns the target into an answer (or reports why there is
+    none), the emit step renders the answer and gets the bytes. Sci-Hub is opt-in
+    (``--scihub``, or by configuring the ``scihub`` backend) and stays last: it is a public copy
+    without an open licence, so its hits say so.
+    """
+    probe = _probe_fulltext(cfg, args, target)
+    if probe is None:  # a malformed target, already reported
+        return 2
+    if probe.info is None:
+        return _report_unresolved(probe)
+    if not probe.info.get("has_fulltext"):
+        return _report_no_fulltext(probe)
+    return _emit_fulltext(args, probe)
+
+
+def _probe_fulltext(cfg, args, target: str) -> _Probe | None:
+    """Resolve ``target`` to a chain answer, probing the publishers the target names.
+
+    Returns ``None`` when the target is shaped like a publisher key but does not normalize
+    (already reported); otherwise the answer, or the reason no step could answer.
     """
     key = normalize_related_key(target)
     # A pasted publisher URL, or a ``wiley:<DOI>`` / ``cambridge:<DOI>`` form, normalizes to the
@@ -339,9 +224,11 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
     scihub_backend = backends.get("scihub")
     if args.scihub and scihub_backend is None:
         scihub_backend = _optional_backend("scihub", cfg)
-    # The legal corpus sources are keyless: consult them even when not enabled in config.
-    corpus = {name: backends.get(name) or _optional_backend(name, cfg)
-              for name in ("europepmc", "zenodo")}
+    # The legal corpus sources are keyless: consult them even when not enabled in config — but
+    # a section the user switched off stays off.
+    corpus = {name: backends.get(name) or (
+        None if _disabled_in_config(name, cfg) else _optional_backend(name, cfg))
+        for name in ("europepmc", "zenodo")}
     # A publisher step starts for its own identifiers (a pasted page, or its DOI prefix) even
     # unconfigured: an unentitled or unconfigured run still has to say *why* it stopped.
     pages: dict[str, str] = {}
@@ -351,10 +238,14 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
         page = "" if _DOI_LIKE_RE.match(key) else spec.page_key(target)
         backend = backends.get(spec.name)
         if backend is None and (page or key.lower().startswith(spec.doi_re)):
-            try:
+            if _disabled_in_config(spec.name, cfg):
+                # Say the user's own reason, and do not probe a source they switched off.
+                pub_errors[spec.name] = "disabled in the config (enabled = false)"
+            else:
                 backend = _optional_backend(spec.name, cfg)
-            except RuntimeError as e:  # a broken section must not sink the rest of the chain
-                pub_errors[spec.name] = str(e)
+                if backend is None:  # a broken section must not sink the rest of the chain
+                    pub_errors[spec.name] = config_mod.failed_backends.get(
+                        spec.name, "backend unavailable")
         pages[spec.name] = page
         if backend is not None:
             publishers[spec.name] = backend
@@ -389,21 +280,9 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
         if info is None and pages[spec.name]:
             unresolved.append((spec, got_page))
     if info is None and unresolved:
-        # A pasted page the chain could not key on: report that instead of probing every
-        # backend with a URL.
-        for spec, got_page in unresolved:
-            page = pages[spec.name]
-            if publishers.get(spec.name) is None:
-                note(f"{spec.label} {page[len(spec.page_prefix):]}  "
-                     f"{pub_errors.get(spec.name) or 'backend unavailable'}")
-            else:
-                note(f"{spec.label} {page[len(spec.page_prefix):]}  "
-                     f"{'the item page gave no DOI' if got_page else 'the item page did not load'}")
-                if pub_errors.get(spec.name):
-                    note(f"  [skipped] {pub_errors[spec.name]}")
-                else:
-                    spec.hint()
-        return 1
+        # A pasted page the chain could not key on: probing every backend with a URL would not
+        # help, so the report says which step is why.
+        return _Probe(key, None, email, scihub_backend, publishers, pub_errors, unresolved, pages)
     if info is None:
         info = fulltext_mod.resolve_fulltext(key, email, backends=backends,
                                              openalex_backend=backends.get("openalex"),
@@ -411,22 +290,48 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
                                              zenodo_backend=corpus["zenodo"],
                                              publishers=publishers,
                                              scihub_backend=scihub_backend)
-    if not info.get("has_fulltext"):
-        note(f"DOI {key}  no such work in the local store or open OA sources")
-        for spec in _PUBLISHER_SPECS:
-            if pub_errors.get(spec.name):
-                note(f"  [skipped] {pub_errors[spec.name]}")
-        for reason in info.get("errors") or []:
-            note(f"  [skipped] {reason}")
-        for spec in _PUBLISHER_SPECS:
-            if key.lower().startswith(spec.doi_re):
-                spec.hint()
-        if not scihub_backend:
-            note("  add --scihub to also try Sci-Hub, or use institutional access / interlibrary loan")
-        else:
-            note("  use institutional access / interlibrary loan / a proxy")
-        return 1
+    return _Probe(key, info, email, scihub_backend, publishers, pub_errors, unresolved, pages)
 
+
+def _report_unresolved(probe: _Probe) -> int:
+    """Report each pasted page no step could turn into a DOI, and why."""
+    for spec, got_page in probe.unresolved:
+        page = probe.pages[spec.name]
+        if probe.publishers.get(spec.name) is None:
+            note(f"{spec.label} {page[len(spec.page_prefix):]}  "
+                 f"{probe.pub_errors.get(spec.name) or 'backend unavailable'}")
+        else:
+            note(f"{spec.label} {page[len(spec.page_prefix):]}  "
+                 f"{'the item page gave no DOI' if got_page else 'the item page did not load'}")
+            if probe.pub_errors.get(spec.name):
+                note(f"  [skipped] {probe.pub_errors[spec.name]}")
+            else:
+                note(spec.hint)
+    return 1
+
+
+def _report_no_fulltext(probe: _Probe) -> int:
+    """Report a chain that answered nothing, with the per-step reasons and the way forward."""
+    note(f"DOI {probe.key}  no such work in the local store or open OA sources")
+    for spec in _PUBLISHER_SPECS:
+        if probe.pub_errors.get(spec.name):
+            note(f"  [skipped] {probe.pub_errors[spec.name]}")
+    for reason in probe.info.get("errors") or []:
+        note(f"  [skipped] {reason}")
+    for spec in _PUBLISHER_SPECS:
+        if probe.key.lower().startswith(spec.doi_re):
+            note(spec.hint)
+    if not probe.scihub_backend:
+        note("  add --scihub to also try Sci-Hub, or use institutional access / interlibrary loan")
+    else:
+        note("  use institutional access / interlibrary loan / a proxy")
+    return 1
+
+
+def _emit_fulltext(args, probe: _Probe) -> int:
+    """Render the hit, get its bytes and save them; fall back to the chain tail on a failure."""
+    key, publishers = probe.key, probe.publishers
+    info = probe.info
     kind = info["kind"]
     access = info.get("access", "")
     if access == provenance.PUBLIC:
@@ -463,41 +368,61 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
         return 0
 
     raw = None
+    verified = False
+    # Where to send the reader when no byte comes at all (shown only if the whole chain fails).
+    link_hint = f"  open the PDF in your browser: {info['url']}"
     publisher = publishers.get(kind) or _publisher_for_url(publishers, info["url"])
     if publisher is not None:
         # The PDF needs the same entitled session as the page (and may sit behind a second
         # gate), so downloading it through a plain client would only collect a challenge page.
+        link_hint = f"  open the PDF in your entitled browser: {info['url']}"
         try:
             raw = publisher.get_attachment(key)
         except (LitcliError, RuntimeError) as e:
             note(f"  [skipped] {e}")
-            # The publisher page answered (hence the chain stopped there) but the bytes did
-            # not come — a link that always exists, e.g. Wiley's unentitled ``pdfdirect``.
-            # The rest of the chain still deserves its turn before this is a failure.
-            tail = fulltext_mod.resolve_fulltext(key, email, tail_only=True,
-                                                 scihub_backend=scihub_backend)
-            hit = tail.get("has_fulltext") and tail.get("url")
-            for reason in tail.get("errors") or []:
-                note(f"  [skipped] {reason}")
-            if not hit:
-                note(f"  open the PDF in your entitled browser: {info['url']}")
-                return 1
-            info = tail
-            kind = info["kind"]
-            fmt = info.get("format") or "pdf"
-            if info.get("access") == provenance.PUBLIC:
-                note(f"  note: {kind} copy — public copy, not an open-access licence")
-            if info.get("title"):
-                note(f"  title: {info['title'][:70]}")
-            note(f"  source={kind}  {'PDF' if fmt == 'pdf' else fmt.upper()}: {info['url']}")
-            if fmt == "html":
-                note("  note: landing page, not a file — open it in a browser")
-            if args.no_download or fmt == "html":
-                out(info["url"])
-                return 0
+            raw = None
+    if raw is None and publisher is None:
+        # No session-carrying backend for this host: a plain download is the only option left.
+        try:
+            raw = pdfutil.download(info["url"])
+            _verify(raw, fmt, info["url"])
+            verified = True
+        except (LitcliError, OSError) as e:
+            # A 200 that is a paywall / login page is not a file either: verify inside the try
+            # so the same fall-back covers it.
+            note(f"  [skipped] {e}")
+            raw = None
     if raw is None:
+        # The hit answered (or the bytes were wrong) but no file came — a link that always
+        # exists, e.g. Wiley's unentitled ``pdfdirect``, or an OA link that turned into a wall.
+        # The rest of the chain still deserves its turn before this is a failure.
+        tail = fulltext_mod.resolve_fulltext(key, probe.email, tail_only=True,
+                                             scihub_backend=probe.scihub_backend)
+        for reason in tail.get("errors") or []:
+            note(f"  [skipped] {reason}")
+        if not (tail.get("has_fulltext") and tail.get("url")):
+            note(link_hint)
+            return 1
+        info = tail
+        kind = info["kind"]
+        fmt = info.get("format") or "pdf"
+        if info.get("access") == provenance.PUBLIC:
+            note(f"  note: {kind} copy — public copy, not an open-access licence")
+        if info.get("title"):
+            note(f"  title: {info['title'][:70]}")
+        note(f"  source={kind}  {'PDF' if fmt == 'pdf' else fmt.upper()}: {info['url']}")
+        if fmt == "html":
+            note("  note: landing page, not a file — open it in a browser")
+        if args.no_download or fmt == "html":
+            out(info["url"])
+            return 0
         raw = pdfutil.download(info["url"])
-    _verify(raw, fmt, info["url"])
+    if not verified:  # the plain-download branch verified above already
+        # UNVERIFIED edge: a local-store hit carries no ``format``, so it is checked as a PDF.
+        # A local attachment that is an HTML snapshot would fail here; the parent-item path
+        # filters on ``contentType == application/pdf`` (see zotero_local), so it has not been
+        # observed — no real HTML-snapshot sample was run.
+        _verify(raw, fmt, info["url"])
     path = target_path(args.out, key, fmt)
     _save(raw, path, args.lines, extract=_TEXT_EXTRACTORS.get(fmt, pdfutil.extract_text))
     out(path)

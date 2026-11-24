@@ -8,6 +8,27 @@ from unittest import mock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from litcli import fulltext as ft
+from litcli.errors import BotWall
+
+
+def _from_sciencedirect(doi, backend):
+    return ft._from_publisher(doi, backend, "sciencedirect")
+
+
+def _from_wiley(doi, backend):
+    return ft._from_publisher(doi, backend, "wiley")
+
+
+def _from_springer(doi, backend):
+    return ft._from_publisher(doi, backend, "springer")
+
+
+def _from_cambridge(doi, backend):
+    return ft._from_publisher(doi, backend, "cambridge")
+
+
+def _from_aip(doi, backend):
+    return ft._from_publisher(doi, backend, "aip")
 
 
 def make_resolver(value):
@@ -35,12 +56,55 @@ class FulltextStubTest(unittest.TestCase):
 
     def test_first_resolver_raises_skipped(self):
         def boom(d):
-            raise RuntimeError("network down")
+            raise BotWall("network down")
         out = ft.resolve_fulltext("10.1/x", resolvers=[
             boom, make_resolver({"kind": "openalex", "url": "http://2.pdf"}),
         ])
         self.assertTrue(out["has_fulltext"])
         self.assertEqual(out["kind"], "openalex")
+
+    def test_an_unexpected_runtime_error_is_recorded_and_the_chain_continues(self):
+        # A site that cannot parse a changed page shape raises RuntimeError; a later source
+        # still gets its turn and the failure is named in the report.
+        def boom(d):
+            raise RuntimeError("unforeseen shape")
+        out = ft.resolve_fulltext("10.1/x", resolvers=[
+            boom, make_resolver({"kind": "openalex", "url": "http://2.pdf"})])
+        self.assertTrue(out["has_fulltext"])
+        out = ft.resolve_fulltext("10.1/x", resolvers=[boom])
+        self.assertFalse(out["has_fulltext"])
+        self.assertIn("unforeseen shape", out["errors"][0])
+
+    def test_a_publisher_runtime_error_does_not_end_the_real_publisher_chain(self):
+        # The recorded-resolver test above uses a hand-built resolver; this one walks the real
+        # ``_default_resolvers`` publisher steps: the first site cannot parse its (changed)
+        # page, the next one still answers.
+        from unittest import mock
+
+        from litcli.models import AcademicItem
+
+        class Boom:
+            name = "sciencedirect"
+
+            def get(self, doi):
+                raise RuntimeError("unforeseen shape")
+
+        class Ok:
+            name = "wiley"
+            access = ""
+            has_session = True
+
+            def get(self, doi):
+                return AcademicItem(source="wiley", key=f"doi:{doi}", title="T",
+                                    attachments=["https://x/y.pdf"])
+
+        with mock.patch.object(ft.unpaywall, "resolve_oa", return_value=None):
+            out = ft.resolve_fulltext("10.1016/j.cma.2004.11.019", "a@b.c",
+                                      backends={}, publishers={"sciencedirect": Boom(),
+                                                               "wiley": Ok()})
+        self.assertTrue(out["has_fulltext"])
+        self.assertEqual(out["kind"], "wiley")
+        self.assertEqual(out["url"], "https://x/y.pdf")
 
     def test_no_fulltext_flagged(self):
         out = ft.resolve_fulltext("10.1/x", resolvers=[make_resolver(None)])
@@ -135,26 +199,39 @@ class CorpusResolverTest(unittest.TestCase):
         self.assertNotIn("_from_publisher", order)
 
     def test_sciencedirect_candidate_is_entitled(self):
-        cand = ft._from_sciencedirect("10.1/x", self.FakeBackend(["https://sd/x.pdf"]))
+        cand = _from_sciencedirect("10.1/x", self.FakeBackend(["https://sd/x.pdf"]))
         self.assertEqual(cand["kind"], "sciencedirect")
         self.assertEqual(cand["access"], "entitled")
         self.assertNotIn("format", cand)
 
+    def test_an_explicit_backend_access_wins_over_entitled(self):
+        # ``access`` is provenance, not a capability: a publisher step that is not a
+        # subscription copy must be able to say so.
+        class Public(self.FakeBackend):
+            access = "public"
+
+        cand = _from_sciencedirect("10.1/x", Public(["https://sd/x.pdf"]))
+        self.assertEqual(cand["access"], "public")
+
+    def test_a_backend_without_access_is_labelled_entitled(self):
+        cand = _from_sciencedirect("10.1/x", self.FakeBackend(["https://sd/x.pdf"]))
+        self.assertEqual(cand["access"], "entitled")
+
     def test_sciencedirect_without_a_pdf_falls_through(self):
-        self.assertIsNone(ft._from_sciencedirect("10.1/x", self.FakeBackend([])))
-        self.assertIsNone(ft._from_sciencedirect("10.1/x", self.Missing()))
-        self.assertIsNone(ft._from_sciencedirect("10.1/x", None))
+        self.assertIsNone(_from_sciencedirect("10.1/x", self.FakeBackend([])))
+        self.assertIsNone(_from_sciencedirect("10.1/x", self.Missing()))
+        self.assertIsNone(_from_sciencedirect("10.1/x", None))
 
     def test_wiley_candidate_is_entitled(self):
-        cand = ft._from_wiley("10.1002/x", self.FakeBackend(["https://w/x.pdf"]))
+        cand = _from_wiley("10.1002/x", self.FakeBackend(["https://w/x.pdf"]))
         self.assertEqual(cand["kind"], "wiley")
         self.assertEqual(cand["access"], "entitled")
         self.assertNotIn("format", cand)
 
     def test_wiley_without_a_pdf_falls_through(self):
-        self.assertIsNone(ft._from_wiley("10.1002/x", self.FakeBackend([])))
-        self.assertIsNone(ft._from_wiley("10.1002/x", self.Missing()))
-        self.assertIsNone(ft._from_wiley("10.1002/x", None))
+        self.assertIsNone(_from_wiley("10.1002/x", self.FakeBackend([])))
+        self.assertIsNone(_from_wiley("10.1002/x", self.Missing()))
+        self.assertIsNone(_from_wiley("10.1002/x", None))
 
     def test_wiley_tdm_fallback_shows_the_page_not_the_api_url(self):
         class TdmOnly:
@@ -166,7 +243,7 @@ class CorpusResolverTest(unittest.TestCase):
                 })
                 return item
 
-        cand = ft._from_wiley("10.1002/x", TdmOnly())
+        cand = _from_wiley("10.1002/x", TdmOnly())
         self.assertEqual(cand["url"], "https://onlinelibrary.wiley.com/doi/10.1002/x")
 
     def test_the_tdm_page_url_survives_the_chain(self):
@@ -186,7 +263,7 @@ class CorpusResolverTest(unittest.TestCase):
         self.assertEqual(out["url"], "https://onlinelibrary.wiley.com/doi/10.1002/x")
 
     def test_springer_candidate_is_entitled(self):
-        cand = ft._from_springer("10.1007/x", self.FakeBackend(["https://s/x.pdf"]))
+        cand = _from_springer("10.1007/x", self.FakeBackend(["https://s/x.pdf"]))
         self.assertEqual(cand["kind"], "springer")
         self.assertEqual(cand["access"], "entitled")
         self.assertNotIn("format", cand)
@@ -198,7 +275,7 @@ class CorpusResolverTest(unittest.TestCase):
                                       "attachments": ["https://s/x.pdf"],
                                       "extra": {"open_access": True}})()
 
-        cand = ft._from_springer("10.1007/x", Oa())
+        cand = _from_springer("10.1007/x", Oa())
         self.assertEqual(cand["access"], "oa")
         self.assertEqual(cand["status"], "open access")
 
@@ -212,25 +289,25 @@ class CorpusResolverTest(unittest.TestCase):
                 return type("I", (), {"title": "T", "url": "https://s/x",
                                       "attachments": ["https://s/x.pdf"], "extra": {}})()
 
-        cand = ft._from_springer("10.1007/x", Anonymous())
+        cand = _from_springer("10.1007/x", Anonymous())
         self.assertEqual(cand["access"], "entitled")
         self.assertIn("needs a configured session", cand["status"])
 
     def test_springer_without_a_pdf_falls_through(self):
-        self.assertIsNone(ft._from_springer("10.1007/x", self.FakeBackend([])))
-        self.assertIsNone(ft._from_springer("10.1007/x", self.Missing()))
-        self.assertIsNone(ft._from_springer("10.1007/x", None))
+        self.assertIsNone(_from_springer("10.1007/x", self.FakeBackend([])))
+        self.assertIsNone(_from_springer("10.1007/x", self.Missing()))
+        self.assertIsNone(_from_springer("10.1007/x", None))
 
     def test_springer_hit_is_used_over_the_landing_page(self):
         with mock.patch.object(ft.unpaywall, "resolve_oa",
                                return_value={"best_pdf": "", "best_landing": "https://legal/page"}):
             out = ft.resolve_fulltext("10.1007/x",
-                                      springer_backend=self.FakeBackend(["https://s/x.pdf"]))
+                                      publishers={'springer': self.FakeBackend(["https://s/x.pdf"])})
         self.assertEqual(out["kind"], "springer")
         self.assertEqual(out["url"], "https://s/x.pdf")
 
     def test_cambridge_candidate_is_entitled(self):
-        cand = ft._from_cambridge("10.1017/x", self.FakeBackend(["https://c/x.pdf"]))
+        cand = _from_cambridge("10.1017/x", self.FakeBackend(["https://c/x.pdf"]))
         self.assertEqual(cand["kind"], "cambridge")
         self.assertEqual(cand["access"], "entitled")
         self.assertNotIn("format", cand)
@@ -242,7 +319,7 @@ class CorpusResolverTest(unittest.TestCase):
                                       "attachments": ["https://c/x.pdf"],
                                       "extra": {"open_access": True}})()
 
-        cand = ft._from_cambridge("10.1017/x", Oa())
+        cand = _from_cambridge("10.1017/x", Oa())
         self.assertEqual(cand["access"], "oa")
         self.assertEqual(cand["status"], "open access")
 
@@ -254,17 +331,17 @@ class CorpusResolverTest(unittest.TestCase):
                 return type("I", (), {"title": "T", "url": "https://c/x",
                                       "attachments": ["https://c/x.pdf"], "extra": {}})()
 
-        cand = ft._from_cambridge("10.1017/x", Anonymous())
+        cand = _from_cambridge("10.1017/x", Anonymous())
         self.assertEqual(cand["access"], "entitled")
         self.assertIn("needs a configured session", cand["status"])
 
     def test_cambridge_without_a_pdf_falls_through(self):
-        self.assertIsNone(ft._from_cambridge("10.1017/x", self.FakeBackend([])))
-        self.assertIsNone(ft._from_cambridge("10.1017/x", self.Missing()))
-        self.assertIsNone(ft._from_cambridge("10.1017/x", None))
+        self.assertIsNone(_from_cambridge("10.1017/x", self.FakeBackend([])))
+        self.assertIsNone(_from_cambridge("10.1017/x", self.Missing()))
+        self.assertIsNone(_from_cambridge("10.1017/x", None))
 
     def test_aip_candidate_is_entitled(self):
-        cand = ft._from_aip("10.1063/x", self.FakeBackend(["https://a/x.pdf"]))
+        cand = _from_aip("10.1063/x", self.FakeBackend(["https://a/x.pdf"]))
         self.assertEqual(cand["kind"], "aip")
         self.assertEqual(cand["access"], "entitled")
         self.assertNotIn("format", cand)
@@ -276,27 +353,27 @@ class CorpusResolverTest(unittest.TestCase):
                                       "attachments": ["https://a/x.pdf"],
                                       "extra": {"open_access": True}})()
 
-        cand = ft._from_aip("10.1063/x", Oa())
+        cand = _from_aip("10.1063/x", Oa())
         self.assertEqual(cand["access"], "oa")
         self.assertEqual(cand["status"], "open access")
 
     def test_aip_without_a_pdf_falls_through(self):
-        self.assertIsNone(ft._from_aip("10.1063/x", self.FakeBackend([])))
-        self.assertIsNone(ft._from_aip("10.1063/x", self.Missing()))
-        self.assertIsNone(ft._from_aip("10.1063/x", None))
+        self.assertIsNone(_from_aip("10.1063/x", self.FakeBackend([])))
+        self.assertIsNone(_from_aip("10.1063/x", self.Missing()))
+        self.assertIsNone(_from_aip("10.1063/x", None))
 
     def test_a_cambridge_hit_is_used_over_the_landing_page(self):
         with mock.patch.object(ft.unpaywall, "resolve_oa",
                                return_value={"best_pdf": "", "best_landing": "https://legal/page"}):
             out = ft.resolve_fulltext("10.1017/x",
-                                      cambridge_backend=self.FakeBackend(["https://c/x.pdf"]))
+                                      publishers={'cambridge': self.FakeBackend(["https://c/x.pdf"])})
         self.assertEqual(out["kind"], "cambridge")
 
     def test_an_aip_hit_is_used_over_the_landing_page(self):
         with mock.patch.object(ft.unpaywall, "resolve_oa",
                                return_value={"best_pdf": "", "best_landing": "https://legal/page"}):
             out = ft.resolve_fulltext("10.1063/x",
-                                      aip_backend=self.FakeBackend(["https://a/x.pdf"]))
+                                      publishers={'aip': self.FakeBackend(["https://a/x.pdf"])})
         self.assertEqual(out["kind"], "aip")
 
     def test_every_guarded_publisher_is_a_chain_step(self):
@@ -321,7 +398,7 @@ class CorpusResolverTest(unittest.TestCase):
         # labelled with the site, not with the lambda that happens to wrap it.
         class Boom(self.FakeBackend):
             def get(self, key):
-                raise RuntimeError("Taylor & Francis Online served its gate")
+                raise BotWall("Taylor & Francis Online served its gate")
 
         with mock.patch.object(ft.unpaywall, "resolve_oa", return_value=None):
             out = ft.resolve_fulltext("10.1/x", publishers={"tandf": Boom([])})
@@ -336,7 +413,7 @@ class CorpusResolverTest(unittest.TestCase):
         with mock.patch.object(ft.unpaywall, "resolve_oa",
                                return_value={"best_pdf": "", "best_landing": "https://legal/page"}):
             out = ft.resolve_fulltext("10.1/x",
-                                      sciencedirect_backend=self.FakeBackend(["https://sd/x.pdf"]))
+                                      publishers={'sciencedirect': self.FakeBackend(["https://sd/x.pdf"])})
         self.assertEqual(out["kind"], "sciencedirect")
         self.assertEqual(out["url"], "https://sd/x.pdf")
 

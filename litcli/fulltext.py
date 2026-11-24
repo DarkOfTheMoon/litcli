@@ -25,14 +25,14 @@ from __future__ import annotations
 
 import html
 import re
-from functools import partial
 
 from lxml import etree as ET
 
 from . import provenance, unpaywall
 from .aggregate import norm_doi
+from .backends.publishers import PUBLISHER_ORDER
 from .debug import notice
-from .errors import LitcliError
+from .errors import BotWall, LitcliError
 from .models import AcademicItem
 
 # A resolver: takes a doi, returns a candidate dict or None.
@@ -162,11 +162,6 @@ def _from_zenodo(doi: str, backend) -> dict | None:
             "status": "open access", "access": "oa"}
 
 
-#: The entitled/guarded publisher steps, in chain order (a subscription copy outranks a page).
-PUBLISHER_ORDER = ("sciencedirect", "wiley", "springer", "cambridge", "aip",
-                   "acm", "aps", "iop", "tandf", "aiaa", "ieee")
-
-
 def _from_publisher(doi: str, backend, kind: str) -> dict | None:
     """A PDF through the user's institution, or an open-access one, from one publisher site.
 
@@ -179,7 +174,11 @@ def _from_publisher(doi: str, backend, kind: str) -> dict | None:
         return None
     try:
         item: AcademicItem = backend.get(doi)
-    except (LitcliError, OSError, KeyError):
+    except BotWall:
+        # The gate message is the reader's only pointer to the cookie setting: let the chain
+        # record it under the source name instead of treating it as "no copy here".
+        raise
+    except (LitcliError, OSError, KeyError, RuntimeError):
         return None
     if not item.attachments:
         return None
@@ -194,16 +193,10 @@ def _from_publisher(doi: str, backend, kind: str) -> dict | None:
     anonymous = getattr(backend, "ANONYMOUS_PAGES", kind in ("springer", "cambridge"))
     if anonymous and not getattr(backend, "has_session", True):
         status += " — needs a configured session (none set)"
+    # ``access`` is provenance here, not a capability: an explicit value on the backend wins
+    # (a publisher step that is not a subscription copy says so), otherwise it is entitled.
     return {"kind": kind, "url": attachment, "title": item.title,
-            "status": status, "access": provenance.ENTITLED}
-
-
-#: Per-kind aliases (the chain itself goes through the one ``_from_publisher``).
-_from_sciencedirect = partial(_from_publisher, kind="sciencedirect")
-_from_wiley = partial(_from_publisher, kind="wiley")
-_from_springer = partial(_from_publisher, kind="springer")
-_from_cambridge = partial(_from_publisher, kind="cambridge")
-_from_aip = partial(_from_publisher, kind="aip")
+            "status": status, "access": getattr(backend, "access", "") or provenance.ENTITLED}
 
 
 def _from_scihub(doi: str, backend) -> dict | None:
@@ -229,14 +222,9 @@ def _step(name: str, fn):
 def _default_resolvers(email: str, backends: dict | None = None,
                        openalex_backend=None, scihub_backend=None,
                        europepmc_backend=None, zenodo_backend=None,
-                       sciencedirect_backend=None, wiley_backend=None,
-                       springer_backend=None, cambridge_backend=None,
-                       aip_backend=None, publishers: dict | None = None,
+                       publishers: dict | None = None,
                        tail_only: bool = False) -> list[Resolver]:
-    merged = {"sciencedirect": sciencedirect_backend, "wiley": wiley_backend,
-              "springer": springer_backend, "cambridge": cambridge_backend,
-              "aip": aip_backend, **(publishers or {})}
-    sites = {name: merged.get(name) for name in PUBLISHER_ORDER}
+    sites = {name: (publishers or {}).get(name) for name in PUBLISHER_ORDER}
     cache: dict[str, dict | None] = {}
 
     def _oa(doi: str):
@@ -310,11 +298,6 @@ def resolve_fulltext(doi: str, email: str = unpaywall.DEFAULT_EMAIL,
                      scihub_backend=None,
                      europepmc_backend=None,
                      zenodo_backend=None,
-                     sciencedirect_backend=None,
-                     wiley_backend=None,
-                     springer_backend=None,
-                     cambridge_backend=None,
-                     aip_backend=None,
                      publishers: dict | None = None,
                      resolvers: list[Resolver] | None = None,
                      tail_only: bool = False) -> dict:
@@ -328,14 +311,15 @@ def resolve_fulltext(doi: str, email: str = unpaywall.DEFAULT_EMAIL,
     if resolvers is None:
         resolvers = _default_resolvers(email, backends, openalex_backend, scihub_backend,
                                        europepmc_backend, zenodo_backend,
-                                       sciencedirect_backend, wiley_backend,
-                                       springer_backend, cambridge_backend, aip_backend,
                                        publishers, tail_only=tail_only)
     errors: list[str] = []
     for r in resolvers:
         try:
             cand = r(doi)
-        except Exception as e:  # A single resolver failure must not bring down the whole chain
+        except (LitcliError, OSError, KeyError, RuntimeError) as e:
+            # A single resolver failure must not bring down the whole chain — including the
+            # ``RuntimeError`` a site raises when it cannot parse a changed page shape (the kind
+            # is still named in the report when nothing answered).
             errors.append(f"{getattr(r, '__name__', type(r).__name__)}: {e}")
             continue
         if cand and (cand.get("url") or cand.get("data")):

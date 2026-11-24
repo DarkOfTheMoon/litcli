@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import argparse
 
-# argparse does not encode these as ``choices``; supply the known values for completion.
-BACKENDS = ["zotero", "arxiv", "crossref", "openalex", "openlibrary", "uspto", "cnki",
-            "douban", "sciencedirect", "wiley", "springer", "cambridge", "aip", "acm", "aps", "iop",
-            "tandf", "aiaa", "ieee", "scihub", "zlibrary", "doaj",
-            "europepmc", "doab", "zenodo"]
+from .backends.publishers import PUBLISHER_ORDER
+
+# argparse does not encode these as ``choices``; supply the known values for completion. The
+# publisher block comes from the one table, so a reader cannot be offered without being real.
+BACKENDS = ["zotero", "arxiv", "crossref", "openalex", "openlibrary", "uspto", "cnki", "douban",
+            *PUBLISHER_ORDER,
+            "scihub", "zlibrary", "doaj", "europepmc", "doab", "zenodo"]
 TYPES = ["article", "book", "chapter", "thesis", "report", "preprint", "paper",
          "patent", "document", "dataset", "software", "conference"]
 SHELL_CHOICES = ["bash", "zsh", "fish"]
@@ -286,9 +288,15 @@ _litcli_is_cmd() {
 _litcli() {
     local cur="${words[CURRENT]}" prev="${words[CURRENT-1]}"
     local path="" w i ncmd=0
-    local rel
-    if [[ "$_litcli_cur" != "$words[CURRENT]" ]]; then
-        for ((i=1; i<CURRENT; i++)); do
+    local rel key
+    # The cache is keyed on the whole line, not on the current word: moving the cursor back
+    # into an earlier word leaves ``words[CURRENT]`` unchanged while the words around it do
+    # change, and a current-word key would then serve the stale path.
+    key="$CURRENT|${(j:,:)words}"
+    if [[ "$_litcli_key" != "$key" ]]; then
+        # ``words[1]`` is the command itself (unlike bash's COMP_WORDS[0]), so the path words
+        # start at 2; caching avoids re-walking the line on every keystroke.
+        for ((i=2; i<CURRENT; i++)); do
             w="${words[i]}"
             if _litcli_is_cmd "$path" "$w"; then
                 path="${path:+$path }$w"; ncmd=$((ncmd+1))
@@ -296,10 +304,12 @@ _litcli() {
                 break
             fi
         done
-        _litcli_path="$path"; _litcli_ncmd=$ncmd
+        typeset -g _litcli_key="$key" _litcli_path="$path" _litcli_ncmd=$ncmd
     fi
     path="$_litcli_path"; ncmd=$_litcli_ncmd
-    rel=$((CURRENT - ncmd))
+    # ``CURRENT`` counts the command word as well, so the argument position is one lower than
+    # the bash equivalent (``COMP_CWORD - ncmd``).
+    rel=$((CURRENT - ncmd - 1))
     if [[ "$cur" == -* ]]; then
         compadd -- ${=_litcli_flags "$path"}
     elif [[ "$prev" == -* ]]; then

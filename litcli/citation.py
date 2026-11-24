@@ -31,7 +31,8 @@ def render_intext(items: Iterable[AcademicItem]) -> list[str]:
             label = f"{names[0]}, {names[1]} & {names[2]}"
         else:
             label = f"{names[0]} et al."
-        out.append(f"({label} {it.year})".strip())
+        # A yearless record used to render "(Anon )": build the string conditionally instead.
+        out.append(f"({label} {it.year})" if it.year else f"({label})")
     return out
 
 

@@ -125,7 +125,7 @@ def cmd_search(cfg, args) -> int:
         backends = get_all_backends(cfg, corpora=True)
         items: list[AcademicItem] = []
         failed: dict[str, int] = {}
-        # A few sources at a time: sequential fan-out at nine backends is slow and walks
+        # A few sources at a time: sequential fan-out across the whole registry is slow and walks
         # straight into the rate limits the retries then have to back off from.
         names = list(backends)
         done = _fan_out(backends, args.query, args.limit, filters)
