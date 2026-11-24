@@ -131,6 +131,28 @@ shell 补全只有 bash/zsh/fish（PowerShell 下可在 Git Bash 里生成）。
 
 `data tree` / `data members <集合key>` 罗列集合；`--year` 等过滤在各后端的映射见下节。
 
+### 课题调查（survey）
+
+把「围绕一个课题收文献」做成长跑项目：`survey new` 建项目（种子、年份窗口、刊名约束、阈值、档位落 `project.toml`），`survey run` 沿引文图谱一跳一跳收网，收到的全文与元数据落 `corpus/`，每一步落 `trace.jsonl` 供续跑与事后审查。
+
+| 命令 | 说明 |
+|---|---|
+| `litcli survey new "<课题>" [--seed DOI]... [--year A-B] [--type T] [--container 刊名] [--threshold N] [--effort 档]` | 建项目，只打印项目名；不给 `--seed` 先检索取前 3 条当种子 |
+| `litcli survey run <项目> [--effort 档] [--format jsonl\|md]` | 从最后一个检查点继续；stdout 是 JSONL 事件，`--format md` 换成按跳的表格 |
+| `litcli survey status <项目>` | 一行 JSON：课题、状态、跳数、准入数、最后停因、剩余额度 |
+| `litcli survey stop <项目>` | 写 `$.stop`，循环在下一个跳边界收尾 |
+
+档位决定走多宽，不决定收多少条——热的题每跳都有新高分就一直走到额度或饱和，冷的题几跳没动静就自己停：
+
+| 档 | 前沿/跳 | 准入/跳 | 邻居/条 | 连续无新高即停 | openalex 上限 | arxiv 上限 | 每出版社 | 最长跳 |
+|---|---|---|---|---|---|---|---|---|
+| low | 4 | 2 | refs 10 / citing 10 / related 5 | 2 | 40 | 10 | 2 | 6 |
+| medium | 8 | 5 | 20 / 20 / 10 | 3 | 200 | 40 | 6 | 20 |
+| high | 16 | 8 | 30 / 30 / 15 | 4 | 600 | 100 | 15 | 50 |
+| max | 24 | 12 | 50 / 50 / 25 | 6 | 1500 | 200 | 30 | 120 |
+
+额度按请求计：命中缓存不扣、重试照扣。同一项目同时只允许一个 `run`（存在 `$.lock` 即退 2）；续跑用同一条命令，已展开过的条目不再展开。`seen.jsonl` 每条都带理由（`score 3.21 >= 2.50`、`seen`、`year … outside …`），下载失败只标 `unavailable`、不剔除候选。只有收尾时 `corpus/` 为空才退 1。
+
 ### 过滤条件在各后端的映射
 
 后端没有对应字段时，尽量折进自由查询词，否则忽略。

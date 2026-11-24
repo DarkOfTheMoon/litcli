@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 
 from .config import _OPTIONAL_BACKENDS
+from .effort import LEVELS as EFFORT_LEVELS
 from .publishers import PUBLISHER_ORDER
 
 # argparse does not encode these as ``choices``; supply the known values for completion. The
@@ -23,13 +24,16 @@ BACKENDS = ["zotero", *(name for name, _cls in _OPTIONAL_BACKENDS), *PUBLISHER_O
 TYPES = ["article", "book", "chapter", "thesis", "report", "preprint", "paper",
          "patent", "document", "dataset", "software", "conference"]
 SHELL_CHOICES = ["bash", "zsh", "fish"]
+#: The survey lifecycle; completion follows the parser, this is the readable inventory.
+SURVEY_SUBS = ["new", "run", "status", "stop"]
 
 # Flags that take a local file path (value completion via the filesystem).
 FILE_FLAGS = {"--pdf", "--csl", "--out"}
 # (command path, relative positional index) -> name, completed as a file path. The relative
 # index counts non-command words that follow the resolved command path (``data attach`` has
 # ``key`` at 1 and ``src`` at 2).
-FILE_POSITIONALS = {("data", "attach"): {2: "src"}}
+FILE_POSITIONALS = {("data", "attach"): {2: "src"},
+                    **{("survey", sub): {1: "project"} for sub in SURVEY_SUBS}}
 # Flags ``cli`` accepts before or after any subcommand; offered on every command path.
 GLOBAL_FLAGS = ("--debug", "--verbose", "-v", "--no-cache")
 
@@ -81,6 +85,8 @@ def build_spec(parser: argparse.ArgumentParser) -> dict:
             opts["--backend"] = BACKENDS
         if "--type" in opts:
             opts["--type"] = TYPES
+        if "--effort" in opts:
+            opts["--effort"] = EFFORT_LEVELS
     return spec
 
 

@@ -43,6 +43,9 @@ description: 用 litcli 与用户的学术资料互操作——检索、读取�
 | 罗列某集合条目 | `litcli data members <集合key> [--no-recursive]` 默认递归全部子集合 | 只读 |
 | 列后端 | `litcli backends list`（能力）· `litcli backends status`（授权/可达） | 只读 |
 | 课题调查 | `litcli survey new "课题" [--seed DOI …] [--year A-B] [--type T] [--container 刊名] [--effort 档]` 建项目并打印项目名；种子与约束落 `project.toml`，不给 `--seed` 则先检索取前 3 条 | **建项目** |
+| 课题续跑 | `litcli survey run <项目> [--effort 档] [--format jsonl\|md]` 沿引文图谱一跳一跳收网，每跳落检查点；stdout 是 JSONL 事件（`--format md` 换成按跳的表格），加到目标即续跑同一条命令 | 写 corpus |
+| 课题状态 | `litcli survey status <项目>` 一行 JSON：课题/状态/跳数/准入数/最后停因/剩余额度 | 只读 |
+| 课题停止 | `litcli survey stop <项目>` 写 `$.stop`，循环在下一个跳边界收尾；已停再停退 0 | 只读 |
 | 订阅会话 | `litcli browser login <站点>` 在弹出的窗口里机构登录一次（浏览器保持运行，之后无需搬 cookie）；`litcli browser status` 看各站是 signed in / signed out / gated | 只读 |
 | 失败明细 | `litcli --verbose <命令>`：检索里哪个来源、什么原因失败（默认静默，只写 stderr） | 只读 |
 | 追踪 | `litcli --debug <命令>`：请求/状态/耗时/重试到 stderr，排查后端为何失败 | 只读 |
@@ -53,6 +56,16 @@ description: 用 litcli 与用户的学术资料互操作——检索、读取�
 | 图书定位/下载 | `litcli fetch --book "书名\|ISBN" [--backend zlibrary\|doab\|openlibrary] [--limit N] [--pick N]` 候选→选定→补全书目（ISBN/出版社/版次/页数）→落盘。默认 Z-Library（影子图书馆，匿名每日下载有配额）；`--backend doab` 走 OA 书源；`--backend openlibrary` 仅书目 | 只读 |
 | **首次写库授权** | `litcli backends authorize zotero` 弹框批准后写回 config | 写配置 |
 | shell 补全 | `litcli completions <bash\|zsh\|fish>` 打印自包含补全脚本（`eval "$(litcli completions bash)"` 后 `litcli <TAB>` 补子命令/参数/取值/文件路径；补全时不起 `litcli` 子进程） | 只读 |
+
+## 课题调查（survey）
+
+一个课题是一个目录：`project.toml`（课题、种子、约束、阈值、档位）+ `seen.jsonl`（每条候选的分数分量与收/不收的理由）+ `trace.jsonl`（每步：扩展了谁、花了多少、余额、停因）+ `corpus/`（收下的文件与元数据）。全部追加式，可 grep、可 diff。
+
+- **档位决定走多宽，不决定收多少条**：热的题自己走到额度或饱和，冷的题几跳没动静就自己停。`--effort low|medium|high|max`（默认 medium）：前沿/跳 4/8/16/24、准入/跳 2/5/8/12、邻居/条 10/20/30/50 等三个方向、连续无新高 2/3/4/6 跳即停、最长 6/20/50/120 跳。额度按请求计，命中缓存不扣、重试照扣。
+- **停止是正常收尾**：`stop` 事件分别报 `saturated`（饱和）/ `budget`（发现来源额度用尽）/ `max_hops` / `stopped` / `interrupted`（SIGINT，状态可续）。续跑就是再跑一次 `run`：已展开过的条目不再展开。
+- **一个项目同时只允许一个 `run`**（存在 `$.lock` 即退 2，先 `survey stop` 或确认进程已死再删锁）。
+- **拒绝也写理由**：`seen.jsonl` 每行带 `reason`（如 `score 3.21 >= 2.50`、`seen`、`year … outside …`）。下载失败只标 `unavailable`，候选与元数据都留着。
+- `run` 的退出码：`0` 正常收尾且有产物、`1` 收尾时 `corpus/` 为空、`2` 出错或项目已在跑。
 
 ## 环境事实
 

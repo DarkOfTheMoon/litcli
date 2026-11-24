@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- 课题调查 `litcli survey new|run|status|stop`：一个课题是一个目录（项目配置、候选理由、逐步 trace、
+  corpus），`run` 一跳一跳沿引文图谱收网、每跳落检查点，被杀后同一条命令续跑且不重复展开。额度是档位
+  （low/medium/high/max）不是条数，按请求计、命中缓存退还；每条候选都有理由，下载失败只标 `unavailable`
+  不剔除。同项目单写者由 `$.lock` 保证，停止走 `$.stop` 哨兵。
+
+- 共享浏览器会话：`litcli browser login|status` 与 `[browser]` 配置（默认关闭）。机构登录一次后，出版社页与
+  PDF 都在活浏览器页内取，凭据不出浏览器、过期自续；关着或会话失效时逐字走既有 cookie 路径。
+
 ## [0.4.0] - 2026-11-24
 
 ### Added

@@ -159,6 +159,37 @@ A backend without the field folds it into free text, or ignores it:
 | `litcli data add --title "..." --creator "Family, Given" [--year ..] [--doi ..] [--type ..] [--url ..] [--abstract ..] [--force]` / `data add --pdf\|--csl <file> [--yes]` | ingest metadata (dedupe gate, `--force` skips), heuristics from page 1 (y/N unless `--yes`), or CSL JSON |
 | `litcli data set <key> --title ..` (also `--abstract/--doi/--url/--year`) · `data del <key>` · `data attach <key> <path\|URL>` | edit, delete, attach a file |
 
+### Surveying a subject
+
+A survey turns "collect the literature around a subject" into a long-running project: `survey new`
+writes the project (seeds, year window, journal constraint, threshold, effort level) to
+`project.toml`, `survey run` casts the citation graph one hop at a time, lands every admitted
+fulltext and its metadata in `corpus/`, and records every step in `trace.jsonl` so a walk can be
+resumed and audited.
+
+| Command | What it does |
+|---|---|
+| `litcli survey new "<subject>" [--seed DOI]... [--year A-B] [--type T] [--container JOURNAL] [--threshold N] [--effort LEVEL]` | create a project; prints only its name; without `--seed` it first searches and takes the first 3 hits as seeds |
+| `litcli survey run <project> [--effort LEVEL] [--format jsonl\|md]` | resume from the last checkpoint; stdout is JSONL events, `--format md` prints one table per hop instead |
+| `litcli survey status <project>` | one JSON line: question, status, hops, admitted, last stop, remaining quota |
+| `litcli survey stop <project>` | write `$.stop`; the walk ends at its next hop boundary |
+
+The level decides how wide to walk, not how much to collect — a hot subject keeps scoring new
+highs and runs to its quota or saturation, a cold one stops itself after a few quiet hops:
+
+| Level | frontier/hop | admit/hop | edges/work | dry hops to stop | openalex cap | arxiv cap | per publisher | max hops |
+|---|---|---|---|---|---|---|---|---|
+| low | 4 | 2 | refs 10 / citing 10 / related 5 | 2 | 40 | 10 | 2 | 6 |
+| medium | 8 | 5 | 20 / 20 / 10 | 3 | 200 | 40 | 6 | 20 |
+| high | 16 | 8 | 30 / 30 / 15 | 4 | 600 | 100 | 15 | 50 |
+| max | 24 | 12 | 50 / 50 / 25 | 6 | 1500 | 200 | 30 | 120 |
+
+The quota counts requests: a cache hit costs nothing, a retry still costs. One `run` per project
+at a time (an existing `$.lock` exits 2); resume with the same command — expanded works are never
+expanded twice. Every `seen.jsonl` row carries its reason (`score 3.21 >= 2.50`, `seen`,
+`year … outside …`), and a failed download is marked `unavailable` without dropping the
+candidate. `run` exits 1 only when `corpus/` is still empty at the end.
+
 ## Backends and what they may fetch
 
 Zotero, arXiv, Crossref and OpenAlex are enabled by default. Every other backend works with a one-off `--backend`
