@@ -295,6 +295,7 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
                 break
             hop += 1
             high_before = best
+            charged = 0
             session_was_alive = deps.session_alive()
             cache.reset_stats()
             batch, frontier = frontier[: int(envelope["frontier"])], frontier[int(envelope["frontier"]):]
@@ -309,6 +310,7 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
                 for axis in expansion.AXES:
                     if counters[axis] > 0 and counters["openalex"] > 0:
                         counters["openalex"] -= 1
+                        charged += 1
                 for candidate, axis in expansion.expand(item, deps.backend, envelope, counters):
                     stamp([candidate], deps.backend)
                     total, parts = scoring.score(candidate, survey_project, collected, trace)
@@ -344,9 +346,14 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
                              score=total)
                         emit("download", hop=hop, identity=verdict["identity"],
                              key=candidate.key, status=status)
-            counters["openalex"] += cache.stats()["hits"]
+            hits = cache.stats()["hits"]
+            # A cached answer costs no request, so it refunds its charge — never more than the
+            # hop actually charged, or the quota would drift above its cap on a hot cache.
+            refund = min(hits, charged)
+            counters["openalex"] += refund
             streak = 0 if best > high_before else streak + 1
-            emit("hop_end", hop=hop, new=fresh, expanded=expanded_now,
+            emit("hop_end", hop=hop, new=fresh, expanded=expanded_now, hits=hits,
+                 charged=charged, refund=refund,
                  remaining={key: counters[key] for key in ("openalex", "arxiv", "publisher")})
             project.save(survey_project)
         emit("stop", reason=stop, admitted=admitted_total)
