@@ -42,6 +42,7 @@ description: 用 litcli 与用户的学术资料互操作——检索、读取�
 | 罗列集合树 | `litcli data tree` 层级显示全部集合 | 只读 |
 | 罗列某集合条目 | `litcli data members <集合key> [--no-recursive]` 默认递归全部子集合 | 只读 |
 | 列后端 | `litcli backends list`（能力）· `litcli backends status`（授权/可达） | 只读 |
+| 订阅会话 | `litcli browser login <站点>` 在弹出的窗口里机构登录一次（浏览器保持运行，之后无需搬 cookie）；`litcli browser status` 看各站是 signed in / signed out / gated | 只读 |
 | 失败明细 | `litcli --verbose <命令>`：检索里哪个来源、什么原因失败（默认静默，只写 stderr） | 只读 |
 | 追踪 | `litcli --debug <命令>`：请求/状态/耗时/重试到 stderr，排查后端为何失败 | 只读 |
 | 装浏览器 | `litcli backends install-browser`（二进制安装包不带 Chromium；知网/豆瓣首次使用前跑一次）；装完用 `backends install-browser --check` 自检能否启动 | 下载 |

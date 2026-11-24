@@ -21,10 +21,12 @@ from litcli.commands.parser import build_parser
 #: The surface the docs, the skill and the completion scripts all promise.
 EXPECTED = {
     "search", "refs", "citing", "related", "export", "completions", "backends", "data", "fetch",
+    "browser",
 }
 EXPECTED_PARENTS = {
     "data": {"get", "add", "set", "del", "attach", "tree", "members"},
     "backends": {"list", "status", "authorize", "install-browser"},
+    "browser": {"login", "status"},
 }
 
 
@@ -64,9 +66,11 @@ class CliSurfaceTest(unittest.TestCase):
         """A parser entry with no handler fails nothing until someone runs it — pin the wiring."""
         dispatched = set(cli._TOP_LEVEL_COMMANDS) | set(graph.EDGE_METHODS)
         dispatched |= set(cli._DATA_COMMANDS)
-        dispatched |= {"data", "fetch", "backends"}
+        dispatched |= set(cli._BROWSER_COMMANDS)
+        dispatched |= {"data", "fetch", "backends", "browser"}
         self.assertEqual(set(_subparsers(self.parser)) - dispatched, set())
         self.assertEqual(set(cli._DATA_COMMANDS), EXPECTED_PARENTS["data"])
+        self.assertEqual(set(cli._BROWSER_COMMANDS), EXPECTED_PARENTS["browser"])
 
     def test_every_nested_command_has_a_handler(self):
         """``backends`` children each reach a function (or the documented ``list`` fallback)."""

@@ -91,6 +91,13 @@ def build_parser() -> argparse.ArgumentParser:
     bi.add_argument("--with-deps", action="store_true",
                     help="also apt-install the OS libraries the browser needs (Debian/Ubuntu)")
 
+    b = sub.add_parser("browser", help="the shared browser session entitled reads go through "
+                                       "(sign in once, no cookie copying)")
+    bsub = b.add_subparsers(dest="browser_cmd")
+    bl = bsub.add_parser("login", help="open a site in the shared profile to sign in; the browser stays up")
+    bl.add_argument("site", nargs="?", help="site name (see `browser status`)")
+    bsub.add_parser("status", help="per-site state of the live session: signed in / signed out / gated")
+
     # --- data: local store CRUD (write · requires decision) ---
     d = sub.add_parser("data", help="local store operations (CRUD; read-only backends are reported)")
     dsub = d.add_subparsers(dest="data_cmd", required=True)

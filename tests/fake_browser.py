@@ -15,6 +15,10 @@ class FakeResponse:
         self._body = body
         self.url = url
 
+    @property
+    def text(self) -> str:
+        return self._body
+
 
 class FakeDownload:
     """Playwright's download object writes a real file, so this one does too."""
@@ -46,7 +50,8 @@ class FakePage:
         self._body = ""
 
     def goto(self, url, **_kw):
-        step = self._queue.pop(0)
+        step = (self._queue.pop(0) if len(self._queue) > 1
+                else self._queue[0] if self._queue else (200, ""))
         if isinstance(step, bytes):
             self.last_download = FakeDownload(step)
             self._body = ""
