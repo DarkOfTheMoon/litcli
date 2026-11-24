@@ -15,7 +15,7 @@ from litcli.backends.cambridge import (
     page_to_item,
     parse_cookie,
 )
-from litcli.errors import BadInput, NotFound, Unavailable
+from litcli.errors import BadInput, BotWall, NotFound, Paywalled
 from tests.http_stub import speed_up, stub
 
 DOI = "10.1017/jfm.2016.10"
@@ -189,6 +189,10 @@ class MarkerTest(unittest.TestCase):
     def test_the_wording_alone_is_enough(self):
         self.assertTrue(is_open_access("<p>This is an Open Access article.</p>"))
 
+    def test_the_badge_class_is_open_access(self):
+        # The marker set is shared with the sites that only stamp a class on their badge.
+        self.assertTrue(is_open_access('<span class="badge open-access">OA</span>'))
+
     def test_a_paywalled_page_is_not(self):
         self.assertFalse(is_open_access(CITATION_PAGE))
 
@@ -238,6 +242,14 @@ class BackendTest(unittest.TestCase):
         stub(self.be, (302, "", {"location": ABS_URL}), (200, CITATION_PAGE))
         self.assertEqual(self.be.get(DOI).url, ABS_URL)
 
+    def test_a_sign_in_page_is_not_accepted_as_the_item(self):
+        stub(self.be, (302, "", {"location": ABS_URL}),
+             (200, "<html><head><title>Log in to Cambridge Core</title></head>"
+                   "<body>Log in</body></html>"))
+        with self.assertRaises(BotWall) as ctx:
+            self.be.get(DOI)
+        self.assertIn("sign-in page", str(ctx.exception))
+
     def test_get_puts_the_pdf_url_in_attachments(self):
         stub(self.be, (200, CITATION_PAGE))
         self.assertEqual(self.be.get(f"url:{URL}").attachments, [PDF])
@@ -251,6 +263,16 @@ class BackendTest(unittest.TestCase):
     def test_a_paywalled_page_is_not_marked_open_access(self):
         stub(self.be, (200, CITATION_PAGE))
         self.assertFalse(self.be.get(f"url:{URL}").extra.get("open_access"))
+
+    def test_a_related_card_licence_on_the_short_page_does_not_mark_the_item(self):
+        # The abs page of a paywalled article links open-access neighbours with their own
+        # licence block; that must not label *this* item open access.
+        page = CITATION_PAGE.replace("</head>", f"{LICENCE}</head>")
+        stub(self.be, (302, "", {"location": ABS_URL}), (200, page))
+        item = self.be.get(DOI)
+        self.assertEqual(item.url, ABS_URL)
+        self.assertFalse(item.extra.get("open_access"))
+        self.assertNotEqual(item.access, "oa")
 
     def test_a_url_key_becomes_a_doi_key_once_the_page_names_it(self):
         stub(self.be, (200, CITATION_PAGE))
@@ -272,7 +294,7 @@ class BackendTest(unittest.TestCase):
 
     def test_a_challenge_page_becomes_the_gate_message(self):
         stub(self.be, (403, BLOCK_PAGE))
-        with self.assertRaises(RuntimeError) as ctx:
+        with self.assertRaises(BotWall) as ctx:
             self.be.get(f"url:{URL}")
         self.assertIn("Cambridge Core", str(ctx.exception))
         self.assertIn("user_agent", str(ctx.exception))
@@ -296,7 +318,7 @@ class BackendTest(unittest.TestCase):
 
     def test_an_html_answer_on_an_abs_page_names_the_entitlement(self):
         stub(self.be, (200, CITATION_PAGE), (200, "<html>the article page</html>"))
-        with self.assertRaises(Unavailable) as ctx:
+        with self.assertRaises(Paywalled) as ctx:
             self.be.get_attachment(f"url:{ABS_URL}")
         self.assertIn("not entitled", str(ctx.exception))
 
@@ -304,25 +326,34 @@ class BackendTest(unittest.TestCase):
         # The real paywalled path: the DOI itself lands on /abs/, which is what is judged.
         stub(self.be, (302, "", {"location": ABS_URL}), (200, CITATION_PAGE),
              (200, "<html>the article page</html>"))
-        with self.assertRaises(Unavailable) as ctx:
+        with self.assertRaises(Paywalled) as ctx:
             self.be.get_attachment(DOI)
         self.assertIn("/abs/ short page", str(ctx.exception))
 
     def test_an_html_answer_on_a_full_page_says_the_generic_reason(self):
         stub(self.be, (200, CITATION_PAGE), (200, "<html>not a pdf</html>"))
-        with self.assertRaises(Unavailable) as ctx:
+        with self.assertRaises(Paywalled) as ctx:
             self.be.get_attachment(f"url:{URL}")
         self.assertIn("instead of the PDF", str(ctx.exception))
 
     def test_an_html_answer_on_an_open_access_page_says_so(self):
         stub(self.be, (200, OA_PAGE), (200, "<html>the article page</html>"))
-        with self.assertRaises(Unavailable) as ctx:
+        with self.assertRaises(Paywalled) as ctx:
             self.be.get_attachment(f"url:{URL}")
         self.assertIn("open access", str(ctx.exception))
 
+    def test_a_card_licence_on_the_short_page_does_not_blame_open_access(self):
+        page = CITATION_PAGE.replace("</head>", f"{LICENCE}</head>")
+        stub(self.be, (302, "", {"location": ABS_URL}), (200, page),
+             (200, "<html>the article page</html>"))
+        with self.assertRaises(Paywalled) as ctx:
+            self.be.get_attachment(DOI)
+        self.assertIn("/abs/ short page", str(ctx.exception))
+        self.assertNotIn("is open access", str(ctx.exception))
+
     def test_get_attachment_without_a_link(self):
         stub(self.be, (200, DC_PAGE))
-        with self.assertRaises(Unavailable) as ctx:
+        with self.assertRaises(Paywalled) as ctx:
             self.be.get_attachment(f"url:{URL}")
         self.assertIn("no PDF link", str(ctx.exception))
 

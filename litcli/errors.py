@@ -16,7 +16,7 @@ external     report the bundled tool / subprocess failure
 ===========  ==========================================================
 
 All of them derive from :class:`LitcliError`, which is what the CLI maps to an exit code;
-the ``kind`` is what ``--all`` and the fulltext chain switch on.
+``--all`` groups failed sources by ``kind`` and the CLI picks ``[skipped]`` vs ``[error]`` from it.
 """
 from __future__ import annotations
 
@@ -59,8 +59,13 @@ class AuthRequired(LitcliError):
     kind = "auth"
 
 
-class BotWall(LitcliError):
-    """An anti-bot page (captcha, slider, JS challenge) stands in the way."""
+class BotWall(LitcliError, RuntimeError):
+    """An anti-bot page (captcha, slider, JS challenge) stands in the way.
+
+    Dual-derived from ``RuntimeError`` (like :class:`NotSupportedError`) so the backend helpers
+    that already catch a plain business error keep catching a wall, while the chain sees a
+    distinct ``kind`` and can tell "try another source" from "this source is broken".
+    """
 
     kind = "bot-wall"
 

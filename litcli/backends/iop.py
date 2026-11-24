@@ -18,12 +18,13 @@ from urllib.parse import urlparse
 
 from ..models import AcademicItem
 from ._cf_gate import is_challenge_page
+from ._cf_gate import load_cookie as _load_cookie
+from ._cf_gate import parse_cookie as _parse_cookie
+from ._gated import OA_RE as _OA_RE
 from ._gated import GatedBackend
 from ._gated import extract_pdf_url as _extract_pdf_url
-from ._gated import load_cookie as _load_cookie
 from ._gated import normalize_key as _normalize_key
 from ._gated import page_to_item as _page_to_item
-from ._gated import parse_cookie as _parse_cookie
 
 _SITE = "https://iopscience.iop.org"
 _COOKIE_HOSTS = ("iopscience.iop.org", "iop.org")
@@ -35,7 +36,8 @@ _URL_DOI_RE = re.compile(
 #: An IOP DOI suffix carries slashes of its own (``10.1088/1674-1137/aea10c``), so the tail is
 #: matched lazily up to the literal ``/pdf`` instead of stopping at the first segment.
 _PDF_PATH_RE = re.compile(r"""(/article/10\.\d{4,9}/[^?#\s]+?/pdf)""", re.I)
-_OA_RE = re.compile(r"""is an open access article|class=["'][^"']*open-access""", re.I)
+#: The OA marker set is the shared one (:data:`._gated.OA_MARKERS`, which carries the badge
+#: class IOP stamps on open-access documents).
 
 _KEY_FORMS = "a DOI, iop:<DOI> or IOPscience article URL"
 

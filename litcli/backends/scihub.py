@@ -55,7 +55,8 @@ _EMBED_RE = re.compile(r"<(?:embed|iframe)\b[^>]*\bsrc=[\"']([^\"']+)", re.I)
 # ``<meta ...>`` tags (attribute order varies, so the tag is scanned rather than pattern-matched).
 _META_TAG_RE = re.compile(r"<meta\b[^>]*>", re.I)
 _META_NAME_RE = re.compile(r"\bname=[\"']([^\"']+)[\"']", re.I)
-_META_CONTENT_RE = re.compile(r"\bcontent=[\"']([^\"']*)[\"']", re.I)
+#: The value runs to the opening quote's own kind: an apostrophe in a title is content.
+_META_CONTENT_RE = re.compile(r"\bcontent=([\"'])(.*?)\1", re.I | re.S)
 
 # ALTCHA hash algorithms the widget supports (``hashlib`` names).
 _ALGORITHMS = {"SHA-256": "sha256", "SHA-384": "sha384", "SHA-512": "sha512"}
@@ -122,7 +123,7 @@ def _metas(html: str) -> dict[str, list[str]]:
             continue
         n = name.group(1).lower()
         if n.startswith("citation_"):
-            found.setdefault(n, []).append(content.group(1))
+            found.setdefault(n, []).append(content.group(2))
     return found
 
 

@@ -25,7 +25,7 @@ Markup is split into pure functions (:func:`parse_cards`, :func:`parse_book_page
 
 Compliance: copies are public copies, not open-access licensed. The
 backend reads only public book metadata (title / author / publisher / ISBN / edition /
-pages / language / rating) and never logs in.
+pages / language / rating); it logs in only when an ``email``/``password`` pair is configured.
 """
 from __future__ import annotations
 

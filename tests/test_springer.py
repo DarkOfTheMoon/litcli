@@ -14,7 +14,7 @@ from litcli.backends.springer import (
     page_to_item,
     parse_cookie,
 )
-from litcli.errors import BadInput, NotFound
+from litcli.errors import BadInput, BotWall, NotFound
 from tests.http_stub import speed_up, stub
 
 DOI = "10.1007/s11831-021-09587-6"
@@ -107,6 +107,15 @@ class NormalizeKeyTest(unittest.TestCase):
     def test_a_nature_pdf_url_becomes_its_doi(self):
         self.assertEqual(normalize_key("https://www.nature.com/articles/s41598-024-80509-9.pdf"),
                          "doi:10.1038/s41598-024-80509-9")
+
+    def test_a_nature_epdf_url_becomes_its_doi(self):
+        # The ``.epdf`` suffix is a viewer form, like ``.pdf``: it is not part of the slug.
+        self.assertEqual(
+            normalize_key("https://www.nature.com/articles/s41598-024-80509-9.epdf"),
+            "doi:10.1038/s41598-024-80509-9")
+
+    def test_a_doi_query_tail_is_not_part_of_the_doi(self):
+        self.assertEqual(normalize_key(f"{DOI}?download=true"), f"doi:{DOI}")
 
     def test_a_bmc_url_becomes_its_doi(self):
         self.assertEqual(
@@ -328,7 +337,7 @@ class SpringerBackendTest(unittest.TestCase):
 
     def test_block_page_raises_a_named_error(self):
         stub(self.be, (403, BLOCK_PAGE))
-        with self.assertRaises(RuntimeError) as ctx:
+        with self.assertRaises(BotWall) as ctx:
             self.be.get(DOI)
         self.assertIn("cookie", str(ctx.exception))
 
@@ -336,6 +345,14 @@ class SpringerBackendTest(unittest.TestCase):
         rec = stub(self.be, (503, "busy"), (200, CITATION_PAGE))
         self.assertEqual(self.be.get(DOI).title, "Meta Carried Title")
         self.assertEqual(len(rec.requests), 2)
+
+    def test_a_sign_in_page_is_not_accepted_as_the_item(self):
+        # This ``get`` is its own override (three path kinds), so it must call the guard itself.
+        stub(self.be, (200, "<html><head><title>Log in to SpringerLink</title></head>"
+                            '<body><a href="/login">Log in</a></body></html>'))
+        with self.assertRaises(BotWall) as ctx:
+            self.be.get(DOI)
+        self.assertIn("sign-in page", str(ctx.exception))
 
     def test_unparseable_page_raises(self):
         stub(self.be, (200, "<html><body></body></html>"))

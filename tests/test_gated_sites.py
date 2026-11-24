@@ -11,7 +11,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from litcli.backends import acm, aiaa, aip, aps, ieee, iop, tandf
-from litcli.errors import BadInput, NotFound, Unavailable
+from litcli.errors import BadInput, BotWall, NotFound, Paywalled, Unavailable
 from tests.http_stub import speed_up, stub
 
 
@@ -97,6 +97,33 @@ class KeyShapeTest(unittest.TestCase):
             with self.subTest(s.name), self.assertRaises(BadInput):
                 s.module.normalize_key("https://example.org/x")
 
+    def test_a_query_fragment_or_bracket_does_not_join_the_doi(self):
+        # A pasted link or a DOI out of running text drags a tail along; ``doi.org`` does not
+        # know it, and it would end up percent-encoded in the URL.
+        for s in SITES:
+            with self.subTest(s.name):
+                self.assertEqual(s.module.normalize_key(s.doi + "?download=true"),
+                                 f"doi:{s.doi}")
+                self.assertEqual(s.module.normalize_key(s.doi + "#sec2"), f"doi:{s.doi}")
+                self.assertEqual(s.module.normalize_key(s.page_url + "?download=true"),
+                                 f"doi:{s.doi}")
+                self.assertEqual(s.module.normalize_key("(" + s.doi + ")"), f"doi:{s.doi}")
+                self.assertEqual(s.module.normalize_key(s.doi + "}"), f"doi:{s.doi}")
+
+    def test_a_percent_encoded_doi_in_the_path_is_decoded(self):
+        # The TDM API and some links write the DOI slash as ``%2F``: it must not stay encoded.
+        for s in SITES:
+            with self.subTest(s.name):
+                encoded = s.doi.replace("/", "%2F", 1)
+                self.assertEqual(s.module.normalize_key(s.page_url.replace(s.doi, encoded)),
+                                 f"doi:{s.doi}")
+                self.assertEqual(s.module.normalize_key(encoded), f"doi:{s.doi}")
+
+    def test_acm_full_html_url_yields_its_doi(self):
+        self.assertEqual(
+            acm.normalize_key("https://dl.acm.org/doi/fullHtml/10.1145/3290605.3300233"),
+            "doi:10.1145/3290605.3300233")
+
 
 class PageParseTest(unittest.TestCase):
     def test_the_page_parses_and_names_its_pdf(self):
@@ -125,6 +152,31 @@ class PageParseTest(unittest.TestCase):
             with self.subTest(s.name):
                 self.assertEqual(s.module.extract_pdf_url(s.page(pdf=False)), "")
 
+    def test_an_apostrophe_inside_a_meta_value_is_content(self):
+        # The value must end at the quote that opened it: an apostrophe is not the delimiter.
+        page = ('<meta name="citation_title" content="On Schrödinger\'s cat">'
+                '<meta name="citation_author" content="O\'Brien, Kate">')
+        item = acm.page_to_item(page, "url:x")
+        self.assertEqual(item.title, "On Schrödinger's cat")
+        self.assertEqual(item.creators, [{"family": "O'Brien", "given": "Kate"}])
+
+    def test_the_aps_title_tag_tail_is_stripped(self):
+        # A library-platform title tag is "<title> | <journal> | <site>"; neither belongs in the
+        # title.
+        page = ("<html><head><title>Some Title | Physics of Plasmas | AIP Publishing"
+                "</title></head></html>")
+        self.assertEqual(aps.page_to_item(page, "url:x").title, "Some Title")
+
+    def test_a_subtitle_segment_survives_the_tail_strip(self):
+        # The tail strip used to be greedy and ate "| Part II" together with the journal and
+        # site segments; a subtitle is content and cannot be recovered once dropped.
+        page = ("<html><head><title>On the cascade | Part II | Phys. Rev. Lett. | APS"
+                "</title></head></html>")
+        self.assertEqual(aps.page_to_item(page, "url:x").title, "On the cascade | Part II")
+        page = ("<html><head><title>A study | Part 2 | J. Fluid Mech. | AIP Publishing"
+                "</title></head></html>")
+        self.assertEqual(aip.page_to_item(page, "url:x").title, "A study | Part 2")
+
     def test_a_card_whose_doi_extends_this_one_does_not_win(self):
         # ``10.1145/3290605`` is a prefix of the card's ``10.1145/3290605.3300233``; a dot and
         # more digits after the match mean "inside a longer DOI", not "this item".
@@ -132,6 +184,34 @@ class PageParseTest(unittest.TestCase):
                 '<a href="/doi/pdf/10.1145/3290605">this</a>')
         self.assertEqual(acm.extract_pdf_url(page, "10.1145/3290605"),
                          "https://dl.acm.org/doi/pdf/10.1145/3290605")
+
+
+class OpenAccessMarkerTest(unittest.TestCase):
+    """The licence block is the marker — its class alone is carried by related cards too."""
+
+    def test_the_licence_block_is_open_access(self):
+        for s in SITES:
+            with self.subTest(s.name):
+                self.assertTrue(s.module.is_open_access(s.page(oa=True)))
+
+    def test_a_card_class_without_licence_wording_is_not_open_access(self):
+        for s in SITES:
+            with self.subTest(s.name):
+                page = s.page() + '<div class="creative-commons__description">CC BY</div>'
+                self.assertFalse(s.module.is_open_access(page))
+
+    def test_the_site_badge_class_is_open_access_everywhere(self):
+        # IEEE/IOP stamp this class on the document's badge; the marker set is shared, so every
+        # reader must agree on it.
+        for s in SITES:
+            with self.subTest(s.name):
+                self.assertTrue(s.module.is_open_access('<span class="badge open-access">OA</span>'))
+
+    def test_the_nav_wording_alone_is_not_open_access_everywhere(self):
+        # The nav says "Open Access" on every page, paywalled ones included, and carries no class.
+        for s in SITES:
+            with self.subTest(s.name):
+                self.assertFalse(s.module.is_open_access('<nav><a href="/oa">Open Access</a></nav>'))
 
 
 class BackendTest(unittest.TestCase):
@@ -188,6 +268,27 @@ class BackendTest(unittest.TestCase):
                 with self.assertRaises(NotFound):
                     be.get(s.doi)
 
+    def test_a_sign_in_page_is_not_accepted_as_the_item(self):
+        # The site answers the sign-in wall with a 200: it must not become an item titled
+        # "Sign in to …".
+        for s in SITES:
+            with self.subTest(s.name):
+                be = self.make(s)
+                page = (f"<html><head><title>Sign in to {s.name}</title></head>"
+                        '<body><a href="/signin">Sign in</a></body></html>')
+                stub(be, (302, "", {"location": s.page_url}), (200, page))
+                with self.assertRaises(BotWall) as ctx:
+                    be.get(s.doi)
+                self.assertIn("sign-in page", str(ctx.exception))
+
+    def test_a_normal_page_linking_sign_in_is_still_an_item(self):
+        for s in SITES:
+            with self.subTest(s.name):
+                be = self.make(s)
+                page = s.page().replace("</head>", '<a href="/signin">Sign in</a></head>')
+                stub(be, (302, "", {"location": s.page_url}), (200, page))
+                self.assertEqual(be.get(s.doi).title, f"{s.name} title")
+
     def test_a_doi_landing_elsewhere_is_not_found(self):
         for s in SITES:
             with self.subTest(s.name):
@@ -201,7 +302,7 @@ class BackendTest(unittest.TestCase):
             with self.subTest(s.name):
                 be = self.make(s)
                 stub(be, (403, BLOCK_PAGE))
-                with self.assertRaises(RuntimeError) as ctx:
+                with self.assertRaises(BotWall) as ctx:
                     be.get(s.doi)
                 self.assertIn(s.name if s.name != "tandf" else "Taylor & Francis",
                               str(ctx.exception))
@@ -229,7 +330,7 @@ class BackendTest(unittest.TestCase):
                 be = self.make(s)
                 stub(be, (302, "", {"location": s.page_url}), (200, s.page()),
                      (200, "<html>the page again</html>"))
-                with self.assertRaises(Unavailable) as ctx:
+                with self.assertRaises(Paywalled) as ctx:
                     be.get_attachment(s.doi)
                 self.assertIn("no clearance cookie", str(ctx.exception))
 
@@ -240,7 +341,7 @@ class BackendTest(unittest.TestCase):
                 speed_up(be)
                 stub(be, (302, "", {"location": s.page_url}), (200, s.page()),
                      (200, "<html>the page again</html>"))
-                with self.assertRaises(Unavailable) as ctx:
+                with self.assertRaises(Paywalled) as ctx:
                     be.get_attachment(s.doi)
                 self.assertIn("not entitled", str(ctx.exception))
 
@@ -323,11 +424,30 @@ class BackendTest(unittest.TestCase):
                "#HttpOnly_.acm.org\tTRUE\t/\tTRUE\t0\tcf_clearance\tabc")
         self.assertEqual(acm.parse_cookie(raw), {"cf_clearance": "abc"})
 
+    def test_a_marker_row_without_columns_is_still_read(self):
+        # The marker says "cookie row", so a bare ``k=v`` after it must not be dropped.
+        self.assertEqual(acm.parse_cookie("#HttpOnly_cf=wrong"), {"cf": "wrong"})
+
+    def test_a_space_separated_marker_row_is_read_as_columns(self):
+        raw = "#HttpOnly_.dl.acm.org TRUE / TRUE 0 cf_clearance abc"
+        self.assertEqual(acm.parse_cookie(raw), {"cf_clearance": "abc"})
+
     def test_the_exact_host_outranks_a_sibling_subdomain(self):
         # A clearance cookie is issued per exact hostname: the file order must not decide.
         raw = ("journals.aps.org\tTRUE\t/\tTRUE\t0\tcf_clearance\tWRONG\n"
                "link.aps.org\tTRUE\t/\tTRUE\t0\tcf_clearance\tRIGHT")
         self.assertEqual(aps.parse_cookie(raw), {"cf_clearance": "RIGHT"})
+
+    def test_a_parent_zone_row_does_not_shadow_the_exact_host(self):
+        # ``aps.org`` is also an accepted row; the ``link.aps.org`` cookie is the one that lands.
+        raw = ("aps.org\tTRUE\t/\tTRUE\t0\tcf_clearance\tPARENT_WRONG\n"
+               "link.aps.org\tTRUE\t/\tTRUE\t0\tcf_clearance\tRIGHT")
+        self.assertEqual(aps.parse_cookie(raw), {"cf_clearance": "RIGHT"})
+
+    def test_a_deeper_row_outranks_the_parent_zone_row(self):
+        raw = ("aps.org\tTRUE\t/\tTRUE\t0\tcf_clearance\tPARENT_WRONG\n"
+               "journals.aps.org\tTRUE\t/\tTRUE\t0\tcf_clearance\tDEEPER")
+        self.assertEqual(aps.parse_cookie(raw), {"cf_clearance": "DEEPER"})
 
 
 class IopPathTest(unittest.TestCase):
@@ -375,6 +495,16 @@ class IeeeTest(unittest.TestCase):
         self.assertTrue(ieee.is_block_page("", 202))
         self.assertFalse(ieee.is_block_page("<html>article</html>", 200))
 
+    def test_a_sign_in_page_is_not_accepted_as_the_item(self):
+        # Xplore redirects an unentitled session to /Xplore/login.jsp with a 200.
+        be = self.make()
+        stub(be, (302, "", {"location": "https://ieeexplore.ieee.org/Xplore/login.jsp"}),
+             (200, "<html><head><title>Sign In to IEEE Xplore</title></head>"
+                   "<body>Sign in</body></html>"))
+        with self.assertRaises(BotWall) as ctx:
+            be.get(self.URL)
+        self.assertIn("sign-in page", str(ctx.exception))
+
     def test_the_nav_wording_alone_is_not_open_access(self):
         # Xplore's nav and footer say "Open Access" on every page, paywalled ones included.
         self.assertFalse(ieee.is_open_access('<nav><a href="/xplore/access">Open Access</a></nav>'))
@@ -394,7 +524,7 @@ class IeeeTest(unittest.TestCase):
     def test_a_waf_202_becomes_the_waf_message(self):
         be = self.make()
         stub(be, (202, WAF_PAGE))
-        with self.assertRaises(RuntimeError) as ctx:
+        with self.assertRaises(BotWall) as ctx:
             be.get(self.URL)
         self.assertIn("AWS WAF", str(ctx.exception))
         self.assertIn("aws-waf-token", str(ctx.exception))
@@ -429,7 +559,7 @@ class IeeeTest(unittest.TestCase):
         stub(be, (200, self.page()),
              (302, "", {"location": "https://ieeexplore.ieee.org/Xplore/login.jsp?authDecision=-203"}),
              (200, "<html>login</html>"))
-        with self.assertRaises(Unavailable) as ctx:
+        with self.assertRaises(Paywalled) as ctx:
             be.get_attachment(self.URL)
         self.assertIn("login page", str(ctx.exception))
 
@@ -468,7 +598,7 @@ class OwnWordingTest(unittest.TestCase):
         be = aip.AipBackend()
         speed_up(be)
         stub(be, (403, BLOCK_PAGE))
-        with self.assertRaises(RuntimeError) as ctx:
+        with self.assertRaises(BotWall) as ctx:
             be.get("10.1063/1.870872")
         self.assertIn("AIP Publishing", str(ctx.exception))
 
@@ -476,7 +606,7 @@ class OwnWordingTest(unittest.TestCase):
         be = tandf.TandfBackend()
         speed_up(be)
         stub(be, (403, BLOCK_PAGE))
-        with self.assertRaises(RuntimeError) as ctx:
+        with self.assertRaises(BotWall) as ctx:
             be.get("10.1080/17460441.2026.2762809")
         self.assertIn("Taylor & Francis", str(ctx.exception))
         self.assertIn("[backends.tandf]", str(ctx.exception))

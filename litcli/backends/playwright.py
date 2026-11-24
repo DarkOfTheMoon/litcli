@@ -2,7 +2,7 @@
 
 These backends drive a real Chromium (via Playwright) because their data is rendered
 by JavaScript (and, for CNKI, gated behind a login/slider captcha). The network layer is
-Playwright, not ``urllib``, so they do not inherit :func:`base.retry_json`. This base
+Playwright, not ``httpx``, so they do not inherit :class:`http.HttpBackend`. This base
 owns the browser lifecycle and the lazy-import error surface; each subclass supplies its
 own persistent profile dir, result-row selectors, and pure parser.
 

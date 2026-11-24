@@ -3,6 +3,7 @@
 Everything here runs against ``httpx.MockTransport`` (``tests.http_stub``), so the retry
 policy, the error wrapping and the pacing are exercised without a socket.
 """
+import threading
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -11,9 +12,10 @@ from unittest import mock
 import httpx
 from tenacity import wait_none
 
+import litcli.transport as transport_mod
 from litcli.backends.http import HttpBackend, HttpError
 from litcli.errors import Unavailable
-from litcli.transport import set_proxy
+from litcli.transport import Session, set_proxy
 from tests.http_stub import Recorder, error, stub
 
 
@@ -29,6 +31,37 @@ class _Backend(HttpBackend):
 
     def get(self, key):
         raise KeyError(key)
+
+
+class SessionCloseTest(unittest.TestCase):
+    def tearDown(self):
+        set_proxy("")
+
+    def test_close_waits_for_a_client_that_is_being_built(self):
+        # Without the builder's lock, close() saw ``_client is None``, returned, and the client
+        # the other thread was still constructing was then never closed.
+        entered, release = threading.Event(), threading.Event()
+
+        class SlowClient(httpx.Client):
+            def __init__(self, *args, **kwargs):
+                entered.set()
+                release.wait(5)
+                super().__init__(*args, **kwargs)
+
+        with mock.patch.object(transport_mod.httpx, "Client", SlowClient):
+            session = Session(transport=httpx.MockTransport(lambda r: httpx.Response(200)))
+            build = threading.Thread(target=lambda: session.client)
+            build.start()
+            self.assertTrue(entered.wait(5))
+            closer = threading.Thread(target=session.close)
+            closer.start()
+            closer.join(0.1)
+            self.assertTrue(closer.is_alive())  # blocked on the lock, not past the builder
+            release.set()
+            build.join(5)
+            closer.join(5)
+        self.assertFalse(build.is_alive())
+        self.assertIsNone(session._client)
 
 
 class TransportTest(unittest.TestCase):

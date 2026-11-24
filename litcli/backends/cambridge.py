@@ -24,12 +24,13 @@ from urllib.parse import urlparse
 
 from ..models import AcademicItem
 from ._cf_gate import is_challenge_page
+from ._cf_gate import load_cookie as _load_cookie
+from ._cf_gate import parse_cookie as _parse_cookie
+from ._gated import OA_RE as _OA_RE
 from ._gated import GatedBackend
 from ._gated import extract_pdf_url as _extract_pdf_url
-from ._gated import load_cookie as _load_cookie
 from ._gated import normalize_key as _normalize_key
 from ._gated import page_to_item as _page_to_item
-from ._gated import parse_cookie as _parse_cookie
 
 _SITE = "https://www.cambridge.org"
 
@@ -57,7 +58,7 @@ _PDF_PATH_RE = re.compile(
 #: The article licence block: its wording (and its ``creative-commons`` class) sits on the
 #: open-access pages and on neither a paywalled page nor a book chapter. The bare
 #: ``creativecommons.org`` link alone is not enough — related-article cards carry those too.
-_OA_RE = re.compile(r"is an open access article|creative-commons__description", re.I)
+#: The marker set itself is shared (:data:`._gated.OA_MARKERS`).
 
 _KEY_FORMS = "a DOI, cambridge:<DOI> or Cambridge Core URL"
 
@@ -141,7 +142,9 @@ class CambridgeBackend(GatedBackend):
         return is_short_page(url)
 
     def _refusal_reason(self, page: str, landed: str, response) -> str:
-        if self.is_open_access(page):
+        # A licence block on the paywalled ``/abs/`` page can be a related-item card's, so the
+        # OA claim only holds on a full page (an open-access item never lands on the short one).
+        if self.is_open_access(page) and not self._short_page(landed):
             return "the item is open access but the endpoint answered an HTML page"
         if self._short_page(landed):
             return ("the item answers only its /abs/ short page, so the session is not entitled "

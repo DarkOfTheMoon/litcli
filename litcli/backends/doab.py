@@ -25,6 +25,7 @@ import urllib.parse
 
 from lxml import etree as ET
 
+from .. import cache
 from ..errors import LitcliError, NotFound, Unavailable
 from ..models import AcademicItem, extract_year, normalize_author_name
 from .http import HttpBackend, HttpError
@@ -250,24 +251,40 @@ class DoabBackend(HttpBackend):
         # the cookie was set: judge by the cookie, not by the redirect target's status.
         return self._has_auth_cookie()
 
-    def _page(self, url: str, path: str) -> str:
-        """GET a page, turning a 404 into the "not found" error."""
+    def _page(self, url: str, path: str, *, cached: bool = True) -> str:
+        """GET a page, turning a 404 into the "not found" error.
+
+        ``cached=False`` bypasses the metadata cache: a body that is a bot check, or a page
+        fetched right after clearing one, must not be answered from a stale entry.
+        """
         try:
-            return self.fetch_text(url)
+            body = self.fetch_text(url) if cached else self.fetch(url).text
         except HttpError as e:
             if e.status == 404:
                 raise NotFound(f"[{self.name}] not found: {path}") from e
             raise
+        return body
 
     def _get_page(self, path: str) -> str:
         """GET a site page, answering the bot check once if it is served."""
         url = self._site_root + path
         try:
-            return self._page(url, path)
+            body = self._page(url, path)
         except HttpError as e:
             if e.status == 403 and self._pass_challenge(e.body, path):
-                return self._page(url, path)
+                return self._page(url, path, cached=False)
             raise
+        # Anubis also serves the check with a 200, and that body would otherwise sit in the
+        # 24 h cache and keep failing (and re-solving) every later attempt. Solve it, refetch
+        # past the cache and store the real page over the entry; a failed solve keeps the
+        # challenge body as the answer.
+        if solve_challenge(body) and self._pass_challenge(body, path):
+            page = self._page(url, path, cached=False)
+            slot = self._cache_slot(url, {})
+            if slot is not None and not solve_challenge(page):
+                cache.put(slot, page)
+            return page
+        return body
 
     def _fetch(self, query: str, rpp: int = 0, start: int = 0) -> list[AcademicItem]:
         url = f"{self._base}?query={urllib.parse.quote(query)}"

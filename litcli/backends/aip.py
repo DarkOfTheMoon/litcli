@@ -8,9 +8,9 @@ backend therefore carries in the cookies of a session the user already cleared i
 browser (``[backends.aip] .cookie``/``.cookie_file`` plus that browser's own ``.user_agent``,
 which the ``cf_clearance`` cookie is bound to) and names the gate when they are missing.
 
-Metadata and the PDF link come from the served page's ``citation_*`` tags; the PDF endpoint
-sits on AIP's own ``/article-pdf/<id>/…`` path (the old host's ``/doi/pdf/<DOI>`` is kept as a
-last resort). A body that is not ``%PDF`` is reported with what actually happened. The shared
+Metadata comes from the served page's ``citation_*`` tags, and the PDF link from their
+``citation_pdf_url`` or an ``/article-pdf/<id>/…`` anchor; ``pubs.aip.org/doi/pdf/<DOI>`` is the
+URL rewrite of last resort. A body that is not ``%PDF`` is reported with what actually happened. The shared
 shape (key normalization, page parse, PDF pick, refusal message, and the gate itself) lives in
 :mod:`._gated`.
 
@@ -24,12 +24,13 @@ from urllib.parse import urlparse
 
 from ..models import AcademicItem
 from ._cf_gate import is_challenge_page
+from ._cf_gate import load_cookie as _load_cookie
+from ._cf_gate import parse_cookie as _parse_cookie
+from ._gated import OA_RE as _OA_RE
 from ._gated import GatedBackend
 from ._gated import extract_pdf_url as _extract_pdf_url
-from ._gated import load_cookie as _load_cookie
 from ._gated import normalize_key as _normalize_key
 from ._gated import page_to_item as _page_to_item
-from ._gated import parse_cookie as _parse_cookie
 
 _SITE = "https://pubs.aip.org"
 
@@ -42,13 +43,10 @@ _ALLOWED_HOSTS = ("aip.org", "scitation.org")
 _URL_RE = re.compile(r"^https?://(?:pubs\.aip\.org|aip\.scitation\.org)(?:/\S*)?$", re.I)
 #: A DOI embedded in a legacy ``/doi/<DOI>``, ``/doi/abs/<DOI>``, ``/doi/pdf/<DOI>`` URL.
 _URL_DOI_RE = re.compile(r"/doi/(?:abs/|full/|pdf/|epdf/)?(10\.\d{4,9}/[^?#\s]+)", re.I)
-#: The article's PDF endpoint: ``/<journal>/article-pdf/<numeric id>/<n>/<slug>`` (the journal
-#: segment is optional in the match so a bare ``/article-pdf/…`` anchor still resolves).
+#: The article's PDF endpoint: ``/<journal>/article-pdf/<numeric id>/<n>/<slug>``. Leading
+#: segments vary (a bare ``/article-pdf/…`` anchor resolves too), so they are matched as a run.
 _PDF_PATH_RE = re.compile(
-    r"""((?:/[A-Za-z0-9_-]+)?/article-pdf/[A-Za-z0-9]+/[^"'?#\s]+)""", re.I)
-#: The article licence block: its wording (and its ``creative-commons`` class) sits on the
-#: open-access pages and on neither a paywalled page nor a related-article card.
-_OA_RE = re.compile(r"is an open access article|creative-commons__description", re.I)
+    r"""((?:/[A-Za-z0-9_-]+)*/article-pdf/[A-Za-z0-9]+/[^"'?#\s]+)""", re.I)
 
 _KEY_FORMS = "a DOI, aip:<DOI> or AIP article URL"
 
@@ -117,5 +115,8 @@ class AipBackend(GatedBackend):
     EMBEDDED_DOI_RE = _URL_DOI_RE
     PDF_PATH_RE = _PDF_PATH_RE
     PDF_URL_TEMPLATE = _SITE + "/doi/pdf/{doi}"
-    ITEM_ID_RE = re.compile(r"/article/[^/]+/(\d+)/[^/]+/?$")
+    #: The id is the numeric segment before the trailing slug
+    #: (``/pop/article/1/12/4022/260756/local-modes…``): the path pieces before it are journal
+    #: and pagination, so anchoring on ``/article/`` alone loses the modern shape.
+    ITEM_ID_RE = re.compile(r"/(\d+)/[^/]+/?$")
     OA_RE = _OA_RE

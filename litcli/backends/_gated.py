@@ -3,14 +3,16 @@
 ACM, APS, IOP, Taylor & Francis, AIAA (Cloudflare managed challenge) and IEEE Xplore (AWS WAF
 challenge) serve the article only to a session that got past the site's bot gate — and, beyond
 it, only to a session the user entitled in their own browser. They share one body of logic:
-the key shapes, the Highwire ``citation_*`` page parse, the PDF link pick, the OA marker, the
-"what actually happened" refusal message, and the gate that turns any challenge (a status, a
-page body, a ``cf-mitigated`` header) into one clear error.
+the key shapes, the Highwire ``citation_*`` page parse, the PDF link pick and the OA marker.
 
 What stays with a subclass is only what is site-specific: its host, its URL shapes, its PDF
 path, its title suffix, and — where a site differs — a hook override. The page parse and the
 PDF pick are module-level pure functions so a site module can expose them under its own name
 (some are bound with the site's constants) and every branch stays testable offline.
+
+The gate itself (``_open``, the memo, the refusal reason rebased to :class:`BotWall` /
+:class:`Paywalled`) lives in :class:`~litcli.backends._entitled.EntitledBackend`; this layer
+adds only the constant-driven page fetch, the item read and the PDF download.
 """
 from __future__ import annotations
 
@@ -21,12 +23,10 @@ from typing import ClassVar
 from urllib.parse import urlparse
 
 from .. import provenance
-from ..errors import BadInput, NotFound, Unavailable
+from ..errors import BadInput, NotFound, Paywalled
 from ..models import AcademicItem, extract_year, normalize_author_name
 from ..transport import HttpError
-from ._cf_gate import gate_message, is_challenge_page, waf_gate_message
-from ._cf_gate import load_cookie as _load_cookie
-from ._cf_gate import parse_cookie as _parse_cookie
+from ._cf_gate import gate_message, waf_gate_message
 from ._entitled import EntitledBackend
 
 #: A browser-ish default UA: a challenge is bound to the UA that cleared it.
@@ -41,8 +41,16 @@ _GATE_NAMES = {
 
 _META_TAG_RE = re.compile(r"<meta\b[^>]*>", re.I)
 _META_NAME_RE = re.compile(r"\bname=[\"']([^\"']+)[\"']", re.I)
-_META_CONTENT_RE = re.compile(r"\bcontent=[\"']([^\"']*)[\"']", re.I)
+#: The value is matched up to the opening quote's own kind: an apostrophe inside a title
+#: (``Schrödinger's``) or a name (``O'Brien``) is content, not the closing delimiter.
+_META_CONTENT_RE = re.compile(r"\bcontent=([\"'])(.*?)\1", re.I | re.S)
 _TITLE_TAG_RE = re.compile(r"<title\b[^>]*>(.*?)</title>", re.S | re.I)
+#: How a library-platform ``<title>`` separates its parts (a pipe, or a spaced dash).
+_TITLE_SEP_RE = re.compile(r"\s*\|\s*|\s+[—–]\s+")
+#: A subtitle segment (``Part II``, ``Volume 3``, a roman numeral) is content, not site chrome.
+_SUBTITLE_RE = re.compile(
+    r"^(?:part|volume|vol|chapter|section|appendix|supplement|no|number)\b"
+    r"|^[IVXLCDM]{1,6}$", re.I)
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
 
@@ -50,7 +58,22 @@ _WS_RE = re.compile(r"\s+")
 #: ``name:``/``name/`` form), which may stack.
 _DOI_PREFIX_RE = re.compile(
     r"^(?:(?:https?://(?:dx\.)?doi\.org/|doi:\s*|[a-z]+[:\/]\s*)\s*)+", re.I)
-_DOI_RE = re.compile(r"^10\.\d{4,9}/\S+$")
+_DOI_RE = re.compile(r"^10\.\d{4,9}/[^\s?#]+$")
+#: A DOI in running text (a ``doi.org`` hop leaves the host before it).
+_DOI_FIND_RE = re.compile(r"10\.\d{4,9}/[^\s?#]+")
+#: Characters a DOI picks up from running text / a URL tail but does not own.
+_DOI_TAIL = ".,;:)]}/"
+
+#: Every marker of an open-access item: the licence wording, or the site's own badge class
+#: (IEEE/IOP stamp ``open-access`` on the *document's* badge only; their nav says "Open
+#: Access" on every page but carries no such class). The bare ``creative-commons__description``
+#: *class* is not enough on its own: related-item cards on the same page carry that class too,
+#: so the block must also say what it is. A parameterised set keeps the marker in one place.
+OA_MARKERS = ("is an open access article",
+              r"creative-commons__description[^>]*>\s*this (?:is|article)",
+              "distributed under the terms of the creative commons",
+              r"""class=["'][^"']*\bopen-access""")
+OA_RE = re.compile("|".join(OA_MARKERS), re.I)
 
 
 def _unescaped_when_safe(url: str) -> str:
@@ -92,7 +115,7 @@ def _metas(page_html: str) -> dict[str, list[str]]:
             continue
         key = name.group(1).lower()
         if key.startswith(("citation_", "dc.")):
-            found.setdefault(key, []).append(content.group(1))
+            found.setdefault(key, []).append(content.group(2))
     return found
 
 
@@ -131,18 +154,25 @@ def _fields(metas: dict[str, list[str]]) -> dict:
 
 # --- key normalization (a pure function; the site passes its own shapes) ---
 
+def _clean_doi(value: str) -> str:
+    """Decode a DOI, cut a query/fragment off it and drop the separators text trails along."""
+    return urllib.parse.unquote(
+        re.split(r"[?#\s]", value or "", maxsplit=1)[0]).rstrip(_DOI_TAIL)
+
+
 def doi_from(key: str) -> str:
     """Return a bare DOI from a DOI-shaped key (a ``doi.org``/``site:`` form included).
 
     A plain page URL is searched too: the prefix strip leaves ``//host/...`` behind, which is
-    not DOI-shaped, yet the path may well carry the DOI the page names. Either way the DOI is
-    returned without a trailing separator.
+    not DOI-shaped, yet the path may well carry the DOI the page names. Either way a query
+    tail (``?download=true``), a fragment and a trailing separator are cut off: ``doi.org``
+    would otherwise be handed ``xyz.123%3Fdownload=true``.
     """
-    k = _DOI_PREFIX_RE.sub("", (key or "").strip()).strip()
+    k = _clean_doi(_DOI_PREFIX_RE.sub("", (key or "").strip()).strip())
     if _DOI_RE.match(k):
-        return k.rstrip("/.,;:")
-    found = re.search(r"10\.\d{4,9}/\S+", key or "")
-    return found.group(0).rstrip("/.,;:") if found else ""
+        return k
+    found = _DOI_FIND_RE.search(key or "")
+    return _clean_doi(found.group(0)) if found else ""
 
 
 def normalize_key(key: str, *, tag: str, url_re: re.Pattern, forms: str,
@@ -160,9 +190,21 @@ def normalize_key(key: str, *, tag: str, url_re: re.Pattern, forms: str,
         raise BadInput(f"[{tag}] empty key (expected {forms})")
     for candidate in ((k, urllib.parse.unquote(k)) if "%" in k else (k,)):
         if url_re.match(candidate):
+            # The URL carries the DOI in its path: that is the better key. The path may
+            # percent-encode the DOI slash (``10.1002%2Fa%2Fb``), which the DOI shape does not
+            # match, so the embedded extraction is retried decoded — the ``url:`` fallback
+            # below would keep the encoding.
             embedded = embedded_doi_re.search(candidate) if embedded_doi_re else None
-            if embedded:  # the URL carries the DOI in its path: that is the better key
-                return f"doi:{embedded.group(1).rstrip('/.,;:')}"
+            if not embedded and ("?" in candidate or "#" in candidate):
+                # Some site shapes anchor the DOI at the URL end; a query/fragment tail would
+                # hide it. Search the path alone.
+                embedded = (embedded_doi_re.search(re.split(r"[?#]", candidate, maxsplit=1)[0])
+                            if embedded_doi_re else None)
+            if not embedded and "%" in candidate:
+                embedded = (embedded_doi_re.search(urllib.parse.unquote(candidate))
+                            if embedded_doi_re else None)
+            if embedded:
+                return f"doi:{urllib.parse.unquote(embedded.group(1)).rstrip('/.,;:')}"
             return f"url:{candidate.split('#', 1)[0]}"
         doi = doi_from(candidate)
         if doi:
@@ -186,9 +228,18 @@ def page_to_item(page_html: str, key: str, url: str = "", *, source: str, title_
     if not fields["title"]:
         title_tag = _TITLE_TAG_RE.search(page)
         if title_tag:
-            title = _text(title_tag.group(1))
+            raw_title = title = _text(title_tag.group(1))
             if title_suffix:
-                title = re.sub(rf"\s*[|—-]\s*{re.escape(title_suffix)}\s*$", "", title).strip()
+                # A library-platform title tag is ``<title> | <journal> | <site>``: drop the
+                # site and journal chrome, but keep a subtitle segment (``| Part II``) — that
+                # one is content, and a greedy tail strip used to eat it along with the rest.
+                segments = [s.strip() for s in _TITLE_SEP_RE.split(raw_title) if s.strip()]
+                if segments and segments[-1].lower() == title_suffix.lower():
+                    segments.pop()
+                while len(segments) > 1 and not _SUBTITLE_RE.match(segments[-1]) \
+                        and segments[-1].lower() != title_suffix.lower():
+                    segments.pop()
+                title = " | ".join(segments).strip()
             fields["title"] = title
     doi = fields["doi"] or doi_from(key.split(":", 1)[-1])
     creators = [normalize_author_name(a) for a in fields["creators"]]
@@ -215,12 +266,11 @@ class GatedBackend(EntitledBackend):
 
     The clearance cookie is bound to the browser's ``user_agent`` and its egress IP, so the two
     travel together and a missing one is a construction error. Every page request goes through
-    :meth:`_open`, which turns a challenge into :attr:`BLOCK_MSG`; the PDF download judges the
-    same way and reports it as :class:`Unavailable`.
+    :meth:`_open`, which turns a challenge into :class:`BotWall`; the PDF download judges the
+    same way (:class:`Unavailable`) and reports an entitled-but-refused answer as
+    :class:`Paywalled`.
     """
 
-    #: ``cf`` (Cloudflare managed challenge) or ``waf`` (AWS WAF challenge).
-    GATE_KIND = "cf"
     #: The cookie name in the construction error (derived from GATE_KIND if blank).
     GATE_NAME = ""
     #: The publisher's name in the gate message.
@@ -237,9 +287,8 @@ class GatedBackend(EntitledBackend):
     PDF_URL_TEMPLATE = ""
     #: The item id in a landed URL, for correlating the PDF anchor with this item.
     ITEM_ID_RE: ClassVar[re.Pattern | None] = None
-    #: The open-access licence block / badge, which only open-access pages carry.
-    OA_RE: ClassVar[re.Pattern] = re.compile(
-        r"is an open access article|creative-commons__description", re.I)
+    #: The open-access licence block, which only open-access pages carry.
+    OA_RE: ClassVar[re.Pattern] = OA_RE
     #: The documented key forms, spelled into the bad-key message.
     KEY_FORMS = "a DOI or an article URL"
     #: The ``source``/prefix name (``acm:``, ``acm/``, ``doi:``).
@@ -255,7 +304,7 @@ class GatedBackend(EntitledBackend):
         "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
     }
-    #: A publisher page per second is polite enough; the limiter spaces them.
+    #: Hold a page-per-second slot; ``rate`` allows a four-request burst from the limiter.
     min_interval = 1.0
     rate = 4
 
@@ -269,34 +318,11 @@ class GatedBackend(EntitledBackend):
             self.BLOCK_MSG = self._gate_message(name)
         super().__init__(name=name, timeout=timeout, delay=delay, cookie=cookie,
                          cookie_file=cookie_file, user_agent=user_agent)
-        self._last_key = self._last_alias = self._last_page = self._last_url = ""
 
     def _gate_message(self, name: str) -> str:
         if self.GATE_KIND == "waf":
             return waf_gate_message(self.SITE_NAME, name)
         return gate_message(self.SITE_NAME, name)
-
-    # -- gate detection --------------------------------------------------------
-
-    def _is_gate(self, body: str, status: int) -> bool:
-        if self.GATE_KIND == "waf":
-            # The WAF answers its JS challenge as an empty 202 carrying ``gokuProps``; the site
-            # never serves a real article on 202.
-            return status in (202, 403) or "gokuProps" in (body or "")
-        return is_challenge_page(body, status)
-
-    def _open(self, url: str, **kw):
-        """GET ``url``; a gate in the status, the body or a header becomes :attr:`BLOCK_MSG`."""
-        try:
-            response = self.fetch(url, **kw)
-        except HttpError as e:
-            if self._is_gate(e.body, e.status):
-                raise RuntimeError(self.BLOCK_MSG) from e
-            raise
-        if self._is_gate(response.text, response.status_code) \
-                or (self.GATE_KIND == "cf" and response.headers.get("cf-mitigated")):
-            raise RuntimeError(self.BLOCK_MSG)
-        return response
 
     # -- pure-function bindings ------------------------------------------------
 
@@ -313,6 +339,7 @@ class GatedBackend(EntitledBackend):
         return match.group(1) if match else ""
 
     def is_open_access(self, page_html: str) -> bool:
+        """Overrides the base default with the site's own licence-block marker."""
         return bool(self.OA_RE.search(page_html or ""))
 
     def extract_pdf_url(self, page_html: str, doi: str = "", want_id: str = "") -> str:
@@ -338,43 +365,22 @@ class GatedBackend(EntitledBackend):
         derivable from the DOI.
         """
         normalized = self.normalize_key(key)
-        if self._last_page and normalized in (self._last_key, self._last_alias):
-            return self._last_page, self._last_url
+        hit = self._memo_get(normalized)
+        if hit is not None:
+            return hit
         if normalized.startswith("url:"):
             url = normalized[len("url:"):]
         else:
             url = f"https://doi.org/{urllib.parse.quote(normalized[len('doi:'):], safe='/')}"
-        response = self._open(url)  # a gate is turned into BLOCK_MSG; 404 propagates
+        response = self._open(url)  # a gate is turned into BotWall; 404 propagates
         landed = str(response.url) or url
         if not self._on_site(landed):
             raise NotFound(f"[{self.name}] DOI does not resolve to an {self.SITE_NAME} item: "
                            f"{normalized}")
-        self._last_key, self._last_alias = normalized, ""
-        self._last_page, self._last_url = response.text, landed
-        return self._last_page, landed
+        self._memo_put(normalized, (response.text, landed))
+        return self._memo_get(normalized)
 
     # -- Backend ---------------------------------------------------------------
-
-    def search(self, query: str, limit: int = 10, filters: dict | None = None) -> list[AcademicItem]:
-        """Resolve a DOI / URL query to one item; keyword queries return [].
-
-        There is no key-free search endpoint, so anything that is not already an identifier
-        cannot be looked up here. ``filters`` are not applied: there is at most one hit.
-        """
-        try:
-            self.normalize_key(query or "")
-        except BadInput:
-            return []
-        if limit < 1:
-            return []
-        try:
-            return [self.get(query)]
-        except (NotFound, KeyError):
-            return []
-
-    def _short_page(self, url: str) -> bool:
-        """True for a paywalled short page (a full page means OA or an entitled session)."""
-        return False
 
     def get(self, key: str) -> AcademicItem:
         """Fetch one item by DOI or URL and, when the page names one, its PDF link.
@@ -394,32 +400,23 @@ class GatedBackend(EntitledBackend):
             # The URL named only an internal id; the page named the real identity, which also
             # becomes the memo key so the PDF download reuses this page.
             item.key = f"doi:{item.doi}"
-            self._last_alias = f"doi:{item.doi}"
+            self._memo_put(f"doi:{item.doi}", (body, landed))
         if not item.title:
             raise RuntimeError(f"[{self.name}] could not parse the item page: {landed}")
+        self._guard_sign_in(body, landed, item.title)
         try:
             pdf_url = self.extract_pdf_url(body, item.doi, self.item_id(landed))
         except RuntimeError:  # an odd host must not cost the metadata
             pdf_url = ""
         if pdf_url:
             item.attachments = [pdf_url]
-        if self.is_open_access(body):
+        if self.is_open_access(body) and not self._short_page(landed):
             # The chain labels the hit from this: an open-access item is not a subscription
-            # copy, so its note and its "needs a session" advice would both be wrong.
+            # copy, so its note and its "needs a session" advice would both be wrong. A licence
+            # block on the paywalled *short* page can be a related-item card's, hence the check.
             item.extra = {**item.extra, "open_access": True}
             item.access = provenance.OA
         return item
-
-    def _refusal_reason(self, page: str, landed: str, response) -> str:
-        """Why the PDF endpoint answered something that is not a PDF."""
-        if self.is_open_access(page):
-            return "the item is open access but the endpoint answered an HTML page"
-        if not self.has_session:
-            return "the session holds no clearance cookie"
-        if self._short_page(landed):
-            return ("the item answers only its short page, so the session is not entitled to it "
-                    "(missing, expired, or not subscribed)")
-        return "the session is not entitled to this item (expired, or not subscribed)"
 
     def get_attachment(self, key: str) -> bytes:
         """Download the item PDF (only a session the site lets through serves it)."""
@@ -427,23 +424,8 @@ class GatedBackend(EntitledBackend):
         page, landed = self._page(normalized)
         url = self.extract_pdf_url(page, doi_from(normalized), self.item_id(landed))
         if not url:
-            raise Unavailable(f"[{self.name}] the item page carries no PDF link: {landed}")
-        try:
-            response = self.fetch(url, headers={"Accept": "application/pdf"})
-        except HttpError as e:
-            if self._is_gate(e.body, e.status):
-                raise Unavailable(f"[{self.name}] PDF download was gated: {self.BLOCK_MSG}") from e
-            raise
-        if response.content.startswith(b"%PDF"):
-            return response.content
-        if self._is_gate(response.text, response.status_code):
-            # Cloudflare serves its interstitial with a 200 too: that is the gate, not a refusal.
-            raise Unavailable(f"[{self.name}] PDF download was gated: {self.BLOCK_MSG}")
-        landed_on = urlparse(str(response.url)).path or url
-        why = self._refusal_reason(page, landed, response)
-        raise Unavailable(
-            f"[{self.name}] no PDF bytes: {why} (landed on {landed_on}) — open {url} in your "
-            "entitled browser, or refresh the cookie+user_agent pair from a cleared tab")
+            raise Paywalled(f"[{self.name}] the item page carries no PDF link: {landed}")
+        return self._gated_download(url, page, landed)
 
 
 def extract_pdf_url(page_html: str, doi: str = "", want_id: str = "", *, site: str,
@@ -492,12 +474,3 @@ def extract_pdf_url(page_html: str, doi: str = "", want_id: str = "", *, site: s
     return raw
 
 
-def parse_cookie(raw: str, hosts: tuple[str, ...]) -> dict[str, str]:
-    """Parse a cookie header / Netscape export, keeping only the site's rows."""
-    return _parse_cookie(raw, hosts)
-
-
-def load_cookie(cookie: str = "", cookie_file: str = "", hosts: tuple[str, ...] = (),
-                name: str = "") -> str:
-    """The cookie string from an inline string and/or a cookie file (both merged)."""
-    return _load_cookie(cookie, cookie_file, hosts, name)

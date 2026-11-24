@@ -37,10 +37,10 @@ _ITEMTYPE_MAP = {
     "standard": "standard",
 }
 
-# Zotero write-JSON field names (camelCase) and the AcademicItem correspondence
+# Response-envelope keys (not item fields) that callers read out of a write reply.
 _ZOTERO_RESPONSE_FIELDS = ("version", "key")
 
-# Appended to any 401 so the operator knows the one-off fix (the key is granted at runtime).
+# Appended to a write's 401 so the operator knows the one-off fix (the key is granted at runtime).
 _WRITE_HINT = "; writing needs a local authorization key, run `litcli backends authorize zotero`"
 
 

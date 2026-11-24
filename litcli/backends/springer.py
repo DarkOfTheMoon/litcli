@@ -31,13 +31,13 @@ from typing import ClassVar
 from urllib.parse import urlparse
 
 from .. import provenance
-from ..errors import BadInput, NotFound, Unavailable
+from ..errors import BadInput, NotFound, Paywalled, Unavailable
 from ..models import AcademicItem, extract_year, normalize_author_name
 from ..transport import HttpError
 from ._cf_gate import is_challenge_page
 from ._cf_gate import load_cookie as _load_cookie
 from ._cf_gate import parse_cookie as _parse_cookie
-from ._entitled import EntitledBackend
+from ._gated import GatedBackend
 
 _SITE = "https://link.springer.com"
 
@@ -66,7 +66,16 @@ _ALLOWED_HOSTS = ("springer.com", "springernature.com", "nature.com", "biomedcen
 #: Repeatable: a pasted key may carry ``springer/`` *and* ``doi:`` (the ``source/key`` form the
 #: table prints prepends to a key that already says ``doi:``).
 _DOI_PREFIX_RE = re.compile(r"^(?:(?:https?://(?:dx\.)?doi\.org/|doi:\s*|springer[:\/]\s*)\s*)+", re.I)
-_DOI_RE = re.compile(r"^10\.\d{4,9}/\S+$")
+_DOI_RE = re.compile(r"^10\.\d{4,9}/[^\s?#]+$")
+#: Characters a DOI picks up from a URL tail but does not own.
+_DOI_TAIL = ".,;:)]}/"
+#: A DOI in running text (a pasted link leaves the host before it).
+_DOI_FIND_RE = re.compile(r"10\.\d{4,9}/[^\s?#]+")
+
+
+def _clean(doi: str) -> str:
+    """Decode a DOI and drop the separators running text trails along it."""
+    return urllib.parse.unquote(doi or "").rstrip(_DOI_TAIL)
 #: A page shape a DOI lives under. A journal article answers only on ``/article/``, a book
 #: chapter only on ``/chapter/`` and a reference-work entry only on ``/referenceworkentry/``;
 #: the other two 404. All three carry the same ``citation_*`` tags and ``citation_pdf_url``, so
@@ -89,7 +98,8 @@ _LD_RE = re.compile(
     r'<script\b[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.S | re.I)
 _META_TAG_RE = re.compile(r"<meta\b[^>]*>", re.I)
 _META_NAME_RE = re.compile(r"\bname=[\"']([^\"']+)[\"']", re.I)
-_META_CONTENT_RE = re.compile(r"\bcontent=[\"']([^\"']*)[\"']", re.I)
+#: The value runs to the opening quote's own kind: an apostrophe in a title is content.
+_META_CONTENT_RE = re.compile(r"\bcontent=([\"'])(.*?)\1", re.I | re.S)
 _TITLE_TAG_RE = re.compile(r"<title\b[^>]*>(.*?)</title>", re.S | re.I)
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
@@ -113,9 +123,16 @@ def _on_springer(url: str) -> bool:
 # --- pure helpers (no network) ---
 
 def doi_from(key: str) -> str:
-    """Return a bare DOI from a DOI-shaped key (or a ``doi.org``/``springer:`` form), else ""."""
-    k = _DOI_PREFIX_RE.sub("", (key or "").strip()).strip()
-    return k if _DOI_RE.match(k) else ""
+    """Return a bare DOI from a DOI-shaped key (or a ``doi.org``/``springer:`` form), else "".
+
+    A query tail (``?download=true``) or fragment is not part of the DOI.
+    """
+    k = re.split(r"[?#\s]", _DOI_PREFIX_RE.sub("", (key or "").strip()).strip(),
+                 maxsplit=1)[0].rstrip(_DOI_TAIL)
+    if _DOI_RE.match(k):
+        return k
+    found = _DOI_FIND_RE.search(key or "")
+    return _clean(found.group(0)) if found else ""
 
 
 def _trim_subpage(doi: str) -> str:
@@ -132,12 +149,14 @@ def normalize_key(key: str) -> str:
     shapes here do not match, so a failing key is retried decoded.
     """
     def _from(text: str) -> str:
+        # The URL shape first: a ``/content/pdf/<DOI>.pdf`` link ends in a suffix the bare DOI
+        # finder would keep (the URL regex knows to drop it).
+        m = _URL_DOI_RE.search(text)
+        if m:
+            return _trim_subpage((m.group(1) or m.group(2)).rstrip(_DOI_TAIL))
         found = doi_from(text)
         if found:
             return _trim_subpage(found)
-        m = _URL_DOI_RE.search(text)
-        if m:
-            return _trim_subpage(m.group(1) or m.group(2))
         nature = _NATURE_PDF_RE.search(text.split("?")[0].split("#")[0])
         return f"10.1038/{nature.group(1)}" if nature else ""
 
@@ -162,7 +181,7 @@ def is_open_access(page_html: str) -> bool:
 
 #: A Nature-branded PDF: ``https://www.nature.com/articles/<suffix>.pdf`` (the DOI is
 #: ``10.1038/<suffix>``).
-_NATURE_PDF_RE = re.compile(r"nature\.com/articles/([a-z0-9.-]+?)(?:\.pdf)?$", re.I)
+_NATURE_PDF_RE = re.compile(r"nature\.com/articles/([a-z0-9.-]+?)(?:\.epdf|\.pdf)?$", re.I)
 
 
 def _link_doi(url: str) -> str:
@@ -225,7 +244,7 @@ def _metas(page_html: str) -> dict[str, list[str]]:
         name = _META_NAME_RE.search(tag)
         content = _META_CONTENT_RE.search(tag)
         if name and content:
-            found.setdefault(name.group(1).lower(), []).append(content.group(1))
+            found.setdefault(name.group(1).lower(), []).append(content.group(2))
     return found
 
 
@@ -400,7 +419,7 @@ def load_cookie(cookie: str = "", cookie_file: str = "") -> str:
     return _load_cookie(cookie, cookie_file, _COOKIE_HOSTS, "springer")
 
 
-class SpringerBackend(EntitledBackend):
+class SpringerBackend(GatedBackend):
     """Resolve a DOI / SpringerLink article URL to one item and its PDF link.
 
     A session you already entitled in your own browser is carried in as a cookie string
@@ -410,6 +429,10 @@ class SpringerBackend(EntitledBackend):
     download without any session at all.
     """
 
+    DEFAULT_NAME = "springer"
+    SITE_NAME = "SpringerLink"
+    KEY_PREFIX = "springer"
+    KEY_FORMS = "a DOI, springer:<DOI> or a SpringerLink article URL"
     UA = _UA
     headers: ClassVar[dict] = {
         "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
@@ -428,19 +451,29 @@ class SpringerBackend(EntitledBackend):
                  cookie: str = "", cookie_file: str = "", user_agent: str = "", **_unused):
         super().__init__(name=name, timeout=timeout, delay=delay, cookie=cookie,
                          cookie_file=cookie_file, user_agent=user_agent)
-        self._last_doi = self._last_page = self._last_url = ""
+
+    def normalize_key(self, key: str) -> str:
+        """Replaces the inherited constant-driven hook: a Nature URL carries a slug rather than
+        a DOI, and a ``springer:`` prefix is one of the accepted forms."""
+        return normalize_key(key)
+
+    def is_open_access(self, page_html: str) -> bool:
+        """SpringerLink badges the article instead of carrying a licence block."""
+        return is_open_access(page_html)
 
     def _page(self, doi: str) -> tuple[str, str]:
         """Fetch the item page as ``(html, url)``, turning a gate into one clear error.
 
-        The page is memoized per DOI: the PDF download and the item read share one request. The
-        DOI's own page kind is not derivable from the DOI, so the kinds are probed in turn and a
-        404 simply moves on (a chapter and a reference-work entry each answer only on their own
-        path). The first hit 303s to ``idp.springer.com``, which sets the identity cookie and
-        sends the client back; the shared cookie jar carries it, so the hop is transparent.
+        Replaces the inherited ``_page`` because the DOI's page kind is not derivable from the
+        DOI: the kinds are probed in turn and a 404 simply moves on (a chapter and a
+        reference-work entry each answer only on their own path). The shared per-key memo is
+        kept, so the PDF download and the item read share one request. The first hit 303s to
+        ``idp.springer.com``, which sets the identity cookie and sends the client back; the
+        shared cookie jar carries it, so the hop is transparent.
         """
-        if self._last_page and self._last_doi == doi:
-            return self._last_page, self._last_url
+        hit = self._memo_get(doi)
+        if hit is not None:
+            return hit
         quoted = urllib.parse.quote(doi, safe="/")
         missing: HttpError | None = None
         for kind in _PATH_KINDS:
@@ -453,7 +486,7 @@ class SpringerBackend(EntitledBackend):
                     missing = missing or e
                     continue
                 raise
-            self._last_doi, self._last_page, self._last_url = doi, body, url
+            self._memo_put(doi, (body, url))
             return body, url
         if missing is not None:  # every kind 404ed: the caller turns this into NotFound
             raise missing
@@ -461,28 +494,12 @@ class SpringerBackend(EntitledBackend):
 
     # -- Backend ---------------------------------------------------------------
 
-    def search(self, query: str, limit: int = 10, filters: dict | None = None) -> list[AcademicItem]:
-        """Resolve a DOI / URL query to one item; keyword queries return [].
-
-        There is no key-free search endpoint, so anything that is not already an identifier
-        cannot be looked up here. ``filters`` are not applied: there is at most one hit.
-        """
-        try:
-            normalize_key(query or "")
-        except BadInput:
-            return []
-        if limit < 1:
-            return []
-        try:
-            return [self.get(query)]
-        except (NotFound, KeyError):
-            return []
-
     def get(self, key: str) -> AcademicItem:
         """Fetch one article by DOI or URL and normalize it to ``doi:<DOI>``.
 
-        A 404 is turned into :class:`NotFound` so a search treating the key as a candidate
-        yields nothing instead of an error.
+        Replaces the inherited ``get`` because the landed URL decides the item type (a chapter
+        or reference-work entry is not a journal article). A 404 is turned into
+        :class:`NotFound` so a search treating the key as a candidate yields nothing.
         """
         doi = normalize_key(key)[4:]
         try:
@@ -497,15 +514,17 @@ class SpringerBackend(EntitledBackend):
             item.item_type = "chapter"  # a book chapter / encyclopedia entry, not a journal article
         if not item.title:
             raise RuntimeError(f"[{self.name}] could not parse the article page: doi:{doi}")
+        self._guard_sign_in(body, url, item.title)
         try:
             pdf_url = extract_pdf_url(body, doi)
         except RuntimeError:  # an odd host must not cost the metadata
             pdf_url = ""
         if pdf_url:
             item.attachments = [pdf_url]
-        if is_open_access(body):
+        if is_open_access(body) and not self._short_page(url):
             # The chain labels the hit from this: an open-access article is not a subscription
-            # copy, so its note and its "needs a session" advice would both be wrong.
+            # copy, so its note and its "needs a session" advice would both be wrong. A licence
+            # block on a paywalled page can be a related-item card's, hence the short-page check.
             item.extra = {**item.extra, "open_access": True}
             item.access = provenance.OA
         return item
@@ -514,8 +533,8 @@ class SpringerBackend(EntitledBackend):
         """Whether the session holds a filled-in Springer institution token.
 
         ``sim-inst-token`` is set to the empty string for an anonymous visitor and to the
-        entitlement token once the session is recognised — a useful hint for the failure
-        message, never a decision input on its own.
+        entitlement token once the session is recognised. The PDF landing check uses it to
+        choose which failure reason to report; it never decides whether to attempt a download.
 
         The configured cookie is checked first: it is sent as a header and never enters the
         shared jar, so reading the jar alone would report a correctly configured session as
@@ -537,7 +556,7 @@ class SpringerBackend(EntitledBackend):
         page, _url = self._page(doi)
         url = extract_pdf_url(page, doi)
         if not url:
-            raise Unavailable(
+            raise Paywalled(
                 f"[{self.name}] the article page carries no PDF link for doi:{doi}")
         open_access = is_open_access(page)
         try:
@@ -559,6 +578,6 @@ class SpringerBackend(EntitledBackend):
         else:
             why = ("the session holds no institution token (sim-inst-token), so the download "
                    "landed on the article page")
-        raise Unavailable(
+        raise Paywalled(
             f"[{self.name}] no PDF bytes: {why} (landed on {landed}) — open {url} in your "
             "entitled browser, or refresh the cookie+user_agent pair from an authenticated tab")

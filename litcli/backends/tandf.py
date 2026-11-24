@@ -17,12 +17,13 @@ from urllib.parse import urlparse
 
 from ..models import AcademicItem
 from ._cf_gate import is_challenge_page
+from ._cf_gate import load_cookie as _load_cookie
+from ._cf_gate import parse_cookie as _parse_cookie
+from ._gated import OA_RE as _OA_RE
 from ._gated import GatedBackend
 from ._gated import extract_pdf_url as _extract_pdf_url
-from ._gated import load_cookie as _load_cookie
 from ._gated import normalize_key as _normalize_key
 from ._gated import page_to_item as _page_to_item
-from ._gated import parse_cookie as _parse_cookie
 
 _SITE = "https://www.tandfonline.com"
 _COOKIE_HOSTS = ("www.tandfonline.com", "tandfonline.com")
@@ -31,7 +32,6 @@ _ALLOWED_HOSTS = ("tandfonline.com",)
 _URL_RE = re.compile(r"^https?://(?:www\.)?tandfonline\.com/\S*$", re.I)
 _URL_DOI_RE = re.compile(r"/doi/(?:full/|abs/|pdf/|epdf/)?(10\.\d{4,9}/[^?#\s]+)", re.I)
 _PDF_PATH_RE = re.compile(r"""(/doi/(?:pdf|epdf)/10\.\d{4,9}/[^"'?#\s]+)""", re.I)
-_OA_RE = re.compile(r"is an open access article|creative-commons__description", re.I)
 
 _KEY_FORMS = "a DOI, tandf:<DOI> or Taylor & Francis URL"
 

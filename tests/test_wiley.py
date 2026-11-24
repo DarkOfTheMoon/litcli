@@ -13,7 +13,7 @@ from litcli.backends.wiley import (
     page_to_item,
     parse_cookie,
 )
-from litcli.errors import BadInput
+from litcli.errors import BadInput, BotWall
 from tests.http_stub import speed_up, stub
 
 DOI = "10.1002/nme.1628"
@@ -86,6 +86,11 @@ class NormalizeKeyTest(unittest.TestCase):
         # ``10.1002%2Fa%2Fb`` is how the TDM API writes the DOI; a pasted URL may carry it.
         self.assertEqual(normalize_key("https://onlinelibrary.wiley.com/doi/pdf/10.1002%2Fa%2Fb"),
                          "doi:10.1002/a/b")
+
+    def test_a_doi_query_tail_or_bracket_is_not_part_of_the_doi(self):
+        self.assertEqual(normalize_key(f"{DOI}?download=true"), f"doi:{DOI}")
+        self.assertEqual(normalize_key(f"{DOI}#sec2"), f"doi:{DOI}")
+        self.assertEqual(normalize_key(f"({DOI})"), f"doi:{DOI}")
 
     def test_keyword_is_bad_input(self):
         with self.assertRaises(BadInput):
@@ -171,6 +176,23 @@ class PageToItemTest(unittest.TestCase):
         page = "<html><head><title>Only a Title - Wiley Online Library</title></head></html>"
         self.assertEqual(page_to_item(page, f"doi:{DOI}").title, "Only a Title")
 
+    def test_a_related_ld_record_does_not_rename_the_article(self):
+        # A related-item card can ship its own record ahead of the article's; it must not win
+        # over the citation meta that names this article.
+        page = CITATION_PAGE + (
+            '<script type="application/ld+json">{"@type": "Article", '
+            '"headline": "RELATED: other", "identifier": "10.9999/rel"}</script>')
+        it = page_to_item(page, "doi:10.1002/j.meta.2019.01.002")
+        self.assertEqual(it.title, "Meta Carried Title")
+        self.assertEqual(it.doi, "10.1002/j.meta.2019.01.002")
+
+    def test_an_ld_record_naming_the_article_is_preferred(self):
+        page = ('<meta name="citation_title" content="META">'
+                '<meta name="citation_doi" content="10.1002/j.same.2020.01.001">'
+                '<script type="application/ld+json">{"@type": "Article", '
+                '"headline": "RECORD", "identifier": "10.1002/j.same.2020.01.001"}</script>')
+        self.assertEqual(page_to_item(page, "doi:10.1002/j.same.2020.01.001").title, "RECORD")
+
 
 class ExtractPdfUrlTest(unittest.TestCase):
     def test_citation_pdf_meta_is_rewritten_to_pdfdirect(self):
@@ -240,25 +262,33 @@ class WileyBackendTest(unittest.TestCase):
 
     def test_403_block_page_raises_a_named_error(self):
         stub(self.be, (403, BLOCK_PAGE))
-        with self.assertRaises(RuntimeError) as ctx:
+        with self.assertRaises(BotWall) as ctx:
             self.be.get(DOI)
         self.assertIn("session", str(ctx.exception))
         self.assertIn("user_agent", str(ctx.exception))
 
     def test_200_block_marker_raises(self):
         stub(self.be, (200, BLOCK_PAGE))
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(BotWall):
             self.be.get(DOI)
 
     def test_cloudflare_mitigated_header_raises(self):
         stub(self.be, (200, JSONLD_PAGE, {"cf-mitigated": "challenge"}))
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(BotWall):
             self.be.get(DOI)
 
     def test_5xx_retries_then_succeeds(self):
         rec = stub(self.be, (503, "busy"), (200, JSONLD_PAGE))
         self.assertEqual(self.be.get(DOI).title, "A Study of Things")
         self.assertEqual(len(rec.requests), 2)
+
+    def test_a_sign_in_page_is_not_accepted_as_the_item(self):
+        # This ``get`` is its own override, so it must call the guard itself.
+        stub(self.be, (200, "<html><head><title>Sign in to Wiley Online Library</title></head>"
+                            '<body><a href="/login">Sign in</a></body></html>'))
+        with self.assertRaises(BotWall) as ctx:
+            self.be.get(DOI)
+        self.assertIn("sign-in page", str(ctx.exception))
 
     def test_unparseable_page_raises(self):
         stub(self.be, (200, "<html><body></body></html>"))
@@ -351,7 +381,7 @@ class WileyBackendTest(unittest.TestCase):
 
     def test_gated_page_without_a_token_still_raises(self):
         stub(self.be, (403, BLOCK_PAGE))
-        with self.assertRaises(RuntimeError) as ctx:
+        with self.assertRaises(BotWall) as ctx:
             self.be.get(DOI)
         self.assertIn("user_agent", str(ctx.exception))
 

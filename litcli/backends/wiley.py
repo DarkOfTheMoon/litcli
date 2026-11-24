@@ -27,13 +27,13 @@ import urllib.parse
 from typing import ClassVar
 from urllib.parse import urlparse
 
-from ..errors import BadInput, NotFound, Unavailable
+from ..errors import BadInput, BotWall, Paywalled, Unavailable
 from ..models import AcademicItem, extract_year, normalize_author_name
 from ..transport import HttpError
 from ._cf_gate import gate_message, is_challenge_page
 from ._cf_gate import load_cookie as _load_cookie
 from ._cf_gate import parse_cookie as _parse_cookie
-from ._entitled import EntitledBackend
+from ._gated import GatedBackend
 
 _SITE = "https://onlinelibrary.wiley.com"
 
@@ -48,7 +48,16 @@ _COOKIE_HOSTS = ("onlinelibrary.wiley.com", "wiley.com")
 _ALLOWED_HOSTS = ("wiley.com",)
 
 _DOI_PREFIX_RE = re.compile(r"^(?:https?://(?:dx\.)?doi\.org/|doi:\s*|wiley:\s*)", re.I)
-_DOI_RE = re.compile(r"^10\.\d{4,9}/\S+$")
+_DOI_RE = re.compile(r"^10\.\d{4,9}/[^\s?#]+$")
+#: Characters a DOI picks up from a URL tail but does not own.
+_DOI_TAIL = ".,;:)]}/"
+#: A DOI in running text (a pasted link leaves the host before it).
+_DOI_FIND_RE = re.compile(r"10\.\d{4,9}/[^\s?#]+")
+
+
+def _clean(doi: str) -> str:
+    """Decode a DOI and drop the separators running text trails along it."""
+    return urllib.parse.unquote(doi or "").rstrip(_DOI_TAIL)
 #: A DOI inside an onlinelibrary URL (``/doi/<DOI>``, ``/doi/abs/<DOI>``, ``/doi/pdf/<DOI>``…).
 _URL_DOI_RE = re.compile(
     r"(?:/doi/|/doi/(?:abs|full|epdf|pdf|pdfdirect)/)(10\.\d{4,9}/[^?#\s]+)", re.I)
@@ -57,7 +66,8 @@ _LD_RE = re.compile(
     r'<script\b[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.S | re.I)
 _META_TAG_RE = re.compile(r"<meta\b[^>]*>", re.I)
 _META_NAME_RE = re.compile(r"\bname=[\"']([^\"']+)[\"']", re.I)
-_META_CONTENT_RE = re.compile(r"\bcontent=[\"']([^\"']*)[\"']", re.I)
+#: The value runs to the opening quote's own kind: an apostrophe in a title is content.
+_META_CONTENT_RE = re.compile(r"\bcontent=([\"'])(.*?)\1", re.I | re.S)
 _TITLE_TAG_RE = re.compile(r"<title\b[^>]*>(.*?)</title>", re.S | re.I)
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
@@ -84,9 +94,16 @@ def _on_wiley(url: str) -> bool:
 # --- pure helpers (no network) ---
 
 def doi_from(key: str) -> str:
-    """Return a bare DOI from a DOI-shaped key (or a ``doi.org``/``wiley:`` form), else ""."""
-    k = _DOI_PREFIX_RE.sub("", (key or "").strip()).strip()
-    return k if _DOI_RE.match(k) else ""
+    """Return a bare DOI from a DOI-shaped key (or a ``doi.org``/``wiley:`` form), else "".
+
+    A query tail (``?download=true``) or fragment is not part of the DOI.
+    """
+    k = re.split(r"[?#\s]", _DOI_PREFIX_RE.sub("", (key or "").strip()).strip(),
+                 maxsplit=1)[0].rstrip(_DOI_TAIL)
+    if _DOI_RE.match(k):
+        return k
+    found = _DOI_FIND_RE.search(key or "")
+    return _clean(found.group(0)) if found else ""
 
 
 def normalize_key(key: str) -> str:
@@ -100,7 +117,7 @@ def normalize_key(key: str) -> str:
         if not found:
             m = _URL_DOI_RE.search(text)
             if m:
-                found = m.group(1).rstrip(".")
+                found = m.group(1).rstrip(_DOI_TAIL)
         return found
 
     k = (key or "").strip()
@@ -195,7 +212,7 @@ def _metas(page_html: str) -> dict[str, list[str]]:
         content = _META_CONTENT_RE.search(tag)
         if name and content:
             key = name.group(1).lower()
-            found.setdefault(key, []).append(content.group(1))
+            found.setdefault(key, []).append(content.group(2))
     return found
 
 
@@ -318,17 +335,31 @@ def _dc_fields(metas: dict[str, list[str]]) -> dict:
 
 
 def page_to_item(page_html: str, key: str) -> AcademicItem:
-    """Normalize an article page to an :class:`AcademicItem` (JSON-LD → citation_* → dc.*).
+    """Normalize an article page to an :class:`AcademicItem` (citation_* → JSON-LD → dc.*).
 
-    The last resort is the ``<title>`` tag: better a title than an unparseable page.
+    A related-item card can ship its own JSON-LD record ahead of the article's, so a record is
+    used only when it names this key; otherwise the ``citation_*`` meta is the truth and the
+    record may fill just the gaps the meta leaves. The last resort is the ``<title>`` tag:
+    better a title than an unparseable page.
     """
     doi = doi_from(key.split(":", 1)[1]) if key.lower().startswith("doi:") else doi_from(key)
+    want = doi.lower().rstrip(".")
     metas = _metas(page_html)
-    fields = _ld_fields(_json_ld(page_html, doi.lower().rstrip(".")))
-    from_ld = bool(fields["title"] or fields["creators"])
-    if not fields["title"] and not fields["creators"]:
-        fields = _meta_fields(metas)
-    if not fields["title"] and not fields["creators"]:
+    fields = _meta_fields(metas)
+    ld = _ld_fields(_json_ld(page_html, want))
+    matched = bool(ld["title"] or ld["creators"]) and (
+        not want or (ld["doi"] or "").lower().rstrip(".") == want)
+    from_ld = matched
+    if matched:
+        for name, value in fields.items():  # meta may still hold something the record lacks
+            if value and not ld[name]:
+                ld[name] = value
+        fields = ld
+    elif fields["title"] or fields["creators"]:
+        pass  # the meta names this article; the record of another one must not overwrite it
+    elif ld["title"] or ld["creators"]:
+        fields, from_ld = ld, True  # no identity meta at all: the record is the only source
+    else:
         fields = _dc_fields(metas)
     if not fields["title"]:
         title_tag = _TITLE_TAG_RE.search(page_html or "")
@@ -367,7 +398,7 @@ def load_cookie(cookie: str = "", cookie_file: str = "") -> str:
     return _load_cookie(cookie, cookie_file, _COOKIE_HOSTS, "wiley")
 
 
-class WileyBackend(EntitledBackend):
+class WileyBackend(GatedBackend):
     """Resolve a DOI / Wiley article URL to one item and, when entitled, its PDF link.
 
     A session you already entitled in your own browser is carried in as a cookie string
@@ -376,6 +407,10 @@ class WileyBackend(EntitledBackend):
     PDF goes through the TDM API instead, so no browser session is needed for the bytes.
     """
 
+    DEFAULT_NAME = "wiley"
+    SITE_NAME = "Wiley"
+    KEY_PREFIX = "wiley"
+    KEY_FORMS = "a DOI, wiley:<DOI> or a Wiley article URL"
     UA = _UA
     headers: ClassVar[dict] = {
         "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
@@ -396,42 +431,39 @@ class WileyBackend(EntitledBackend):
                          cookie_file=cookie_file, user_agent=user_agent)
         #: Optional Wiley TDM token: downloads go through ``api.wiley.com`` and skip Cloudflare.
         self.tdm_token = (tdm_token or "").strip()
-        self._last_doi = self._last_page = ""
+
+    def normalize_key(self, key: str) -> str:
+        """Replaces the inherited constant-driven hook: a Wiley key is always a DOI, and a
+        ``wiley:`` prefix is one of the accepted forms."""
+        return normalize_key(key)
 
     def _page(self, doi: str) -> str:
-        """Fetch the article page, turning a gate into one clear error (page memoized)."""
-        if self._last_page and self._last_doi == doi:
-            return self._last_page
+        """Fetch the article page, turning a gate into one clear error.
+
+        Replaces the inherited ``_page`` because the page lives at ``/doi/<DOI>`` rather than
+        behind a ``doi.org`` hop. The shared per-key memo is kept, so ``get`` and
+        ``get_attachment`` share one request.
+        """
+        body = self._memo_get(doi)
+        if body is not None:
+            return body
         url = f"{_SITE}/doi/{urllib.parse.quote(doi)}"
         body = self._open(url).text
-        self._last_doi, self._last_page = doi, body
+        self._memo_put(doi, body)
         return body
 
     # -- Backend ---------------------------------------------------------------
 
-    def search(self, query: str, limit: int = 10, filters: dict | None = None) -> list[AcademicItem]:
-        """Resolve a DOI / URL query to one item; keyword queries return [].
-
-        There is no key-free search endpoint, so anything that is not already an identifier
-        cannot be looked up here. ``filters`` are not applied: there is at most one hit.
-        """
-        try:
-            normalize_key(query or "")
-        except BadInput:
-            return []
-        if limit < 1:
-            return []
-        try:
-            return [self.get(query)]
-        except (NotFound, KeyError):
-            return []
-
     def get(self, key: str) -> AcademicItem:
-        """Fetch one article by DOI or URL and normalize it to ``doi:<DOI>``."""
+        """Fetch one article by DOI or URL and normalize it to ``doi:<DOI>``.
+
+        Replaces the inherited ``get`` for the TDM route: a gated page is not fatal when a
+        ``tdm_token`` is configured, because that endpoint still has the bytes.
+        """
         doi = normalize_key(key)[4:]
         try:
             body = self._page(doi)
-        except RuntimeError:
+        except BotWall:
             if not self.tdm_token:  # a gate is fatal only without the token route
                 raise
             # The page is walled off but the TDM API still has the bytes. An attachment must be
@@ -444,6 +476,7 @@ class WileyBackend(EntitledBackend):
         item = page_to_item(body, f"doi:{doi}")
         if not item.title:
             raise RuntimeError(f"[{self.name}] could not parse the article page: doi:{doi}")
+        self._guard_sign_in(body, doi, item.title)
         try:
             pdf_url = extract_pdf_url(body, doi)
         except RuntimeError:  # an odd host must not cost the metadata
@@ -487,7 +520,7 @@ class WileyBackend(EntitledBackend):
                 raise
             raise Unavailable(tdm_reason) from None
         if not url:
-            raise Unavailable(tdm_reason or (
+            raise Paywalled(tdm_reason or (
                 f"[{self.name}] the article page carries no PDF link "
                 f"(not entitled, or the session needs an off-campus login)"))
         try:
@@ -505,7 +538,7 @@ class WileyBackend(EntitledBackend):
         landed = urlparse(str(response.url)).path or url
         why = ("the site marked the redirect access-denied (atypon-access-denied)"
                if denied else "the endpoint answered an HTML page, not a PDF")
-        raise Unavailable(
+        raise Paywalled(
             f"[{self.name}] no PDF bytes: {why} (landed on {landed}) — the article is not "
             "entitled on this session, or the session has expired: open "
             f"{url} in your entitled browser, or refresh the cookie+user_agent pair")

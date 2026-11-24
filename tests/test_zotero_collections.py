@@ -15,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from litcli.backends.zotero_local import ZoteroLocalBackend
+from litcli.models import AcademicItem
 
 # Collection tree:
 #   R1 (root)
@@ -185,6 +186,59 @@ class ZoteroSearchParseTest(unittest.TestCase):
             self.assertTrue(self.be.ping())
         with mock.patch.object(self.be, "_request", return_value=(503, {}, b"")):
             self.assertFalse(self.be.ping())
+
+
+class MembersLimitTest(unittest.TestCase):
+    """``data members --limit``: 0/negatives mean no cap (they used to slice off the tail)."""
+
+    class _Backend:
+        name = "zotero"
+
+        def collection_items(self, key, recursive=True):
+            return [AcademicItem(source="zotero", key=k, title=t, year="2000")
+                    for k, t in (("A", "One"), ("B", "Two\nlines"), ("C", "Three"))]
+
+        def collection_tree(self):
+            return [{"key": "C", "name": "Coll", "parent": ""}]
+
+    def _run(self, limit):
+        import argparse
+        import contextlib
+        import io
+        from unittest import mock
+
+        from litcli.commands import data
+
+        buf = io.StringIO()
+        args = argparse.Namespace(backend=None, coll_key="C", format="table", limit=limit,
+                                  no_recursive=True)
+        with mock.patch.object(data, "get_backend", return_value=self._Backend()), \
+                contextlib.redirect_stdout(buf):
+            rc = data.cmd_data_members({}, args)
+        return rc, buf.getvalue()
+
+    def test_a_negative_limit_means_no_cap(self):
+        rc, out = self._run(-1)
+        self.assertEqual(rc, 0)
+        for title in ("One", "Two lines", "Three"):
+            self.assertIn(title, out)
+        self.assertNotIn("showing first", out)
+
+    def test_zero_means_no_cap(self):
+        _rc, out = self._run(0)
+        self.assertIn("Three", out)
+        self.assertNotIn("showing first", out)
+
+    def test_a_positive_limit_still_caps(self):
+        _rc, out = self._run(2)
+        self.assertIn("Two lines", out)
+        self.assertNotIn("Three", out)
+        self.assertIn("showing first 2", out)
+
+    def test_a_title_with_a_newline_stays_on_one_row(self):
+        _rc, out = self._run(-1)
+        rows = [ln for ln in out.splitlines() if ln.startswith("  B ")]
+        self.assertEqual(len(rows), 1)
 
 
 if __name__ == "__main__":

@@ -118,7 +118,10 @@ class UsptoBackend(HttpBackend):
         return [_pat_to_item(r, self.name) for r in self._results(data)][:limit]
 
     def get(self, key: str) -> AcademicItem:
-        # Exact patent number query: use fq to exactly match the patent number field
+        # Exact patent number query via ``fq``. UNVERIFIED: no live response was available to
+        # confirm that the server treats ``patent_id`` as an exact-match field (the parser reads
+        # the official ``patent_patent_id``), so a changed alias would turn every key into a
+        # miss rather than an error.
         self._require_key()
         body = {"query": {"fq": [f"patent_id:{key}"]}, "start": 0, "limit": 1}
         data = self._post(f"{self._base}", body)

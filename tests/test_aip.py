@@ -14,7 +14,7 @@ from litcli.backends.aip import (
     page_to_item,
     parse_cookie,
 )
-from litcli.errors import BadInput, NotFound, Unavailable
+from litcli.errors import BadInput, BotWall, NotFound, Paywalled, Unavailable
 from tests.http_stub import speed_up, stub
 
 DOI = "10.1063/1.870872"
@@ -114,6 +114,13 @@ class ExtractPdfUrlTest(unittest.TestCase):
         self.assertEqual(extract_pdf_url(page),
                          f"https://pubs.aip.org/article-pdf/1/12/4022/{ID}/12345678/"
                          "4022_1_online.pdf")
+
+    def test_a_multi_segment_journal_path_is_read_whole(self):
+        # The journal segment before ``article-pdf`` is not always one path piece.
+        page = (f'<a href="/pop/research-article/article-pdf/1/12/4022/{ID}/1234/x.pdf">PDF</a>')
+        self.assertEqual(extract_pdf_url(page),
+                         f"https://pubs.aip.org/pop/research-article/article-pdf/1/12/4022/"
+                         f"{ID}/1234/x.pdf")
 
     def test_the_doi_is_a_last_resort(self):
         self.assertEqual(extract_pdf_url("<html></html>", DOI),
@@ -247,14 +254,14 @@ class BackendTest(unittest.TestCase):
 
     def test_a_challenge_page_becomes_the_gate_message(self):
         stub(self.be, (403, BLOCK_PAGE))
-        with self.assertRaises(RuntimeError) as ctx:
+        with self.assertRaises(BotWall) as ctx:
             self.be.get(f"url:{URL}")
         self.assertIn("AIP Publishing", str(ctx.exception))
         self.assertIn("cookie_file", str(ctx.exception))
 
     def test_a_challenge_with_a_200_status_is_still_a_gate(self):
         stub(self.be, (200, BLOCK_PAGE))
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(BotWall):
             self.be.get(f"url:{URL}")
 
     def test_search_resolves_a_doi(self):
@@ -276,7 +283,7 @@ class BackendTest(unittest.TestCase):
 
     def test_an_html_answer_without_a_session_names_the_missing_cookie(self):
         stub(self.be, (200, CITATION_PAGE), (200, "<html>the article page</html>"))
-        with self.assertRaises(Unavailable) as ctx:
+        with self.assertRaises(Paywalled) as ctx:
             self.be.get_attachment(f"url:{URL}")
         self.assertIn("holds no clearance cookie", str(ctx.exception))
 
@@ -284,13 +291,13 @@ class BackendTest(unittest.TestCase):
         be = AipBackend(cookie="cf_clearance=abc", user_agent="UA/1")
         speed_up(be)
         stub(be, (200, CITATION_PAGE), (200, "<html>the article page</html>"))
-        with self.assertRaises(Unavailable) as ctx:
+        with self.assertRaises(Paywalled) as ctx:
             be.get_attachment(f"url:{URL}")
         self.assertIn("not entitled", str(ctx.exception))
 
     def test_an_html_answer_on_an_open_access_page_says_so(self):
         stub(self.be, (200, OA_PAGE), (200, "<html>the article page</html>"))
-        with self.assertRaises(Unavailable) as ctx:
+        with self.assertRaises(Paywalled) as ctx:
             self.be.get_attachment(f"url:{URL}")
         self.assertIn("open access", str(ctx.exception))
 
@@ -302,7 +309,7 @@ class BackendTest(unittest.TestCase):
 
     def test_get_attachment_without_a_link_asks_for_a_doi(self):
         stub(self.be, (200, "<html><head><title>T</title></head></html>"))
-        with self.assertRaises(Unavailable) as ctx:
+        with self.assertRaises(Paywalled) as ctx:
             self.be.get_attachment(f"url:{URL}")
         self.assertIn("no PDF link", str(ctx.exception))
 
@@ -317,6 +324,18 @@ class BackendTest(unittest.TestCase):
         self.be.get(f"url:{URL}")
         self.be.get_attachment(f"url:{URL}")
         self.assertEqual(rec.urls, [URL, PDF])
+
+    def test_two_keys_do_not_evict_each_others_page(self):
+        # One memo slot meant a second read dropped the first page and the PDF re-fetched it.
+        other = URL.replace(f"/{ID}/", "/260757/")
+        rec = stub(self.be, (200, CITATION_PAGE), (200, CITATION_PAGE), (200, b"%PDF-1.7"))
+        self.be.get(f"url:{URL}")
+        self.be.get(f"url:{other}")
+        self.be.get_attachment(f"url:{URL}")
+        self.assertEqual(rec.urls, [URL, other, PDF])
+
+    def test_the_id_is_read_out_of_the_modern_url(self):
+        self.assertEqual(self.be.item_id(URL), ID)
 
 
 class ConstructionTest(unittest.TestCase):

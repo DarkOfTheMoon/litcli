@@ -13,7 +13,7 @@ from litcli.backends.sciencedirect import (
     page_to_item,
     parse_cookie,
 )
-from litcli.errors import BadInput
+from litcli.errors import BadInput, BotWall, Paywalled
 from tests.http_stub import speed_up, stub
 
 PII = "S0307904X14001231"
@@ -110,6 +110,12 @@ class NormalizeKeyTest(unittest.TestCase):
         self.assertEqual(normalize_key(url), "pii:S0045782505000733")
         self.assertEqual(normalize_key("S0045-7825(05)00073-3"), "pii:S0045782505000733")
 
+    def test_a_doi_query_tail_is_not_part_of_the_doi(self):
+        self.assertEqual(normalize_key("10.1016/j.apm.2014.03.020?download=true"),
+                         "doi:10.1016/j.apm.2014.03.020")
+        self.assertEqual(normalize_key("10.1016/j.apm.2014.03.020#sec2"),
+                         "doi:10.1016/j.apm.2014.03.020")
+
     def test_keyword_is_bad_input(self):
         with self.assertRaises(BadInput):
             normalize_key("finite volume method")
@@ -181,6 +187,23 @@ class PageToItemTest(unittest.TestCase):
         it = page_to_item("<html><head><title>Only a Title</title></head></html>", "pii:X")
         self.assertEqual(it.title, "Only a Title")
 
+    def test_a_related_ld_record_does_not_rename_the_article(self):
+        # A related-item card may ship its own record ahead of the article's; the meta names
+        # this article, so the card's title and DOI must not overwrite it.
+        page = CITATION_PAGE + (
+            '<script type="application/ld+json">{"@type": "ScholarlyArticle", '
+            '"headline": "RELATED: other", "identifier": "10.9999/rel"}</script>')
+        it = page_to_item(page, f"pii:{PII}")
+        self.assertEqual(it.title, "Meta Carried Title")
+        self.assertEqual(it.doi, "10.1016/j.meta.2019.01.002")
+
+    def test_an_ld_record_naming_the_article_is_preferred(self):
+        page = ('<meta name="citation_title" content="META">'
+                '<meta name="citation_doi" content="10.1016/j.same.2020.01.001">'
+                '<script type="application/ld+json">{"@type": "ScholarlyArticle", '
+                '"headline": "RECORD", "identifier": "10.1016/j.same.2020.01.001"}</script>')
+        self.assertEqual(page_to_item(page, f"pii:{PII}").title, "RECORD")
+
 
 class ExtractPdfUrlTest(unittest.TestCase):
     def _page(self, *piis, own_first=False):
@@ -215,6 +238,14 @@ class ExtractPdfUrlTest(unittest.TestCase):
         self.assertEqual(
             url, "https://pdf.sciencedirectassets.com/1-s2.0-" + PII
             + "/main.pdf?X-Amz-Signature=abc&X-Amz-Expires=300")
+
+    def test_a_related_pdfurl_is_not_taken_for_the_article(self):
+        # The asset URL embeds the PII; a related card's ``pdfUrl`` names another one.
+        page = ('<script>{"pdfUrl": "https://pdf.sciencedirectassets.com/1-s2.0-'
+                'S0045782599002005/main.pdf?a=1"}</script>'
+                f'<script>{{"pdfUrl": "https://pdf.sciencedirectassets.com/1-s2.0-{PII}'
+                '/main.pdf?a=2"}</script>')
+        self.assertIn(PII, extract_pdf_url(page, PII))
 
     def test_citation_pdf_meta(self):
         page = ('<meta name="citation_pdf_url" '
@@ -291,30 +322,39 @@ class ScienceDirectBackendTest(unittest.TestCase):
 
     def test_403_block_page_raises_a_named_error(self):
         stub(self.be, (403, BLOCK_PAGE))
-        with self.assertRaises(RuntimeError) as ctx:
+        with self.assertRaises(BotWall) as ctx:
             self.be.get(PII)
         self.assertIn("CPE00001", str(ctx.exception))
         self.assertIn("session", str(ctx.exception))
 
     def test_200_block_marker_raises(self):
         stub(self.be, (200, BLOCK_PAGE))
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(BotWall):
             self.be.get(PII)
 
     def test_cloudflare_challenge_marker_raises(self):
         stub(self.be, (200, "<html><body>Enable JavaScript and cookies to continue</body></html>"))
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(BotWall):
             self.be.get(PII)
 
     def test_cloudflare_mitigated_header_raises(self):
         stub(self.be, (200, JSONLD_PAGE, {"cf-mitigated": "challenge"}))
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(BotWall):
             self.be.get(PII)
 
     def test_5xx_retries_then_succeeds(self):
         rec = stub(self.be, (503, "busy"), (200, JSONLD_PAGE))
         self.assertEqual(self.be.get(PII).title, "A Study of Things")
         self.assertEqual(len(rec.requests), 2)
+
+    def test_a_sign_in_page_is_not_accepted_as_the_item(self):
+        # The site answers the sign-in wall with a 200: it must not become an item titled
+        # "Sign in to …". This ``get`` is its own override, so the guard is called here too.
+        stub(self.be, (200, "<html><head><title>Sign in to ScienceDirect</title></head>"
+                            '<body><a href="/login">Sign in</a></body></html>'))
+        with self.assertRaises(BotWall) as ctx:
+            self.be.get(PII)
+        self.assertIn("sign-in page", str(ctx.exception))
 
     def test_unparseable_page_raises(self):
         stub(self.be, (200, "<html><body></body></html>"))
@@ -348,7 +388,7 @@ class ScienceDirectBackendTest(unittest.TestCase):
 
     def test_get_attachment_without_a_pdf_link_raises(self):
         stub(self.be, (200, NO_PDF_PAGE))
-        with self.assertRaises(RuntimeError) as ctx:
+        with self.assertRaises(Paywalled) as ctx:
             self.be.get_attachment(PII)
         self.assertIn("no PDF link", str(ctx.exception))
 

@@ -19,12 +19,13 @@ import re
 from urllib.parse import urlparse
 
 from ..models import AcademicItem
+from ._cf_gate import load_cookie as _load_cookie
+from ._cf_gate import parse_cookie as _parse_cookie
+from ._gated import OA_RE as _OA_RE
 from ._gated import GatedBackend
 from ._gated import extract_pdf_url as _extract_pdf_url
-from ._gated import load_cookie as _load_cookie
 from ._gated import normalize_key as _normalize_key
 from ._gated import page_to_item as _page_to_item
-from ._gated import parse_cookie as _parse_cookie
 
 _SITE = "https://ieeexplore.ieee.org"
 _COOKIE_HOSTS = ("ieeexplore.ieee.org", "ieee.org")
@@ -33,8 +34,8 @@ _ALLOWED_HOSTS = ("ieeexplore.ieee.org",)
 _URL_RE = re.compile(r"^https?://ieeexplore\.ieee\.org/\S*$", re.I)
 _PDF_PATH_RE = re.compile(
     r"""(/(?:stampPDF/getPDF\.jsp|stamp/stamp\.jsp)\?tp=&arnumber=\d+)""", re.I)
-#: The badge is a class token, not the words: Xplore's nav carries "Open Access" on every page.
-_OA_RE = re.compile(r"""class=["'][^"']*open-access|creative-commons__description""")
+#: The badge class is what counts, not the words: Xplore's nav says "Open Access" on every
+#: page. The shared marker set carries that class token (see :data:`._gated.OA_MARKERS`).
 
 _KEY_FORMS = "a DOI, ieee:<DOI> or IEEE Xplore article URL"
 

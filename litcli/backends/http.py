@@ -5,8 +5,8 @@ backend needs and a one-off request does not: a pooled lazily built client, retr
 ``tenacity`` and a per-site rate through ``pyrate-limiter``. Backends keep only their URLs,
 their parsers and their key normalization.
 
-Failures surface as typed :class:`~litcli.errors.LitcliError` subclasses with a ``[backend]`` prefix;
-into a ``[skipped]`` backend instead of a stack trace.
+Failures surface as typed :class:`~litcli.errors.LitcliError` subclasses with a ``[backend]``
+prefix, which the CLI turns into an error line or a ``[skipped]`` backend instead of a stack trace.
 """
 from __future__ import annotations
 

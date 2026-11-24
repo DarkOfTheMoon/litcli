@@ -29,7 +29,9 @@ class Backend(ABC):
     """Abstract base class for all academic backends."""
 
     name: str = ""
-    #: What kind of copy this backend serves (see :mod:`litcli.provenance`); "" for metadata only.
+    #: Provenance of the copy this backend serves (see :mod:`litcli.provenance`): ``entitled``
+    #: for a subscription copy, ``public`` for a mirror; "" when it is metadata only. Not to be
+    #: confused with :attr:`capabilities`, which says what operations exist.
     access: str = ""
 
     @property

@@ -6,9 +6,9 @@ carries in the cookies of a cleared browser session (``[backends.aps] .cookie``/
 ``.cookie_file`` plus that browser's own ``.user_agent``) and names the gate when they are
 missing.
 
-A key is a DOI or a ``link.aps.org/doi/…`` URL (the path carries the DOI). Open-access
-articles carry the APS "published under the terms of the Creative Commons Attribution
-licence" block and are marked as such. The shared shape lives in :mod:`._gated`.
+A key is a DOI, ``aps:<DOI>`` or a ``link.aps.org/doi/…`` URL (the path carries the DOI).
+Open-access articles carry the APS open-access licence wording and are marked as such. The
+shared shape lives in :mod:`._gated`.
 """
 from __future__ import annotations
 
@@ -17,12 +17,13 @@ from urllib.parse import urlparse
 
 from ..models import AcademicItem
 from ._cf_gate import is_challenge_page
+from ._cf_gate import load_cookie as _load_cookie
+from ._cf_gate import parse_cookie as _parse_cookie
+from ._gated import OA_RE as _OA_RE
 from ._gated import GatedBackend
 from ._gated import extract_pdf_url as _extract_pdf_url
-from ._gated import load_cookie as _load_cookie
 from ._gated import normalize_key as _normalize_key
 from ._gated import page_to_item as _page_to_item
-from ._gated import parse_cookie as _parse_cookie
 
 _SITE = "https://link.aps.org"
 _COOKIE_HOSTS = ("link.aps.org", "aps.org")
@@ -31,7 +32,6 @@ _ALLOWED_HOSTS = ("aps.org",)
 _URL_RE = re.compile(r"^https?://link\.aps\.org/\S*$", re.I)
 _URL_DOI_RE = re.compile(r"/doi/(?:abs/|full/|pdf/|epdf/)?(10\.\d{4,9}/[^?#\s]+)", re.I)
 _PDF_PATH_RE = re.compile(r"""(/doi/(?:pdf|epdf)/10\.\d{4,9}/[^"'?#\s]+)""", re.I)
-_OA_RE = re.compile(r"is an open access article|creative-commons__description", re.I)
 
 _KEY_FORMS = "a DOI, aps:<DOI> or APS article URL"
 
@@ -65,7 +65,7 @@ def extract_pdf_url(page_html: str, doi: str = "", want_id: str = "") -> str:
 
 def page_to_item(page_html: str, key: str, url: str = "") -> AcademicItem:
     """Normalize an item page to an :class:`AcademicItem`."""
-    return _page_to_item(page_html, key, url, source="aps", title_suffix="")
+    return _page_to_item(page_html, key, url, source="aps", title_suffix="APS")
 
 
 def parse_cookie(raw: str) -> dict[str, str]:
@@ -87,6 +87,7 @@ class ApsBackend(GatedBackend):
     GATE_NAME = "the APS clearance cookie"
     KEY_PREFIX = "aps"
     KEY_FORMS = _KEY_FORMS
+    TITLE_SUFFIX = "APS"
     ALLOWED_HOSTS = _ALLOWED_HOSTS
     COOKIE_HOSTS = _COOKIE_HOSTS
     URL_RE = _URL_RE
