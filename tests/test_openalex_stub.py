@@ -119,6 +119,29 @@ class OpenAlexStubTest(unittest.TestCase):
         self.assertEqual(it.cited_by_count, 84467)
         self.assertEqual(it.extra["openalex_id"], "https://openalex.org/W2919115771")
 
+    def test_raw_type_and_referenced_works_are_carried_for_scoring(self):
+        # The survey scorer ranks by OpenAlex's own type (a "review" outranks an "article") and
+        # walks the inline referenced_works, so both must survive as raw data beside the
+        # normalized item_type.
+        rec = dict(WORK, type="review", referenced_works=["W1", "W2"])
+        stub(self.be, (200, {"results": [rec]}))
+        it = self.be.search("deep learning", limit=1)[0]
+        self.assertEqual(it.extra["openalex_type"], "review")
+        self.assertEqual(it.extra["referenced_works"], ["W1", "W2"])
+        self.assertEqual(it.item_type, "article")
+
+    def test_referenced_works_absent_is_an_empty_list(self):
+        rec = {k: v for k, v in WORK.items() if k != "referenced_works"}
+        stub(self.be, (200, {"results": [rec]}))
+        it = self.be.search("deep learning", limit=1)[0]
+        self.assertEqual(it.extra["referenced_works"], [])
+
+    def test_referenced_works_urls_are_stripped_to_ids(self):
+        rec = dict(WORK, referenced_works=["https://openalex.org/W1"])
+        stub(self.be, (200, {"results": [rec]}))
+        it = self.be.search("deep learning", limit=1)[0]
+        self.assertEqual(it.extra["referenced_works"], ["W1"])
+
     def test_search_field_filters_url(self):
         # Field map: filter=title.search,raw_author_name.search,publication_year; values quoted (comma-safe);
         # container folds into search. Filter values are quoted so an author name containing a comma is not

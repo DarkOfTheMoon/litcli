@@ -131,7 +131,12 @@ def _work_to_item(rec: dict, source: str = "openalex") -> AcademicItem:
         item_type=_TYPE_MAP.get(rec.get("type", ""), "document"),
         attachments=_oa_pdf(rec),
         # Keep the internal OpenAlex id (W...) so ``related`` can source inline related_works.
-        extra={"openalex_id": rec.get("id", "")},
+        # ``openalex_type`` is the raw word before ``_TYPE_MAP`` folds it: a survey scores a
+        # review above an article, which the normalized type can no longer tell apart. The
+        # inline ``referenced_works`` are carried as bare W-ids for the same walk.
+        extra={"openalex_id": rec.get("id", ""),
+               "openalex_type": rec.get("type", "") or "",
+               "referenced_works": [_wid(r) for r in (rec.get("referenced_works") or [])]},
     )
 
 
