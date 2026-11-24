@@ -102,6 +102,9 @@ class IeeeBackend(GatedBackend):
     OA_RE = _OA_RE
 
     def _refusal_reason(self, page: str, landed: str, response) -> str:
+        # UNVERIFIED: Xplore has no distinct short-page URL to gate on (no ``_short_page``), so a
+        # related-card badge on a paywalled document is indistinguishable from the page's own
+        # marker here. Checked against a real paywalled Xplore page carrying an OA neighbour.
         if self.is_open_access(page):
             return "the item is open access but the endpoint answered an HTML page"
         if not self.has_session:
