@@ -151,7 +151,7 @@ shell 补全只有 bash/zsh/fish（PowerShell 下可在 Git Bash 里生成）。
 | high | 16 | 8 | 30 / 30 / 15 | 4 | 600 | 100 | 15 | 50 |
 | max | 24 | 12 | 50 / 50 / 25 | 6 | 1500 | 200 | 30 | 120 |
 
-额度按请求计：命中缓存不扣、重试照扣。同一项目同时只允许一个 `run`（存在 `$.lock` 即退 2）；续跑用同一条命令，已展开过的条目不再展开。`seen.jsonl` 每条都带理由（`score 3.21 >= 2.50`、`seen`、`year … outside …`），下载失败只标 `unavailable`、不剔除候选。只有收尾时 `corpus/` 为空才退 1。
+额度按请求计：命中缓存不扣、重试照扣。同一项目同时只允许一个 `run`（存在 `$.lock` 即退 2）；续跑用同一条命令，已展开过的条目不再展开。`seen.jsonl` 每条都带理由（`score 3.21 >= 2.50`、`seen`、`year … outside …`），下载失败只标 `unavailable`、不剔除候选。收尾时一份正文都没落下（只剩元数据旁车也算）才退 1。
 
 ### 过滤条件在各后端的映射
 
@@ -220,10 +220,15 @@ DOAB 的 `/rest` 拒绝无 JS 客户端，所以走它的 Atom feed；DOAB 详�
 litcli 在本地做题后复用 cookie，不改写、不绕过。知网与豆瓣的滑块交你在可见浏览器手动完成。
 
 **不想搬 cookie 就走浏览器会话**：装好 Chrome，`litcli browser login sciencedirect`（站点名见 `litcli browser status`）
-在弹出的窗口里机构登录一次，浏览器保持运行；之后 `fetch` 对这些出版社的取全文就走这只活着的浏览器，
-页面与 PDF 都在页内取，凭据不离开浏览器、过期也会自己续。`litcli browser status` 逐站看 `signed in` / `signed out` / `gated`。
+在弹出的窗口里机构登录一次，浏览器保持运行（独立于那条命令，关掉该窗口才结束会话，之后按同一 profile 重开）；
+之后 `fetch` 对这些出版社的取全文就走这只活着的浏览器，
+页面与 PDF 都在页内取，凭据不离开浏览器、过期也会自己续。`litcli browser status` 逐站看 `signed in` / `signed out` / `gated` / `no answer`；
+`gated` 指首屏就是站点的机器人闸，托管挑战本来会自己换页过去，所以判定前先等它过完（等不到就再导航一次），报出的 `gated` 是真过不去。
 它由 `[browser].enabled = true` 打开（默认关闭）；关着时逐字走上面的 cookie 路径，配了 cookie 照样能工作。
 浏览器沿用 `[network].proxy`——清关绑出口 IP，两边必须是同一出口。
+同一 profile 上只会有一只浏览器：命令先找在跑的那只接上（连发现文件丢了也认它），
+顺手停掉同 profile 上多出来的实例；由这条命令拉起来的那只在本命令结束时关掉，`login` 打开的留着复用。
+所以连着跑调查不会一场堆一只浏览器。
 
 ## 配置
 

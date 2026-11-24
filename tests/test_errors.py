@@ -112,6 +112,11 @@ class CliPolicyTest(unittest.TestCase):
         _rc, out = self._run(External("browser missing", hint="litcli backends install-browser"))
         self.assertEqual(out, ["[error] browser missing", "[hint] litcli backends install-browser"])
 
+    def test_a_ctrl_c_aborts_without_a_traceback(self):
+        rc, out = self._run(KeyboardInterrupt())
+        self.assertEqual(rc, 130)
+        self.assertEqual(out, ["[error] interrupted"])
+
 
 class AllPolicyTest(unittest.TestCase):
     """Fan-out reads are silent by default; ``--verbose`` names the failures, and an all-failed

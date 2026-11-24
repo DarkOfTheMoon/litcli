@@ -20,7 +20,7 @@ from typing import ClassVar
 from urllib.parse import urlparse
 
 from ..browser import PageResponse
-from ..errors import BadInput, BotWall, NotFound, Paywalled, Unavailable
+from ..errors import BadInput, BotWall, NotFound, Paywalled, Unavailable, for_status
 from ..models import AcademicItem
 from ..pdf import is_pdf
 from ..transport import HttpError
@@ -118,6 +118,10 @@ class EntitledBackend(HttpBackend):
             if self._is_gate(answer.text, answer.status) \
                     or (self.GATE_KIND == "cf" and answer.headers.get("cf-mitigated")):
                 raise BotWall(self.BLOCK_MSG)
+            if answer.status >= 400:
+                # The browser hands the status back instead of raising it: judge it exactly as
+                # the HTTP path would, or a 404 page would be parsed as an empty item.
+                raise for_status(answer.status, f"[{self.name}] HTTP {answer.status}")
             return answer
         try:
             response = self.fetch(url, **kw)

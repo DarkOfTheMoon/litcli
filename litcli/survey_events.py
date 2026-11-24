@@ -16,7 +16,7 @@ from collections.abc import Iterable
 
 from .errors import BadInput
 
-EVENTS = ("start", "candidate", "admit", "download", "hop_end", "stop")
+EVENTS = ("start", "candidate", "admit", "download", "error", "hop_end", "stop")
 
 #: Columns of one hop table, in order.
 COLUMNS = ("score", "year", "key", "reason", "title")
@@ -39,10 +39,11 @@ def render_md(events: Iterable[dict]) -> str:
     """Render a trace as hop tables with every candidate's verdict and download state."""
     out: list[str] = []
     rows: list[dict] = []
+    errors: list[dict] = []
     downloads: dict[str, str] = {}
 
     def flush(hop) -> None:
-        if not rows:
+        if not rows and not errors:
             return
         out.append(f"### Hop {hop}\n")
         out.append("| " + " | ".join(COLUMNS) + " |")
@@ -54,8 +55,11 @@ def render_md(events: Iterable[dict]) -> str:
                 reason = f"{reason} (download: {status})"
             cells = [row.get(col) if col != "reason" else reason for col in COLUMNS]
             out.append("| " + " | ".join(_cell(v) for v in cells) + " |")
+        for note in errors:
+            out.append(f"\n- `{_cell(note.get('identity'))}` — {_cell(note.get('reason'))}")
         out.append("")
         rows.clear()
+        errors.clear()
 
     hop = None
     for event in events:
@@ -68,5 +72,8 @@ def render_md(events: Iterable[dict]) -> str:
             rows.append(event)
         elif kind == "download":
             downloads[str(event.get("key"))] = str(event.get("status", ""))
+        elif kind == "error":
+            hop = event.get("hop", hop)
+            errors.append(event)
     flush(hop)
     return "\n".join(out).rstrip("\n") + "\n" if out else ""

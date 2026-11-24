@@ -28,6 +28,7 @@ from .. import cache, effort, expansion, fulltext, paths, project, scoring, surv
 from ..admission import decide
 from ..aggregate import identity
 from ..backends._entitled import EntitledBackend
+from ..browser import session_from_config
 from ..config import get_all_backends
 from ..errors import BadInput, LitcliError
 from ..models import AcademicItem
@@ -86,6 +87,114 @@ def _opening_seeds(cfg: dict, question: str) -> list[AcademicItem]:
     return found[:OPENING_SEEDS]
 
 
+def _expandable(key: str) -> bool:
+    """A key the walk's ``/works/<id>`` accepts: an OpenAlex work id or a DOI."""
+    return (key.startswith("W") and key[1:].isdigit()) or key.startswith("10.")
+
+
+def _bare_id(work_id: str) -> str:
+    """A work id without its URL or source prefix (``https://openalex.org/W1`` -> ``W1``)."""
+    tail = str(work_id).strip().rstrip("/").rsplit("/", 1)[-1]
+    return tail.partition(":")[2] or tail
+
+
+def _graph_id(item, backend) -> str:
+    """The id a seed is walked by: its openalex work id, looked up when only a DOI is known.
+
+    The seed-citer bonus compares a seed against ``referenced_works``, which are bare ``W…``
+    ids, so a seed left as a DOI could never match. Where the id is already known it is used;
+    where only a DOI is at hand one lookup fetches it, and a source that cannot answer leaves
+    the spelling we have (a DOI still walks, as ``/works/doi:…``).
+    """
+    key = str(getattr(item, "key", item) or "").strip()
+    known = str((getattr(item, "extra", None) or {}).get("openalex_id") or "")
+    if known:
+        return _bare_id(known)
+    return _graph_id_of(_unprefixed(key), backend)
+
+
+def _unprefixed(key: str) -> str:
+    """A typed seed without its ``source:`` prefix or ``https://doi.org/`` wrapper."""
+    key = key.strip()
+    for prefix in ("openalex:", "doi:", "https://doi.org/"):
+        if key.startswith(prefix):
+            key = key[len(prefix):]
+    return key
+
+
+def _graph_id_of(key: str, backend) -> str:
+    """``_graph_id`` for a bare spelling: a W id as is, a DOI through one lookup."""
+    if key.startswith("W") and key[1:].isdigit():
+        return key
+    getter = getattr(backend, "get", None)
+    if key.startswith("10.") and getter is not None:
+        try:
+            found = getter(key)
+            return _bare_id(str(found.extra.get("openalex_id") or found.key or key))
+        except Exception as e:  # a lookup is an improvement, never a requirement
+            print(f"[skipped] {key}: {e}", file=sys.stderr)
+    return key
+
+
+def _seed_row(typed: str, backend) -> dict:
+    """How a typed seed is recorded: the id it is walked by, plus what its download needs.
+
+    A seed is admitted without ever being scored, and an admitted work is downloaded, so the
+    row has to carry a DOI — which a ``W…`` typed seed only has after one lookup. The identity
+    stays what the user typed.
+    """
+    key = _unprefixed(typed)
+    row = {"identity": _seed_identity(typed), "admit": True, "reason": "seed", "seed": "flag",
+           "key": key, "doi": key if key.startswith("10.") else "", "title": "",
+           "score": 0.0, "parts": {}, "download": ""}
+    getter = getattr(backend, "get", None)
+    if getter is not None and (key.startswith("W") or key.startswith("10.")):
+        found, error = None, None
+        for _attempt in range(2):  # a burst 429 here would cost the seed its work id
+            try:
+                found = getter(key)
+                break
+            except Exception as e:
+                error = e
+        if found is None:  # the walk can still go ahead on the bare id
+            print(f"[skipped] {key}: {error}", file=sys.stderr)
+        else:
+            row.update(key=_bare_id(str(found.extra.get("openalex_id") or found.key or key)),
+                       doi=found.doi, title=found.title)
+    return row
+
+
+def _resolvable_seeds(found: list[AcademicItem], cfg: dict) -> list[AcademicItem]:
+    """The same seeds as OpenAlex sees them, dropping the ones it cannot place.
+
+    An opening search fans out over every source, but the walk expands ``/works/<id>`` only, so
+    a seed straight from arXiv keeps an arXiv id and 404s the first hop. A title lookup converts
+    it; a seed that cannot be placed costs a note here, not a dead project later.
+    """
+    backend = get_all_backends(cfg).get("openalex")
+    if backend is None:
+        return found
+    kept: list[AcademicItem] = []
+    for item in found:
+        if _expandable(str(item.key)):
+            kept.append(item)
+            continue
+        if not item.title:  # a title lookup needs a title
+            print(f"[skipped] {item.key}: no title to look it up by", file=sys.stderr)
+            continue
+        try:
+            hits = backend.search(item.title, limit=1,
+                                  filters={"title": str(item.title).replace('"', "")})
+        except Exception as e:  # one unplaceable seed must not sink the opening
+            print(f"[skipped] {item.key}: {e}", file=sys.stderr)
+            hits = []
+        if hits:
+            kept.append(stamp([hits[0]], backend)[0])
+        else:
+            print(f"[skipped] {item.key}: not in openalex under its title", file=sys.stderr)
+    return kept
+
+
 def cmd_survey_new(cfg, args) -> int:
     """Create the project, record its seeds, print its directory name."""
     question = " ".join(args.question).strip()
@@ -100,28 +209,33 @@ def cmd_survey_new(cfg, args) -> int:
         "threshold": args.threshold if args.threshold is not None else project.DEFAULT_THRESHOLD,
         "effort": args.effort,
     }
-    seeds = [s.strip() for s in args.seed if s.strip()]
+    typed = [s.strip() for s in args.seed if s.strip()]
+    backend = get_all_backends(cfg).get("openalex")
     found: list[AcademicItem] = []
-    if not seeds:
-        found = _opening_seeds(cfg, question)
+    flags: list[tuple[str, str]] = []  # (what the user typed, the id the graph walks)
+    if typed:
+        flags = [_seed_row(seed, backend) for seed in typed]
+        seeds = [row["key"] for row in flags]
+    else:
+        found = _resolvable_seeds(_opening_seeds(cfg, question), cfg)
         if not found:
             print("[error] the opening search found nothing; pass --seed to start from a work "
                   "you already know", file=sys.stderr)
             return 2
-        seeds = [item.doi or identity(item) for item in found]
+        # The work id, not the DOI: the graph hands references back as work ids, so a seed has
+        # to be spelled the same way for the seed-citer bonus to ever match.
+        seeds = [_graph_id(item, backend) for item in found]
 
     created = project.create(Path(args.root).expanduser() if args.root else paths.project_root(),
                              question, seeds=seeds, **fields)
     for item in found:
         record = {"identity": identity(item), "admit": True, "reason": "seed", "seed": "search",
-                  "source": item.source, "key": item.key, "title": item.title,
+                  "source": item.source, "key": _graph_id(item, backend), "title": item.title,
                   "doi": item.doi, "year": item.year,
                   "score": 0.0, "parts": {}}
         project.append_seen(created, record)
-    for seed in (() if found else seeds):
-        project.append_seen(created, {"identity": _seed_identity(seed), "admit": True,
-                                      "reason": "seed", "seed": "flag", "key": seed,
-                                      "score": 0.0, "parts": {}})
+    for row in flags:
+        project.append_seen(created, row)
     print(created.root.name)
     return 0
 
@@ -141,6 +255,8 @@ class Deps:
     resolve: Callable[[str], dict]
     publishers: dict = field(default_factory=dict)
     session_alive: Callable[[], bool] = lambda: True
+    browser_fetch: Callable[[str], bytes] | None = None
+    close: Callable[[], None] = lambda: None
     stream: Any = None
 
 
@@ -153,6 +269,11 @@ def deps_from_config(cfg: dict, survey_project: project.Project) -> Deps:
                        "configure [backends.openalex]")
     publishers = {name: b for name, b in backends.items() if isinstance(b, EntitledBackend)}
     session = next((b.session for b in publishers.values() if b.session is not None), None)
+    if session is None:
+        # The browser is what gets past a gated OA link, and that has nothing to do with a
+        # subscription: with `[browser] enabled` the survey carries one even when no publisher
+        # is configured. `session_from_config` answers None when the section is off.
+        session = session_from_config(cfg)
     email = ((cfg.get("unpaywall") or {}).get("email") or os.environ.get("UNPAYWALL_EMAIL")
              or unpaywall.DEFAULT_EMAIL)
 
@@ -164,7 +285,28 @@ def deps_from_config(cfg: dict, survey_project: project.Project) -> Deps:
                                          scihub_backend=backends.get("scihub"))
 
     return Deps(backend=backend, resolve=resolve, publishers=publishers,
-                session_alive=session.alive if session is not None else (lambda: True))
+                session_alive=_session_alive(session) if session is not None else (lambda: True),
+                browser_fetch=session.download if session is not None else None,
+                # `terminate`, not `close`: a run that started a browser has to stop it, or
+                # every run of many leaves one behind. A browser the user opened is untouched.
+                close=session.terminate if session is not None else (lambda: None))
+
+
+def _session_alive(session) -> Callable[[], bool]:
+    """``session.alive``, starting the browser once if it is not up yet.
+
+    Nothing has started it for a survey (``fetch`` does that itself), and a session that was
+    never started cannot answer, so the first check is also the launch.
+    """
+    def alive() -> bool:
+        if session.alive():
+            return True
+        try:
+            session.start()
+        except (LitcliError, OSError, RuntimeError):
+            return False
+        return True
+    return alive
 
 
 def _detach_sessions(publishers: dict) -> None:
@@ -192,22 +334,60 @@ def _land(item: AcademicItem, deps: Deps, survey_project: project.Project) -> st
         return "unavailable"
     raw = info.get("data")
     if raw is None:
-        url = str(info.get("url") or "")
-        publisher = deps.publishers.get(str(info.get("kind") or ""))
-        if publisher is None:
-            publisher = next((b for b in deps.publishers.values()
-                              if getattr(b, "matches_url", None) and b.matches_url(url)), None)
-        try:
-            raw = publisher.get_attachment(item.doi) if publisher is not None else (
-                download_bytes(url) if url else None)
-        except (LitcliError, OSError, RuntimeError):
-            return "unavailable"
+        raw = _fetch_info(info, item.doi, deps)
     fmt = str(info.get("format") or "pdf")
     if not raw or (fmt == "pdf" and not bytes(raw).startswith(b"%PDF")):
         return "unavailable"
-    _write_file(project.corpus_dir(survey_project) / f"{paths.safe_filename(item.doi, '')}.{fmt}",
+    _write_file(project.corpus_dir(survey_project) / paths.safe_filename(item.doi, fmt),
                 bytes(raw))
     return "ok"
+
+
+def _fetch_info(info: dict, doi: str, deps: Deps) -> bytes | None:
+    """The bytes for a resolved answer, cheapest route first.
+
+    Order: the publisher's own route (it can hand over an entitled copy), then each link it
+    has — plain HTTP first (most OA hosts), the live session second (a gated link answers
+    only a real browser). :func:`_oa_links` puts the work's own OA copies behind the answer
+    the chain gave. Each attempt is tried on its own, so one failure falls through.
+    """
+    url = str(info.get("url") or "")
+    publisher = deps.publishers.get(str(info.get("kind") or ""))
+    if publisher is None:
+        publisher = next((b for b in deps.publishers.values()
+                          if getattr(b, "matches_url", None) and b.matches_url(url)), None)
+    routes = []
+    if publisher is not None:
+        routes.append(lambda: publisher.get_attachment(doi))
+    links = [url, *_oa_links(doi, deps)] if url else _oa_links(doi, deps)
+    for link in filter(None, links):
+        routes.append(lambda link=link: download_bytes(link))
+        if deps.browser_fetch is not None:
+            routes.append(lambda link=link: deps.browser_fetch(link))
+    for route in routes:
+        try:
+            data = route()
+        except (LitcliError, OSError, RuntimeError):
+            continue
+        if data:
+            return bytes(data)
+    return None
+
+
+def _oa_links(doi: str, deps: Deps) -> list[str]:
+    """The work's own open-access links from the graph source, as a last resort.
+
+    The chain can answer a DOI with a publisher url that only a browser gets past (Unpaywall
+    hands out plenty of those on link.aps.org), and having answered, it never asks OpenAlex.
+    The work's own OA locations — usually an arXiv copy — are still one lookup away.
+    """
+    getter = getattr(deps.backend, "get", None)
+    if getter is None:
+        return []
+    try:
+        return [str(link) for link in (getter(doi).attachments or [])]
+    except (LitcliError, KeyError, ValueError, OSError, RuntimeError):
+        return []
 
 
 def _write_meta(survey_project: project.Project, item: AcademicItem, status: str) -> None:
@@ -215,19 +395,54 @@ def _write_meta(survey_project: project.Project, item: AcademicItem, status: str
     record = {"identity": identity(item), "doi": item.doi, "key": item.key, "source": item.source,
               "title": item.title, "year": item.year, "access": getattr(item, "access", ""),
               "download": status}
-    stem = paths.safe_filename(item.doi or identity(item), "")
-    _write_file(project.corpus_dir(survey_project) / f"{stem}.json",
+    name = paths.safe_filename(item.doi or identity(item), "json")
+    _write_file(project.corpus_dir(survey_project) / name,
                 json.dumps(record, ensure_ascii=False).encode("utf-8"))
 
 
 def _download(item: AcademicItem, deps: Deps, survey_project: project.Project,
               session_was_alive: bool) -> str:
-    """Download one admitted candidate, retrying through the cookie path if the session died."""
-    if session_was_alive and deps.publishers and not deps.session_alive():
-        _detach_sessions(deps.publishers)
+    """Download one admitted candidate, retrying through the cookie path if the session died.
+
+    The session is checked at the hop start and again here, but the window can also close
+    while the bytes are in flight: that failure belongs to the browser, so the one download
+    goes out again cookie-only instead of being written off as the site's.
+    """
+    if not (session_was_alive and deps.publishers):
+        return _land(item, deps, survey_project)
+    if deps.session_alive():
         status = _land(item, deps, survey_project)
-        return "cookie" if status == "ok" else status
-    return _land(item, deps, survey_project)
+        if status == "ok" or deps.session_alive():
+            return status
+    _detach_sessions(deps.publishers)
+    status = _land(item, deps, survey_project)
+    return "cookie" if status == "ok" else status
+
+
+def _row_item(row: dict) -> AcademicItem:
+    """The item a checkpoint row stands for (what an expansion or a download works on).
+
+    A DOI is read back from the key when the row predates the ``doi`` field: projects made
+    before it was recorded carry their DOI there, and only there.
+    """
+    key = str(row.get("key") or "")
+    doi = str(row.get("doi") or (key if key.startswith("10.") else ""))
+    return AcademicItem(source=str(row.get("source") or "openalex"), key=key, doi=doi,
+                        title=str(row.get("title") or ""), year=row.get("year"),
+                        extra={"seed": row.get("seed")})
+
+
+def _landed(seen_rows: list[dict]) -> dict[str, str]:
+    """``identity`` -> the download outcome already recorded for it, per admitted row."""
+    return {str(row.get("identity")): str(row.get("download")) for row in seen_rows
+            if row.get("admit") and row.get("download")}
+
+
+def _raiser(signum: int) -> Callable:
+    """A handler that unwinds the stack, for a signal whose default action would just exit."""
+    def raised(_signum, _frame) -> None:
+        raise SystemExit(128 + signum)
+    return raised
 
 
 def _frontier(seen_rows: list[dict], trace: list[dict]) -> tuple[list[dict], set[str]]:
@@ -250,6 +465,7 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
     seen_rows = project.read_seen(survey_project)
     seen = {str(row.get("identity")) for row in seen_rows}
     frontier, _expanded = _frontier(seen_rows, trace)
+    landed = _landed(seen_rows)
     collected = {str(work) for row in seen_rows if row.get("admit")
                  for work in row.get("referenced_works") or []}
     envelope = effort.resolve(survey_project.effort)
@@ -260,20 +476,29 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
     hop = sum(1 for event in trace if event.get("event") == "hop_end")
     best = max((float(row.get("score") or 0.0) for row in seen_rows if row.get("admit")),
                default=0.0)
-    streak = admitted_total = 0
-    interrupted = []
+    streak = admitted_total = landed_total = 0
+    interrupted: list[int] = []
 
     def emit(event: str, **fields) -> None:
-        project.append_trace(survey_project, {"event": event, **fields})
+        record = {"event": event, **fields}
+        trace.append(record)  # scoring's sparsity reads it, so it must grow with the run
+        project.append_trace(survey_project, record)
         if deps.stream is not None:
             print(survey_events.line(event, **fields), file=deps.stream)
 
-    def on_sigint(*_args) -> None:
-        interrupted.append(True)
+    def on_signal(signum, _frame) -> None:
+        # The first strike only ends the hop (the state stays resumable). The handler is put
+        # back after it, because a stuck network call cannot be waited out and the second
+        # strike has to raise. SIGTERM gets a raiser when it has no handler of its own: its
+        # default action kills the process without the `finally` that removes the lock.
+        interrupted.append(signum)
+        with contextlib.suppress(ValueError):
+            signal.signal(signum, previous.get(signum) or _raiser(signum))
 
-    previous = None
-    with contextlib.suppress(ValueError):  # not the main thread: no handler to install
-        previous = signal.signal(signal.SIGINT, on_sigint)
+    previous: dict[int, Any] = {}
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        with contextlib.suppress(ValueError):  # not the main thread: no handler to install
+            previous[signum] = signal.signal(signum, on_signal)
     stop = ""
     emit("start", hop=hop, question=survey_project.question, effort=survey_project.effort)
     try:
@@ -297,21 +522,56 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
             high_before = best
             charged = 0
             session_was_alive = deps.session_alive()
+            # A row can be admitted and never handed to the download path: a seed is, since it
+            # is never seen as a fresh candidate, and so is a row whose run was killed between
+            # its admission and its copy. Land those before expanding, once each: the row's
+            # own `download` records it, so a resume reads it back and skips the second try.
+            for row in frontier:
+                identity_now = str(row.get("identity"))
+                if identity_now in landed or counters["publisher"] <= 0:
+                    continue
+                counters["publisher"] -= 1
+                item = _row_item(row)
+                status = _download(item, deps, survey_project, session_was_alive)
+                landed[identity_now] = status
+                landed_total += status in ("ok", "cookie")
+                _write_meta(survey_project, item, status)
+                project.append_seen(survey_project, {**row, "download": status})
+                emit("download", hop=hop, identity=identity_now, key=item.key, status=status)
             cache.reset_stats()
             batch, frontier = frontier[: int(envelope["frontier"])], frontier[int(envelope["frontier"]):]
             fresh = 0
             expanded_now = []
             for row in batch:
                 expanded_now.append(str(row.get("identity")))
-                item = AcademicItem(source=str(row.get("source") or "openalex"),
-                                    key=str(row.get("key") or ""), doi=str(row.get("doi") or ""),
-                                    title=str(row.get("title") or ""), year=row.get("year"),
-                                    extra={"seed": row.get("seed")})
+                item = _row_item(row)
+                # The axis cells are edges read from EACH work, so a row starts with its full
+                # allowance every time; only the per-site caps are carried across the run.
+                for axis in expansion.AXES:
+                    counters[axis] = int(envelope[axis])
+                attempted = 0
                 for axis in expansion.AXES:
                     if counters[axis] > 0 and counters["openalex"] > 0:
                         counters["openalex"] -= 1
                         charged += 1
-                for candidate, axis in expansion.expand(item, deps.backend, envelope, counters):
+                        attempted += 1
+                pairs = []
+                spent_before = cache.stats()["misses"]
+                try:
+                    # Pulled eagerly: a failing axis must keep the candidates already handed
+                    # back, and one unexpandable row must not take the rest of the hop with it.
+                    for pair in expansion.expand(item, deps.backend, envelope, counters):
+                        pairs.append(pair)
+                except (LitcliError, KeyError, ValueError, TypeError) as e:
+                    # KeyError is a 200 with no body, ValueError a 200 that is not JSON at all;
+                    # both are how the backends report one unreadable answer.
+                    emit("error", hop=hop, identity=str(row.get("identity")), reason=str(e))
+                # One `references` call is several requests behind a batch, so the axis charge
+                # above is only the floor: the site budget pays for what was really spent.
+                overspend = max(0, cache.stats()["misses"] - spent_before - attempted)
+                counters["openalex"] -= overspend
+                charged += overspend
+                for candidate, axis in pairs:
                     stamp([candidate], deps.backend)
                     total, parts = scoring.score(candidate, survey_project, collected, trace)
                     candidate.extra["score"] = total
@@ -321,6 +581,11 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
                     if verdict["admit"]:
                         fresh += 1
                         admitted_total += 1
+                        # Admitted here, expanded by a later hop of THIS run; a kill before
+                        # that hop leaves it unexpanded in `seen`, which resume picks up.
+                        frontier.append({"identity": verdict["identity"], "key": candidate.key,
+                                         "doi": candidate.doi, "source": candidate.source,
+                                         "title": candidate.title, "year": candidate.year})
                         collected.update(str(w) for w in candidate.extra.get("referenced_works") or [])
                         if total > best:
                             best = total
@@ -329,6 +594,8 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
                             status = _download(candidate, deps, survey_project, session_was_alive)
                         else:
                             status = "unavailable"
+                        landed_total += status in ("ok", "cookie")
+                        landed[verdict["identity"]] = status
                         _write_meta(survey_project, candidate, status)
                     project.append_seen(survey_project, {
                         "identity": verdict["identity"], "admit": verdict["admit"],
@@ -357,11 +624,11 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
                  remaining={key: counters[key] for key in ("openalex", "arxiv", "publisher")})
             project.save(survey_project)
         emit("stop", reason=stop, admitted=admitted_total)
-        return {"stop": stop, "admitted": admitted_total}
+        return {"stop": stop, "admitted": admitted_total, "landed": landed_total}
     finally:
-        if previous is not None:
+        for signum, handler in previous.items():
             with contextlib.suppress(ValueError):
-                signal.signal(signal.SIGINT, previous)
+                signal.signal(signum, handler)
 
 
 def add_run_parser(p: argparse.ArgumentParser) -> None:
@@ -418,8 +685,10 @@ def cmd_survey_run(cfg, args) -> int:
     finally:
         with contextlib.suppress(OSError):
             lock.unlink()
-    corpus = survey_project.root / "corpus"
-    return 0 if corpus.is_dir() and any(corpus.iterdir()) else 1
+        deps.close()  # the engine is per run; a detached browser stays up behind it
+    # `landed`, not "corpus/ is non-empty": every admitted candidate writes a metadata sidecar
+    # there before its download is tried, so the directory says nothing about copies.
+    return 0 if result["landed"] else 1
 
 
 def add_status_parser(p: argparse.ArgumentParser) -> None:

@@ -83,11 +83,24 @@ def _recency(item: AcademicItem, project: Project, seeds: set[str]) -> float:
     return position
 
 
+def _bare(work_id: str) -> str:
+    """The bare work id of a reference, whatever its spelling.
+
+    ``W22``, ``openalex:W22`` and ``https://openalex.org/W22`` all come back as ``W22``: the
+    project stores seeds as ids while the graph answers with full URLs, so the two sides of the
+    comparison have to be spelled alike.
+    """
+    tail = str(work_id).strip().rstrip("/").rsplit("/", 1)[-1]
+    return tail.partition(":")[2] or tail
+
+
 def _cites_seed(item: AcademicItem, seeds: set[str]) -> bool:
+    # The seed-citer bonus is a bonus above the window, so it has to work for a real seed.
     if not seeds:
         return False
-    cited = {str(r) for r in (item.extra.get("referenced_works") or [])}
-    return bool(cited & seeds)
+    wanted = {_bare(seed) for seed in seeds}
+    cited = {_bare(ref) for ref in (item.extra.get("referenced_works") or [])}
+    return bool(wanted & cited)
 
 
 def _classicness(item: AcademicItem) -> float:
@@ -106,13 +119,15 @@ def _type_weight(item: AcademicItem, project: Project) -> float:
 
 
 def sparse(project: Project, trace: list[dict]) -> bool:
-    """True when the last :data:`SPARSE_HOPS` steps each added fewer than :data:`SPARSE_NEW`.
+    """True when the last :data:`SPARSE_HOPS` hops each added fewer than :data:`SPARSE_NEW`.
 
-    A history shorter than that cannot say yet, so it is not sparse.
+    The trace carries every event, and only a hop's end record says how much it added, so the
+    other events are skipped: three candidates of one productive hop are not three dry hops.
     """
-    if len(trace) < SPARSE_HOPS:
+    hops = [entry for entry in trace if "new" in entry]
+    if len(hops) < SPARSE_HOPS:
         return False
-    recent = trace[-SPARSE_HOPS:]
+    recent = hops[-SPARSE_HOPS:]
     return all(int(entry.get("new") or 0) < SPARSE_NEW for entry in recent)
 
 

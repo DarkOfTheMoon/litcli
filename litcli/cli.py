@@ -167,6 +167,11 @@ def main(argv=None) -> int:
         if e.hint:
             print(f"[hint] {e.hint}", file=sys.stderr)
         return e.exit_code
+    except KeyboardInterrupt:
+        # A second Ctrl-C (or the normal one everywhere else) aborts mid-work: say so instead of
+        # a traceback, and use the conventional "terminated by SIGINT" code.
+        print("[error] interrupted", file=sys.stderr)
+        return 130
     except BrokenPipeError:
         # ``litcli ... | head`` closes the pipe first. The work is done, so this is not a
         # failure: exit 0 quietly, and point stdout at devnull so the interpreter's final

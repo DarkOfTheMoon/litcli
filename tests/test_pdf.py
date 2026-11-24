@@ -3,6 +3,8 @@ import os
 import sys
 import unittest
 
+import httpx
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from litcli import pdf as pdfutil
@@ -45,6 +47,18 @@ class DownloadTest(unittest.TestCase):
         finally:
             set_proxy("")
         self.assertEqual(seen["proxy"], "http://proxy:8080")
+
+    def test_a_truncated_response_is_a_typed_unavailable_not_a_crash(self):
+        # A publisher cutting the connection mid-body is ordinary; `litcli survey run` only
+        # survives it because its callers catch the typed errors, not bare httpx ones.
+        from litcli.errors import Unavailable
+
+        class Broken(httpx.BaseTransport):
+            def handle_request(self, request):
+                raise httpx.RemoteProtocolError("peer closed connection", request=request)
+
+        with self.assertRaises(Unavailable):
+            pdfutil.download("http://x/y.pdf", transport=Broken())
 
     def test_download_rejects_non_http_scheme(self):
         # A file:// (or ftp://) URL must be refused outright — it could read local files.

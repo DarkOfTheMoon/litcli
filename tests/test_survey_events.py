@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from litcli import survey_events
 from litcli.errors import BadInput
 
-EVENTS = ("start", "candidate", "admit", "download", "hop_end", "stop")
+EVENTS = ("start", "candidate", "admit", "download", "error", "hop_end", "stop")
 
 
 class LineTest(unittest.TestCase):
@@ -93,3 +93,21 @@ class RenderTest(unittest.TestCase):
         ])
         row = next(r for r in md.splitlines() if "| k |" in r)
         self.assertIn("a \\| b", row)
+
+
+class ErrorNoteTest(unittest.TestCase):
+    def test_an_expansion_failure_shows_under_its_hop(self):
+        # A seed the graph could not expand must be visible in the rendered view, not only in
+        # the JSONL: "hop produced nothing" and "hop produced nothing because of a 404" differ.
+        events = [{"event": "start", "hop": 0},
+                  {"event": "error", "hop": 1, "identity": "doi:10.1/x",
+                   "reason": "[openalex] HTTP 404: Not Found"},
+                  {"event": "hop_end", "hop": 1}]
+        rendered = survey_events.render_md(events)
+        self.assertIn("### Hop 1", rendered)
+        self.assertIn("`doi:10.1/x` — [openalex] HTTP 404: Not Found", rendered)
+
+    def test_an_error_alone_still_makes_a_hop(self):
+        rendered = survey_events.render_md([{"event": "error", "hop": 3, "identity": "W1",
+                                             "reason": "boom"}])
+        self.assertIn("### Hop 3", rendered)

@@ -188,7 +188,7 @@ The quota counts requests: a cache hit costs nothing, a retry still costs. One `
 at a time (an existing `$.lock` exits 2); resume with the same command — expanded works are never
 expanded twice. Every `seen.jsonl` row carries its reason (`score 3.21 >= 2.50`, `seen`,
 `year … outside …`), and a failed download is marked `unavailable` without dropping the
-candidate. `run` exits 1 only when `corpus/` is still empty at the end.
+candidate. `run` exits 1 when not one copy landed in `corpus/` — metadata sidecars do not count.
 
 ## Backends and what they may fetch
 
@@ -264,13 +264,21 @@ one DOI at a time, at low frequency.
 
 **Rather than copying cookies, use the browser session**: with Chrome installed, run
 `litcli browser login sciencedirect` (see `litcli browser status` for the site names), sign in
-institutionally once in the window that opens, and leave the browser up. `fetch` then pulls
-these publishers' fulltext through that live browser, taking both page and PDF in-page — the
+institutionally once in the window that opens, and leave the browser up — it outlives the
+command, and closing that window ends the session (relaunching reuses the same profile).
+`fetch` then pulls these publishers' fulltext through that live browser, taking both page and PDF in-page — the
 credentials never leave the browser and renew themselves. `litcli browser status` reports each
-site as `signed in` / `signed out` / `gated`. It is switched on by `[browser].enabled = true`
+site as `signed in` / `signed out` / `gated` / `no answer`. `gated` means the first paint was
+the site's bot gate; a managed challenge swaps itself out, so it is waited out (and given one
+more navigation) before the site is judged — a `gated` row is one the session really does not
+get through. It is switched on by `[browser].enabled = true`
 (off by default); while off the cookie path above runs unchanged, and a configured cookie keeps
 working. The browser inherits `[network].proxy` — a clearance is bound to the egress IP, so both
 must leave by the same one.
+Only one browser per profile ever runs: a command attaches to the one already up (finding it
+through `/proc` even when its discovery file was lost) and stops any duplicate on the profile,
+and one it launched itself is stopped when the command ends — the one `login` left up is reused.
+Back-to-back survey runs therefore do not pile up one browser each.
 
 ## Configuration
 

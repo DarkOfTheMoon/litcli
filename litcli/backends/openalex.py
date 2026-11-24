@@ -7,7 +7,6 @@ compliant full-text source that does not go through Sci-Hub.
 """
 from __future__ import annotations
 
-import concurrent.futures
 import http.client
 import re
 import urllib.parse
@@ -222,22 +221,35 @@ class OpenAlexBackend(HttpBackend):
         data = self.fetch_json(self._with_mailto(f"{self._base}?{qs}"))
         return [_work_to_item(w, self.name) for w in (data.get("results") or [])]
 
+    #: OpenAlex takes up to 50 ids in one ``filter=openalex:`` OR-list.
+    BATCH = 50
+
     def _fetch_works(self, ids: list[str]) -> list[AcademicItem]:
-        """Parallel-fetch W-ids into AcademicItems, preserving id order, skipping per-id failures."""
+        """Fetch W-ids into AcademicItems in id order, skipping per-id failures.
+
+        The ids go out as filtered listings (50 per request), not one GET each: a work with
+        an ordinary bibliography has 100+ references, so a per-reference GET would spend a
+        whole effort level on one expansion.
+        """
         ids = [i for i in ids if i]
         if not ids:
             return []
         results: dict[str, AcademicItem] = {}
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(ids))) as ex:
-            futures = {ex.submit(self.fetch_json, self._with_mailto(self._work_url(i))): i
-                       for i in ids}
-            for fut in concurrent.futures.as_completed(futures):
-                i = futures[fut]
-                try:
-                    results[i] = _work_to_item(fut.result(), self.name)
-                except (LitcliError, RuntimeError, http.client.HTTPException, OSError, ValueError):
-                    # Skip per-id failures (HTTP 404/5xx, non-JSON body, truncated/timeout).
-                    continue
+        for start in range(0, len(ids), self.BATCH):
+            chunk = ids[start:start + self.BATCH]
+            bare = {i.rsplit("/", 1)[-1]: i for i in chunk}
+            qs = urllib.parse.urlencode({"filter": "openalex:" + "|".join(bare),
+                                         "per_page": len(bare)}, safe=":|")
+            try:
+                data = self.fetch_json(self._with_mailto(f"{self._base}?{qs}"))
+            except (LitcliError, RuntimeError, http.client.HTTPException, OSError, ValueError):
+                # One bad batch costs only its own ids; the other batches still land.
+                continue
+            for rec in data.get("results") or []:
+                key = str(rec.get("id") or "").rsplit("/", 1)[-1]
+                wanted = bare.get(key)
+                if wanted is not None and wanted not in results:
+                    results[wanted] = _work_to_item(rec, self.name)
         return [results[i] for i in ids if i in results]
 
     def _inline_works(self, key: str, field: str, limit: int = 5,

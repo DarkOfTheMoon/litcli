@@ -172,34 +172,58 @@ class OpenAlexStubTest(unittest.TestCase):
 
     def test_related_returns_related_works(self):
         # related: fetch the parent work once (inline related_works, W ids), then fetch each one's own
-        # api.openalex.org URL in parallel, returned in inline order; failed entries are skipped (here the
-        # URL decides each response to avoid thread-scheduling ambiguity).
+        # api.openalex.org, returned in inline order; entries the listing does not answer are
+        # skipped (the router decides each response, so nothing depends on thread order).
         r1 = {"id": "https://openalex.org/W2088845016", "display_name": "R1",
               "publication_year": 2019, "type": "article", "cited_by_count": 3}
         r2 = {"id": "https://openalex.org/W589102260", "display_name": "R2",
               "publication_year": 2020, "type": "article", "cited_by_count": 1}
 
-        router = _Router({"W2088845016": r1, "W589102260": r2}, WORK)  # default: parent work
+        router = _Router({"filter=openalex": {"results": [r1, r2]}}, WORK)  # default: parent work
         self.be._transport = router
         items = self.be.related("10.1038/nature14539", limit=2)
         self.assertEqual(len(items), 2)
         self.assertEqual([it.title for it in items], ["R1", "R2"])
         urls = router.urls
         self.assertIn("/doi:10.1038%2Fnature14539", urls[0])
-        self.assertTrue(any("/works/W2088845016" in u for u in urls))
-        self.assertTrue(any("/works/W589102260" in u for u in urls))
+        batch = next(u for u in urls if "filter=openalex" in u)
+        self.assertIn("W2088845016", batch)
+        self.assertIn("W589102260", batch)
 
     def test_references_parallel_and_cited_sorted(self):
-        # references: parent work's inline referenced_works are fetched in parallel and
-        # truncated to top-limit by citation count (most important foundations first).
+        # references: the parent work's inline referenced_works are fetched as one batch
+        # and truncated to top-limit by citation count (most important foundations first).
         r1 = {"id": "https://openalex.org/W2088845016", "display_name": "R1",
               "publication_year": 2019, "type": "article", "cited_by_count": 3}
         r2 = {"id": "https://openalex.org/W589102260", "display_name": "R2",
               "publication_year": 2020, "type": "article", "cited_by_count": 1}
 
-        self.be._transport = _Router({"W2088845016": r1, "W589102260": r2}, WORK)
+        self.be._transport = _Router({"filter=openalex": {"results": [r1, r2]}}, WORK)
         items = self.be.references("10.1038/nature14539", limit=2)
         self.assertEqual([it.title for it in items], ["R1", "R2"])
+
+    def test_references_costs_one_batch_request_not_one_per_work(self):
+        # A normal bibliography is 100+ ids; one GET per reference would spend a low effort
+        # level on a single row. The ids go out as one filtered listing instead.
+        r1 = {"id": "https://openalex.org/W2088845016", "display_name": "R1",
+              "publication_year": 2019, "type": "article", "cited_by_count": 3}
+        r2 = {"id": "https://openalex.org/W589102260", "display_name": "R2",
+              "publication_year": 2020, "type": "article", "cited_by_count": 1}
+
+        router = _Router({"filter=openalex": {"results": [r1, r2]}}, WORK)
+        self.be._transport = router
+        self.be.references("10.1038/nature14539", limit=2)
+        fetches = [u for u in router.urls if "filter=openalex" in u]
+        self.assertEqual(len(fetches), 1)
+
+    def test_a_batch_skips_ids_openalex_does_not_return(self):
+        # A deleted or merged work simply does not come back; the rest of the batch stands.
+        r2 = {"id": "https://openalex.org/W589102260", "display_name": "R2",
+              "publication_year": 2020, "type": "article", "cited_by_count": 1}
+        router = _Router({"filter=openalex": {"results": [r2]}}, WORK)
+        self.be._transport = router
+        items = self.be.references("10.1038/nature14539", limit=2)
+        self.assertEqual([it.title for it in items], ["R2"])
 
     def test_citing_uses_cites_filter_sorted(self):
         # citing: single ``filter=cites:<wid>&sort=cited_by_count:desc`` request, no per-work fetch.
@@ -246,7 +270,7 @@ class OpenAlexStubTest(unittest.TestCase):
                "publication_year": 2020, "type": "article", "cited_by_count": 5}
         high = {"id": "https://openalex.org/W3", "display_name": "High",
                 "publication_year": 2021, "type": "article", "cited_by_count": 100}
-        return _Router({"W1": low, "W2": mid, "W3": high}, parent)
+        return _Router({"filter=openalex": {"results": [low, mid, high]}}, parent)
 
     def test_references_fetches_full_set_before_sort(self):
         # references pulls the FULL inline referenced_works, then ranks by citation count, so a
@@ -257,11 +281,10 @@ class OpenAlexStubTest(unittest.TestCase):
         self.be._transport = router
         items = self.be.references("10.1038/nature14539", limit=1)
         self.assertEqual([it.title for it in items], ["High"])
-        # All three inline ids are fetched (not truncated to limit before ranking).
-        fetched = set(router.urls)
-        for url in fetched:
-            self.assertTrue("/W1" in url or "/W2" in url or "/W3" in url or "doi:" in url,
-                            f"unexpected URL {url}")
+        # All three inline ids go out (not truncated to limit before ranking).
+        batch = next(u for u in router.urls if "filter=openalex" in u)
+        for wid in ("W1", "W2", "W3"):
+            self.assertIn(wid, batch)
 
     def test_related_natural_order_respects_limit(self):
         # related (no --sort cited): only the first ``limit`` inline neighbors are fetched.
@@ -271,9 +294,11 @@ class OpenAlexStubTest(unittest.TestCase):
         self.be._transport = router
         items = self.be.related("10.1038/nature14539", limit=1)
         self.assertEqual([it.title for it in items], ["Low"])
-        fetched = router.urls
-        # Only the first neighbor (W1) is fetched when not ranking by citation count.
-        self.assertFalse(any("/W2" in u or "/W3" in u for u in fetched))
+        # Only the first neighbor (W1) is asked for when not ranking by citation count.
+        batch = next(u for u in router.urls if "filter=openalex" in u)
+        self.assertIn("W1", batch)
+        self.assertNotIn("W2", batch)
+        self.assertNotIn("W3", batch)
 
     def test_citing_caps_per_page(self):
         # OpenAlex per_page is bounded to [1, 200]; avoid a 400 on --limit 250.

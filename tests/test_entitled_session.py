@@ -49,6 +49,19 @@ class SessionServedTest(unittest.TestCase):
         with self.assertRaises(BotWall):
             self.be.get(DOI)
 
+    def test_a_404_from_the_session_is_a_not_found_like_the_http_path(self):
+        # The cookie path turns any 4xx/5xx into a typed error; a page served by the browser
+        # arrives with its status attached and must be judged the same way, or a dead DOI
+        # would be parsed as an item with every field empty.
+        from litcli.errors import NotFound, Unavailable
+
+        self.session.queue = [(404, "<html>gone</html>")]
+        with self.assertRaises(NotFound):
+            self.be.get(DOI)
+        self.session.queue = [(503, "<html>down</html>")]
+        with self.assertRaises(Unavailable):
+            self.be.get(DOI)
+
 
 class FallbackTest(unittest.TestCase):
     def setUp(self):

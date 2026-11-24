@@ -60,19 +60,28 @@ class FakePage:
         self._queue = queue
         self.last_download = None
         self._body = ""
+        self._solved = None
 
     def goto(self, url, **_kw):
         step = (self._queue.pop(0) if len(self._queue) > 1
                 else self._queue[0] if self._queue else (200, ""))
+        if isinstance(step, Exception):
+            raise step
         if isinstance(step, bytes):
             self.last_download = FakeDownload(step)
             self._body = ""
             return FakeResponse(200, "", url)
-        status, body = step
+        status, body, *solved = step
         self._body = body
+        self._solved = solved[0] if solved else None
         return FakeResponse(status, body, url)
 
     def content(self) -> str:
+        # A step written as ``(status, body, solved)`` is a challenge that solves itself: the
+        # second read is what a browser would get once CF's script has run.
+        if self._solved is not None:
+            solved, self._solved = self._solved, None
+            self._body = solved
         return self._body
 
     def expect_download(self, **_kw):
@@ -84,12 +93,17 @@ class FakeRuntime:
         self._page = FakePage(queue)
         self.pages = [self._page]
         self.closed = False
+        self.terminated = False
 
     def new_page(self):
         return self._page
 
     def close(self):
         self.closed = True
+
+    def terminate(self):
+        self.terminated = True
+        self.close()
 
     def stop(self):
         pass
@@ -113,10 +127,16 @@ class FakeLauncher:
 
 
 class _Launched:
-    """The shape ``Session`` expects from a launcher: a context plus a stop()."""
+    """The shape ``Session`` expects from a launcher: a context plus a stop().
+
+    ``pid`` is this process, the way a bundled browser is a child of the caller.
+    """
 
     def __init__(self, runtime):
+        import os
+
         self.context = runtime
+        self.pid = os.getpid()
 
     def stop(self):
         self.context.close()
@@ -130,6 +150,7 @@ class FakeSession:
         self.queue: list = []
         self.alive = lambda: True   # tests reassign it: a dead session takes the cookie path
         self.closed = False
+        self.terminated = False
 
     def start(self):
         pass
@@ -147,3 +168,7 @@ class FakeSession:
 
     def close(self):
         self.closed = True
+
+    def terminate(self):
+        self.terminated = True
+        self.close()

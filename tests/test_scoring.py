@@ -66,6 +66,13 @@ class RecencyTest(unittest.TestCase):
         item = make_item(year="2020", extra={"referenced_works": ["W22"]})
         self.assertAlmostEqual(parts_of(item, project)["b"], 1.0)
 
+    def test_a_seed_and_a_reference_match_across_their_url_forms(self):
+        # The seed is written as plain ids, the graph hands out full openalex URLs.
+        project = make_project(seeds=["openalex:W22"], year_from="", year_to="")
+        item = make_item(year="2020",
+                         extra={"referenced_works": ["https://openalex.org/W22"]})
+        self.assertAlmostEqual(parts_of(item, project)["b"], 1.0)
+
 
 class ClassicnessTest(unittest.TestCase):
     def test_citations_per_year_is_the_axis(self):
@@ -109,6 +116,20 @@ class SparseTest(unittest.TestCase):
     def test_a_productive_streak_is_not_sparse(self):
         trace = [{"step": n, "new": 3} for n in range(1, 5)]
         self.assertFalse(scoring.sparse(make_project(), trace))
+
+    def test_a_trace_shaped_history_counts_the_hops_in_it(self):
+        # The loop hands over the whole event trace, not one record per hop: only `hop_end`
+        # carries `new`. Counting a hop's three candidates as three dry hops would flip the
+        # weight right after a hop that found plenty.
+        trace = [{"event": "hop_end", "new": 5}, {"event": "candidate"}, {"event": "admit"},
+                 {"event": "download"}]
+        self.assertFalse(scoring.sparse(make_project(), trace))
+
+    def test_a_trace_shaped_history_still_sees_a_dry_run(self):
+        trace = [{"event": "hop_end", "new": 0}, {"event": "candidate"},
+                 {"event": "hop_end", "new": 1}, {"event": "candidate"},
+                 {"event": "hop_end", "new": 0}, {"event": "candidate"}]
+        self.assertTrue(scoring.sparse(make_project(), trace))
 
 
 class TotalTest(unittest.TestCase):

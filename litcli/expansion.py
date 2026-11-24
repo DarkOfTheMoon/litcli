@@ -21,9 +21,9 @@ AXES = ("refs", "citing", "related")
 def expand(item: AcademicItem, backend, caps: dict, counters: dict) -> Iterator[tuple[AcademicItem, str]]:
     """Yield ``(candidate, axis)`` for one hop, charging each candidate to its axis.
 
-    ``caps`` is the per-step ask, ``counters`` the remaining per-survey envelope; the smaller
-    of the two is the real ask. Only candidates actually handed out are charged, so a short
-    answer does not burn the envelope.
+    ``caps`` is the configured allowance for one work, ``counters`` what is left of it (the
+    caller refills it per row); the smaller of the two is the real ask. Only candidates
+    actually handed out are charged, so a short answer does not burn the allowance.
     """
     for axis in AXES:
         room = min(int(caps.get(axis, 0)), int(counters.get(axis, 0)))

@@ -49,11 +49,19 @@ class Graph(httpx.BaseTransport):
     def handle_request(self, request):
         url = str(request.url)
         self.urls.append(url)
+        if "filter=openalex:" in url:  # the batch behind references / related
+            ids = url.split("filter=openalex:")[1].split("&")[0].split("|")
+            hits = [self.WORKS[i] for i in ids if i in self.WORKS]
+            return httpx.Response(200, json={"results": hits}, request=request)
         if "filter=cites:" in url:
             wid = url.split("filter=cites:")[1].split("&")[0]
             hits = [self.WORKS[wid]] if wid == "W1" else []
             return httpx.Response(200, json={"results": hits}, request=request)
         wid = request.url.path.rsplit("/", 1)[-1]
+        for known in self.WORKS.values():  # a DOI key lands as ``/works/https://doi.org/<doi>``
+            if known["doi"].endswith(wid):
+                wid = known["id"].rsplit("/", 1)[-1]
+                break
         if wid in self.WORKS:
             return httpx.Response(200, json=self.WORKS[wid], request=request)
         return httpx.Response(404, json={"error": "not found"}, request=request)

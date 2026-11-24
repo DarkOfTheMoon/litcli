@@ -12,7 +12,7 @@ import urllib.parse
 
 import httpx
 
-from .errors import for_status
+from .errors import Unavailable, for_status
 from .transport import client
 
 # Only http(s) sources may be downloaded; anything else (e.g. file://) could read local files
@@ -32,7 +32,10 @@ def download(url: str, timeout: int = 30,
     if scheme not in _ALLOWED_SCHEMES:
         raise ValueError(f"refusing to download non-http(s) URL scheme '{scheme}'")
     with client(timeout, transport=transport) as http:
-        response = http.get(url)
+        try:
+            response = http.get(url)
+        except httpx.HTTPError as e:  # timeout, refused, or a body cut mid-transfer
+            raise Unavailable(f"download failed: {e}") from e
         if response.status_code >= 400:
             raise for_status(response.status_code,
                              f"download failed: HTTP {response.status_code}: {response.reason_phrase}")
