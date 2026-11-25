@@ -282,6 +282,12 @@ Only one browser per profile ever runs: a command attaches to the one already up
 through `/proc` even when its discovery file was lost) and stops any duplicate on the profile,
 and one it launched itself is stopped when the command ends — the one `login` left up is reused.
 Back-to-back survey runs therefore do not pile up one browser each.
+That session is also the fallback for **keyless open-access hosts**: some sites (MDPI, for one)
+answer 403 to every client without JS site-wide, so a failed plain download is retried through
+the browser. It is a fallback, not the main road — when it fails too, the plain failure is what
+gets reported. Either way the command ends the same: every page is parked on `about:blank` and
+the session is closed, so no dead unentitled tab (and no `--pdf-renderer`) is left behind; a
+presigned asset address (`X-Amz-Expires`) also gets a note that it lapses within minutes.
 
 ## Configuration
 

@@ -121,6 +121,51 @@ class PastedPdfUrlTest(unittest.TestCase):
         written = "".join(str(c.args[0]) for c in out.write.call_args_list)
         self.assertIn("https://x/landing", written)
 
+    def test_a_walled_oa_link_gets_the_browser_after_the_plain_client(self):
+        # A keyless open-access host can still answer Cloudflare 403 to every plain client
+        # (MDPI does, browser UA included); the configured session is the only way through, and
+        # it is a fallback — the cheap path is still tried first.
+        info = {"has_fulltext": True, "kind": "unpaywall", "url": "https://m/x.pdf",
+                "format": "pdf"}
+        browser = mock.Mock()
+        browser.alive.return_value = True
+        browser.download.return_value = b"%PDF-1.4 x"
+        probe = self._probe(info)._replace(browser=browser)
+        with mock.patch.object(fetch.pdfutil, "download", side_effect=OSError("403")), \
+                mock.patch("sys.stdout"):
+            self.assertEqual(fetch._emit_fulltext(self._args(), probe), 0)
+        self.assertEqual(browser.download.call_args.args[0], "https://m/x.pdf")
+        self.assertEqual(len(os.listdir(self.tmp.name)), 1)
+
+    def test_a_browser_failure_still_names_the_wall_not_the_browser(self):
+        # The browser is the fallback; when it fails too, the reason the host gave is the
+        # readable one. A dead session must not replace "not a PDF from <url>".
+        info = {"has_fulltext": True, "kind": "unpaywall", "url": "https://m/x.pdf",
+                "format": "pdf"}
+        tail = {"has_fulltext": True, "kind": "scihub", "url": "https://s/x.pdf", "format": "pdf"}
+        browser = mock.Mock()
+        browser.alive.return_value = True
+        browser.download.side_effect = RuntimeError("browser not installed")
+        probe = self._probe(info)._replace(browser=browser)
+        with mock.patch.object(fetch.pdfutil, "download", return_value=b"<html>403</html>"), \
+                mock.patch.object(fetch.fulltext_mod, "resolve_fulltext", return_value=tail), \
+                mock.patch("sys.stdout"), mock.patch("sys.stderr"), \
+                self.assertRaises(fetch.LitcliError) as caught:
+            fetch._emit_fulltext(self._args(), probe)
+        self.assertIn("not a PDF from https://s/x.pdf", str(caught.exception))
+
+    def test_the_browser_is_parked_and_detached_after_the_command(self):
+        # Either way it ends: a file left up keeps a pdf-renderer alive and its signed address
+        # dies in minutes.
+        probe = self._probe({"has_fulltext": False})
+        browser = mock.Mock()
+        probe = probe._replace(browser=browser)
+        with mock.patch.object(fetch, "_probe_fulltext", return_value=probe), \
+                mock.patch.object(fetch, "_report_no_fulltext", return_value=1):
+            fetch._fetch_fulltext({}, self._args(), "10.1/x")
+        browser.reset.assert_called_once()
+        browser.close.assert_called_once()
+
     def test_a_pdf_url_normalizes_into_a_direct_probe(self):
         probe = fetch._probe_fulltext({}, self._args(), URL)
         self.assertTrue(probe.info["direct"])

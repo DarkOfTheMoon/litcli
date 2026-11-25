@@ -396,8 +396,15 @@ class FetchFulltextTest(unittest.TestCase):
         self.cwd = os.getcwd()
         os.chdir(self.dir)
         self.addCleanup(os.chdir, self.cwd)
+        # A session that fails at once: these tests are about the chain's accounting, and a
+        # real browser would put the network (and ~seconds) into every failure path.
+        self.browser = mock.Mock()
+        self.browser.alive.return_value = True
+        self.browser.download.side_effect = RuntimeError("no browser session")
         for patcher in (mock.patch("litcli.commands.fetch.get_all_backends", return_value={}),
-                        mock.patch("litcli.commands.fetch._optional_backend", return_value=None)):
+                        mock.patch("litcli.commands.fetch._optional_backend", return_value=None),
+                        mock.patch("litcli.commands.fetch.session_from_config",
+                                   return_value=self.browser)):
             patcher.start()
             self.addCleanup(patcher.stop)
         out_ctx = contextlib.redirect_stdout(self.out)

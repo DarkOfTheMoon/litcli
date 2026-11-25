@@ -22,7 +22,7 @@ from .. import fulltext as fulltext_mod
 from .. import pdf as pdfutil
 from .. import provenance, unpaywall
 from ..backends.base import Backend, NotSupportedError
-from ..browser import looks_like_pdf
+from ..browser import looks_like_pdf, session_from_config
 from ..config import get_all_backends, get_backend
 from ..errors import LitcliError, Unavailable
 from ..paths import target_path
@@ -166,6 +166,9 @@ class _Probe(NamedTuple):
     pub_errors: dict[str, str]
     unresolved: list[tuple[_PublisherSpec, bool]]
     pages: dict[str, str]
+    #: The configured browser session, used only where a plain client is walled off; started
+    #: lazily, so a run that never needs it never launches a browser.
+    browser: object = None
 
 
 def _fetch_fulltext(cfg, args, target: str) -> int:
@@ -179,11 +182,18 @@ def _fetch_fulltext(cfg, args, target: str) -> int:
     probe = _probe_fulltext(cfg, args, target)
     if probe is None:  # a malformed target, already reported
         return 2
-    if probe.info is None:
-        return _report_unresolved(probe)
-    if not probe.info.get("has_fulltext"):
-        return _report_no_fulltext(probe)
-    return _emit_fulltext(args, probe)
+    try:
+        if probe.info is None:
+            return _report_unresolved(probe)
+        if not probe.info.get("has_fulltext"):
+            return _report_no_fulltext(probe)
+        return _emit_fulltext(args, probe)
+    finally:
+        if probe.browser is not None:
+            # A file left up in the tab keeps a pdf-renderer spinning after the driver is gone,
+            # and its signed address dies in minutes — the desktop should not keep showing it.
+            probe.browser.reset()
+            probe.browser.close()
 
 
 def _probe_fulltext(cfg, args, target: str) -> _Probe | None:
@@ -217,6 +227,9 @@ def _probe_fulltext(cfg, args, target: str) -> _Probe | None:
     scihub_backend = backends.get("scihub")
     if args.scihub and scihub_backend is None:
         scihub_backend = _optional_backend("scihub", cfg)
+    # Only for the plain-download fallback: a keyless OA host can still be behind a bot wall,
+    # and a browser nobody ends up needing is never launched (``start`` is lazy).
+    browser = session_from_config(cfg)
     # The legal corpus sources are keyless: consult them even when not enabled in config — but
     # a section the user switched off stays off.
     corpus = {name: backends.get(name) or (
@@ -281,7 +294,8 @@ def _probe_fulltext(cfg, args, target: str) -> _Probe | None:
     if info is None and unresolved:
         # A pasted page the chain could not key on: probing every backend with a URL would not
         # help, so the report says which step is why.
-        return _Probe(key, None, email, scihub_backend, publishers, pub_errors, unresolved, pages)
+        return _Probe(key, None, email, scihub_backend, publishers, pub_errors, unresolved,
+                      pages, browser)
     if info is None:
         info = fulltext_mod.resolve_fulltext(key, email, backends=backends,
                                              openalex_backend=backends.get("openalex"),
@@ -289,7 +303,8 @@ def _probe_fulltext(cfg, args, target: str) -> _Probe | None:
                                              zenodo_backend=corpus["zenodo"],
                                              publishers=publishers,
                                              scihub_backend=scihub_backend)
-    return _Probe(key, info, email, scihub_backend, publishers, pub_errors, unresolved, pages)
+    return _Probe(key, info, email, scihub_backend, publishers, pub_errors, unresolved,
+                  pages, browser)
 
 
 def _report_unresolved(probe: _Probe) -> int:
@@ -349,6 +364,43 @@ def _announce_hit(kind: str, info: dict, fmt: str) -> None:
         note("  note: landing page, not a file — open it in a browser")
 
 
+def _download_any(probe: _Probe, url: str, fmt: str) -> bytes:
+    """Get ``url``'s bytes: plain first, then through the browser when the plain way failed.
+
+    A keyless open-access host can still sit behind a bot wall (MDPI answers Cloudflare 403 to
+    every plain client, browser UA included), and the configured ``[browser]`` session is the
+    only thing that gets past it. Raises when no byte came either way: the failure is the
+    caller's to judge (the first caller still has the chain tail to try, the last one is the
+    command's answer).
+    """
+    try:
+        raw = pdfutil.download(url)
+        _verify(raw, fmt, url)
+        return raw
+    except (LitcliError, OSError) as e:
+        # A 200 that is a paywall / login page is not a file either: verify inside the try so
+        # the browser path covers the same failures.
+        note(f"  [skipped] {e}")
+        plain_error = e
+    if "X-Amz-Expires" in url:
+        # A presigned asset address is good for minutes; a retry that reuses it is not the
+        # same request as the first, and the failure then says nothing useful without this.
+        note("  note: a signed address expires in minutes; a re-run mints a fresh one")
+    if probe.browser is None:
+        raise plain_error
+    try:
+        if not probe.browser.alive():
+            probe.browser.start()
+        raw = probe.browser.download(url)
+        _verify(raw, fmt, url)
+        return raw
+    except (LitcliError, RuntimeError, OSError) as e:
+        # The browser is the fallback: when it fails too, the plain failure is what describes
+        # the host (a wall says nothing about the browser), so that is the one raised.
+        note(f"  [skipped] browser: {e}")
+        raise plain_error from e
+
+
 def _emit_fulltext(args, probe: _Probe) -> int:
     """Render the hit, get its bytes and save them; fall back to the chain tail on a failure."""
     key, publishers = probe.key, probe.publishers
@@ -406,14 +458,11 @@ def _emit_fulltext(args, probe: _Probe) -> int:
             note(f"  [skipped] {e}")
             raw = None
     if raw is None and publisher is None:
-        # No session-carrying backend for this host: a plain download is the only option left.
+        # No session-carrying backend for this host: plain bytes, then the browser if the site
+        # walls plain clients off. A failure here is not yet the answer — the tail still runs.
         try:
-            raw = pdfutil.download(info["url"])
-            _verify(raw, fmt, info["url"])
-        except (LitcliError, OSError) as e:
-            # A 200 that is a paywall / login page is not a file either: verify inside the try
-            # so the same fall-back covers it.
-            note(f"  [skipped] {e}")
+            raw = _download_any(probe, info["url"], fmt)
+        except (LitcliError, RuntimeError, OSError):
             raw = None
     if raw is None:
         # The hit answered (or the bytes were wrong) but no file came — a link that always
@@ -434,7 +483,9 @@ def _emit_fulltext(args, probe: _Probe) -> int:
         if args.no_download or fmt == "html":
             out(info["url"])
             return 0
-        raw = pdfutil.download(info["url"])
+        # Last answer in the chain: its failure is the command's answer, so the exception goes
+        # on to the error mapping instead of turning into another "no file" turn.
+        raw = _download_any(probe, info["url"], fmt)
     # Always verified here, including the plain-download branch above (which also verifies, so a
     # non-file never reaches the save): one place proves every saved byte.
     # UNVERIFIED edge: a local-store hit carries no ``format``, so it is checked as a PDF. A

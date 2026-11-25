@@ -462,6 +462,29 @@ class Session:
             with contextlib.suppress(OSError):
                 os.kill(pid, signal.SIGTERM)
 
+    def reset(self) -> None:
+        """Park the tabs on ``about:blank`` and drop the extras.
+
+        An answered file left up in the tab keeps a ``--pdf-renderer`` spinning after the driver
+        has exited, and its signed address expires in minutes: the desktop then shows a dead
+        link, which reads as a hung command. The browser itself is left running (``close`` is
+        what detaches it); only the page content is cleared.
+        """
+        if not self.alive():
+            return
+        try:
+            if self._runtime is None:
+                self._attach()
+            pages = self._runtime.context.pages
+            for page in pages:
+                with contextlib.suppress(Exception):
+                    page.goto("about:blank")
+            for page in pages[1:]:
+                with contextlib.suppress(Exception):
+                    page.close()
+        except Exception:  # a browser that died mid-way is not worth failing the command for
+            pass
+
     def close(self) -> None:
         """Disconnect; a detached browser keeps running for the next command."""
         if self._runtime:

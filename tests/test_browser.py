@@ -89,6 +89,20 @@ class SessionTest(unittest.TestCase):
         self.assertEqual(killed.call_args_list[0], mock.call(4242, signal.SIGTERM))
         self.assertFalse(paths.browser_session_file().exists())
 
+    def test_reset_parks_the_page_on_about_blank(self):
+        # A saved file left up in the tab keeps a --pdf-renderer spinning after the driver has
+        # exited, and its signed address dies in minutes: the desktop shows a dead link and
+        # reads as a command that hung.
+        self.s.start()
+        page = self.s._runtime.context.pages[0]
+        page.url = "https://pdf.sciencedirectassets.com/x.am.pdf?sig=1"
+        self.s.reset()
+        self.assertEqual(page.url, "about:blank")
+        self.assertTrue(self.s.alive())  # parked, not closed: the clearance survives
+
+    def test_reset_without_a_browser_is_quiet(self):
+        self.s.reset()  # no session file, nothing to park
+
     def test_proxy_reaches_the_launcher(self):
         Session(proxy="http://127.0.0.1:7890", launcher=self.launcher).start()
         self.assertEqual(self.launcher.kwargs["proxy"], "http://127.0.0.1:7890")
