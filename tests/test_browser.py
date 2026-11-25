@@ -230,6 +230,20 @@ class SessionTest(unittest.TestCase):
         self.assertEqual(kw["timeout"], browser._DOWNLOAD_WAIT * 1000)
         self.assertIsNone(self.s._runtime.context.timeout)  # None == the library default
 
+    def test_a_navigation_that_never_answers_falls_back_instead_of_failing(self):
+        # An endpoint that accepts the request and then says nothing (a handle 302ing to a
+        # repository) runs the navigation out. The file is still worth one direct request,
+        # which is where a dead navigation used to leave the caller empty-handed.
+        self.s.start()
+        page = mock.MagicMock()
+        page.goto.side_effect = browser.PlaywrightTimeoutError("Page.goto: Timeout 300000ms "
+                                                              "exceeded.")
+        page.content.return_value = "<html>" + "x" * 50 + "</html>"
+        with mock.patch.object(self.s, "_page", return_value=page), \
+                mock.patch.object(browser, "_CHALLENGE_POLL", 0):
+            data = self.s.download("https://hdl.handle.net/11511/123")
+        self.assertTrue(data.startswith(b"%PDF"))
+
     def test_a_browser_dying_mid_download_is_an_unavailable(self):
         # A Chrome closed while the download is awaited raises TargetClosedError, which is a
         # Playwright error and not a timeout: unmapped it leaves the typed catches behind.

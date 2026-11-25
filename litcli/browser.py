@@ -335,10 +335,13 @@ def _goto_allowing_download(page, url: str, **kw):
     An attachment navigation raises "Download is starting" and never loads: that one is reported
     as ``_DOWNLOAD_STARTED`` so the caller knows to wait for the file. One aborted outright
     (``net::ERR_ABORTED``, what doi.org does when it hands back the file) is a plain ``None`` —
-    whatever the page shows is the answer.
+    whatever the page shows is the answer. A navigation that never gets an answer at all is a
+    ``None`` too: the endpoint accepted the request, so it is still worth one direct request.
     """
     try:
         return page.goto(url, **kw)
+    except PlaywrightTimeoutError:
+        return None
     except PlaywrightError as e:
         message = str(e)
         if "Download is starting" in message:
