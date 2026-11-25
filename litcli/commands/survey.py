@@ -498,10 +498,19 @@ def _consumed(trace: list[dict]) -> set[str]:
 
 
 def _frontier(seen_rows: list[dict], trace: list[dict]) -> tuple[list[dict], set[str]]:
-    """Admitted works never expanded, and the identities of all expanded ones."""
+    """Admitted works never expanded, one row per identity, and everything already consumed.
+
+    An identity gets several admitted rows over its life — the download pass writes the row
+    back to record the copy — so the first row is kept and the rest are the same work. Handing
+    one work to a hop twice reads its whole bibliography twice.
+    """
     expanded = _consumed(trace)
-    return [row for row in seen_rows
-            if row.get("admit") and str(row.get("identity")) not in expanded], expanded
+    rows: dict[str, dict] = {}
+    for row in seen_rows:
+        identity_now = str(row.get("identity"))
+        if row.get("admit") and identity_now not in expanded:
+            rows.setdefault(identity_now, row)
+    return list(rows.values()), expanded
 
 
 def run_loop(survey_project: project.Project, deps: Deps) -> dict:

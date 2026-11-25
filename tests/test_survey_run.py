@@ -382,6 +382,17 @@ class SurveyRunTest(unittest.TestCase):
         self.assertEqual(result["stop"], "max_hops")
         self.assertTrue(all(e.get("errored") for e in hops))
 
+    def test_a_duplicated_seen_row_is_expanded_once(self):
+        # The download pass writes the row back as a NEW seen row, so an identity that already
+        # landed has several admitted rows after a resume; handed to a hop one per row, the same
+        # work was expanded twice in one hop (and its whole bibliography read twice).
+        project.append_seen(self.project, {"identity": "doi:10.1002/seed", "admit": True,
+                                           "reason": "seed", "key": "10.1002/seed",
+                                           "score": 0.0, "parts": {}, "download": "ok"})
+        survey.run_loop(self.project, self.deps)
+        first = next(e for e in project.read_trace(self.project) if e["event"] == "hop_end")
+        self.assertEqual(first["expanded"], ["doi:10.1002/seed"])
+
     def test_a_hop_that_only_errored_leaves_its_rows_unexpanded(self):
         # An errored row is written back to the frontier in memory; `expanded` is what a
         # resume reads, so it must not claim the row either — otherwise the interruption a 429

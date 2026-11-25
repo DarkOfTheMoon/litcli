@@ -31,6 +31,10 @@ type = "openalex"                       # 内置默认,无需 key
 # 长跑 survey 被 429 打断时抬这两个键(默认 3 次 / 30 秒)。
 # retries = 5
 # retry_after_cap = 60.0
+# 无 key 时的免费日额度按**出口 IP** 共享(同一 NAT 后所有人共用一份,UTC 零点重置),
+# 一次长跑就能把它耗尽、当天只剩涓流且退避无用。自有 key 走 `?api_key=`。免费申请见
+# openalex.org 账号页;拿到后填这里即可(也可写 `Authorization: Bearer`,本实现走查询参数)。
+# api_key = "…"
 
 # 开放图书数据库(书籍元数据)。默认不内置,但本文件里是启用的;不想用就删掉本段。
 # 部分网络环境对 openlibrary.org / googleapis.com 无路由,若搜图书无响应请自查连通性。

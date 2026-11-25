@@ -146,12 +146,16 @@ class OpenAlexBackend(HttpBackend):
 
     def __init__(self, name: str = "openalex", mailto: str = "",
                  base: str = _API, max_results: int = 10, rate_per_sec: float = 10.0,
-                 retries: int | None = None, retry_after_cap: float | None = None):
+                 retries: int | None = None, retry_after_cap: float | None = None,
+                 api_key: str = ""):
         super().__init__(name=name, rate=int(rate_per_sec) or 10,
                          min_interval=1.0 / rate_per_sec if rate_per_sec > 0 else 0.0,
                          retries=retries, retry_after_cap=retry_after_cap)
         self._base = base.rstrip("/")
         self._mailto = mailto
+        #: Without a key the daily free budget is per source IP and shared by everyone behind
+        #: it, so one long run can empty it for the rest of the day (UTC midnight resets it).
+        self._api_key = api_key.strip()
         self._max = max_results
         # Polite pool: the address rides in the UA too, not only in the mailto parameter.
         self.UA = f"litcli/0.1 (mailto: {mailto or 'unknown'})"
@@ -162,11 +166,16 @@ class OpenAlexBackend(HttpBackend):
 
 
     def _with_mailto(self, url: str) -> str:
-        """Append the polite ``&mailto=`` param (OpenAlex asks for it) to a URL."""
-        if not self._mailto:
-            return url
-        sep = "&" if "?" in url else "?"
-        return f"{url}{sep}mailto={urllib.parse.quote(self._mailto)}"
+        """Append the polite ``&mailto=`` and, when configured, ``&api_key=`` to a URL.
+
+        A key replaces the shared per-IP free budget with the key owner's own; the query form
+        is used because it rides every call site without an instance header dict.
+        """
+        for name, value in (("mailto", self._mailto), ("api_key", self._api_key)):
+            if value:
+                sep = "&" if "?" in url else "?"
+                url = f"{url}{sep}{name}={urllib.parse.quote(value)}"
+        return url
 
     def _work_url(self, key: str) -> str:
         """Build a ``/works/...`` URL from a DOI, a bare W-id, or an openalex.org URL.

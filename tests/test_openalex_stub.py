@@ -71,6 +71,17 @@ class OpenAlexStubTest(unittest.TestCase):
         self.assertEqual(it.abstract, "We review deep learning")
         self.assertEqual(it.attachments, ["http://oa.example/x.pdf"])
 
+    def test_an_api_key_rides_the_polite_pool_params(self):
+        # The free budget is per source IP and shared by everyone behind it, so a long run can
+        # empty it for the whole day; a key makes the request someone's own budget instead.
+        be = OpenAlexBackend(mailto="t@e.com", api_key="K1")
+        speed_up(be)
+        be.cacheable = False
+        rec = stub(be, (200, RESULTS))
+        be.search("x")
+        self.assertIn("api_key=K1", rec.urls[0])
+        self.assertIn("mailto=t%40e.com", rec.urls[0])
+
     def test_get_doi_encoded(self):
         rec = stub(self.be, (200, WORK))
         self.be.get("10.1038/nature14539")
