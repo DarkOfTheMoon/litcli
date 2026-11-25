@@ -260,6 +260,28 @@ class SurveyRunTest(unittest.TestCase):
             self.assertEqual(survey.cmd_survey_run(self.cfg, self.args()), 1)
         self.assertTrue(list((self.project.root / "corpus").glob("*.json")))
 
+    def test_a_browser_timeout_keeps_the_candidate_and_the_run(self):
+        # A handle that 302s to a repository accepting `application/pdf` and then never
+        # answering raises playwright's own TimeoutError, which is not an OSError: uncaught it
+        # ended the whole run at hop 0, on a seed, with nothing walked.
+        from litcli.browser import PlaywrightTimeoutError
+
+        self.deps.publishers = {}  # the browser is the only route left, as it was on the handle
+        self.deps.browser_fetch = raising(PlaywrightTimeoutError("Timeout 30000ms exceeded"))
+        with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(survey.cmd_survey_run(self.cfg, self.args()), 1)
+        self.assertEqual(self.seen_for("10.1002/seed")["download"], "unavailable")
+        self.assertTrue(self.seen_for("10.1002/x"))
+        self.assertTrue(list((self.project.root / "corpus").glob("*.json")))
+
+    def test_a_download_that_raises_anything_still_lands_its_row(self):
+        with mock.patch.object(survey, "_download",
+                               raising(TimeoutError("Timeout 30000ms exceeded"))), \
+                contextlib.redirect_stderr(io.StringIO()), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(survey.cmd_survey_run(self.cfg, self.args()), 1)
+        self.assertEqual(self.seen_for("10.1002/seed")["download"], "error:TimeoutError")
+
     def test_a_copy_that_landed_after_the_browser_died_counts_as_landed(self):
         # The cookie retry records its copy as `cookie`, not `ok`: the exit code has to see it.
         self.session.alive = iter([True, False]).__next__

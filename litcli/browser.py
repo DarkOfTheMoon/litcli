@@ -33,8 +33,24 @@ from .errors import External, Unavailable
 
 #: How long a freshly spawned Chrome gets to open its debugging port.
 _READY_TIMEOUT = 20.0
-#: How long a PDF endpoint gets to start a download before it is read inline instead.
-_DOWNLOAD_WAIT = 4000
+def _still_coming(page) -> bool:
+    """Whether the page is still the challenge rather than something to read.
+
+    Mid-exchange ``content()`` raises; an unreadable page is the exchange in progress, not an
+    answer, so it counts as still coming. Anything else — an inline viewer, an article page, a
+    sign-in page — is a document, and a document is the answer whether the bytes are in it or
+    the lack of entitlement is.
+    """
+    try:
+        return is_challenge_page(page.content())
+    except PlaywrightError:
+        return True
+
+
+#: The ceiling on waiting for a PDF endpoint. A clock cannot tell "no entitlement" from "still
+#: downloading" — the document can, so the wait ends the moment the page is a document rather
+#: than a challenge; this only bounds a challenge that never resolves, and the transfer after it.
+_DOWNLOAD_WAIT = 300.0
 
 try:  # optional dependency: the module stays importable without Playwright
     from playwright.sync_api import Error as PlaywrightError
@@ -309,15 +325,25 @@ def session_from_config(cfg: dict) -> Session | None:
                    proxy=(cfg.get("network") or {}).get("proxy"))
 
 
-def _goto_allowing_download(page, url: str, **kw):
-    """``page.goto`` that survives "Download is starting" (an attachment navigation never loads).
+#: Returned by :func:`_goto_allowing_download` when the navigation became a download.
+_DOWNLOAD_STARTED = object()
 
-    Returns the response, or ``None`` when the navigation turned into a download.
+
+def _goto_allowing_download(page, url: str, **kw):
+    """``page.goto`` that survives a navigation that stops being a navigation.
+
+    An attachment navigation raises "Download is starting" and never loads: that one is reported
+    as ``_DOWNLOAD_STARTED`` so the caller knows to wait for the file. One aborted outright
+    (``net::ERR_ABORTED``, what doi.org does when it hands back the file) is a plain ``None`` —
+    whatever the page shows is the answer.
     """
     try:
         return page.goto(url, **kw)
     except PlaywrightError as e:
-        if "Download is starting" in str(e):
+        message = str(e)
+        if "Download is starting" in message:
+            return _DOWNLOAD_STARTED
+        if "ERR_ABORTED" in message:
             return None
         raise
 
@@ -530,6 +556,10 @@ class Session:
             return page.goto(url, wait_until="domcontentloaded")
         except PlaywrightTimeoutError:
             return None
+        except PlaywrightError as e:
+            if "ERR_ABORTED" not in str(e):
+                raise
+            return None
 
     def _settle(self, page) -> str:
         """Read the document until the challenge is gone, or the wait runs out.
@@ -553,20 +583,48 @@ class Session:
     def download(self, url: str) -> bytes:
         """Navigate to a file URL and return its bytes.
 
-        An endpoint without an attachment disposition makes Chrome render the PDF inline (in its
-        viewer, which is not the PDF), so a download that never starts is re-requested through
-        the session's own request context — same cookies, the bytes and not the viewer.
+        Whether the endpoint is still working, refused for want of entitlement, or rendering the
+        file inline is written in the page, not in elapsed time: a challenge keeps it coming and
+        is waited out, any other document is already the answer. An answer that is not a download
+        — Chrome's inline viewer, a redirect back to `/abs/`, a sign-in page — is re-requested
+        through the session's own request context, which hands back the bytes rather than the
+        viewer's HTML; the caller sorts the PDF from the refusal.
         """
         page = self._page()
+        caught: list = []
+
+        def collect(download):  # a plain function: Playwright tags handlers with an attribute
+            caught.append(download)
+
+        # The navigation takes its timeout from the context default, so it is raised here and put
+        # back (the other waits of the session keep their 30 s). The artifact itself has no
+        # timeout of its own and is awaited until it lands: a slow transfer is a wait, not a no.
+        context = self._runtime.context
+        context.set_default_timeout(_DOWNLOAD_WAIT * 1000)
         try:
-            with page.expect_download(timeout=_DOWNLOAD_WAIT) as caught:
-                _goto_allowing_download(page, url, wait_until="commit")
-            saved = caught.value.path  # a str already on the offline stand-in
-            return Path(saved() if callable(saved) else saved).read_bytes()
-        except PlaywrightTimeoutError:
-            answer = self._runtime.context.request.get(url, headers={"Accept": "application/pdf"})
+            page.on("download", collect)
+            response = _goto_allowing_download(page, url, wait_until="commit")
+            deadline = time.monotonic() + _DOWNLOAD_WAIT
+            while not caught:
+                # A started download leaves the previous document up, which says nothing, so it
+                # is the one case that keeps waiting without looking at the page.
+                if response is not _DOWNLOAD_STARTED and not _still_coming(page):
+                    break
+                if time.monotonic() >= deadline:
+                    break
+                page.wait_for_timeout(_CHALLENGE_POLL * 1000)
+            if caught:
+                saved = caught[0].path  # a str already on the offline stand-in
+                return Path(saved() if callable(saved) else saved).read_bytes()
+            # The request context keeps its own 30 s regardless of the setting above.
+            answer = context.request.get(url, headers={"Accept": "application/pdf"},
+                                         timeout=_DOWNLOAD_WAIT * 1000)
             return answer.body()
         except PlaywrightError as e:
             # The window was closed mid-download (TargetClosedError) or the page went away:
             # a failed download, not a crash of the whole command.
             raise Unavailable(f"the session browser failed during the download: {e}") from e
+        finally:
+            context.set_default_timeout(None)  # back to the library default
+            with contextlib.suppress(PlaywrightError):
+                page.remove_listener("download", collect)

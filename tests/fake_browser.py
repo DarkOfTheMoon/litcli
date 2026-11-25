@@ -55,12 +55,42 @@ class _DownloadCtx:
         self.value = self._page.last_download
 
 
+class FakeRequest:
+    """The session's request context: same cookies, the bytes and not a viewer."""
+
+    def __init__(self, data=b"%PDF inline"):
+        self.data = data
+        self.calls = []
+
+    def get(self, url, **kw):
+        self.calls.append((url, kw))
+        answer = mock_answer(self.data, url)
+        return answer
+
+
+def mock_answer(data, url):
+    class _Answer:
+        def body(self):
+            return data
+    return _Answer()
+
+
 class FakePage:
     def __init__(self, queue):
         self._queue = queue
         self.last_download = None
         self._body = ""
         self._solved = None
+        self._listeners = {}
+
+    def on(self, event, handler):
+        self._listeners.setdefault(event, []).append(handler)
+
+    def remove_listener(self, event, handler):
+        self._listeners[event].remove(handler)
+
+    def wait_for_timeout(self, _ms):
+        pass
 
     def goto(self, url, **_kw):
         step = (self._queue.pop(0) if len(self._queue) > 1
@@ -70,6 +100,8 @@ class FakePage:
         if isinstance(step, bytes):
             self.last_download = FakeDownload(step)
             self._body = ""
+            for handler in self._listeners.get("download", []):
+                handler(self.last_download)
             return FakeResponse(200, "", url)
         status, body, *solved = step
         self._body = body
@@ -92,11 +124,16 @@ class FakeRuntime:
     def __init__(self, queue):
         self._page = FakePage(queue)
         self.pages = [self._page]
+        self.request = FakeRequest()
         self.closed = False
         self.terminated = False
 
     def new_page(self):
         return self._page
+
+    def set_default_timeout(self, timeout):
+        previous, self.timeout = getattr(self, "timeout", 30000.0), timeout
+        return previous
 
     def close(self):
         self.closed = True

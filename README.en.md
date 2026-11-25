@@ -275,6 +275,9 @@ get through. It is switched on by `[browser].enabled = true`
 (off by default); while off the cookie path above runs unchanged, and a configured cookie keeps
 working. The browser inherits `[network].proxy` — a clearance is bound to the egress IP, so both
 must leave by the same one.
+PDFs are judged by the page rather than by a clock: a page still showing the challenge is
+waited out (up to five minutes), and the moment it is a document — an inline viewer, a page
+redirected back to `/abs/`, a sign-in page — the wait stops and that page is the answer.
 Only one browser per profile ever runs: a command attaches to the one already up (finding it
 through `/proc` even when its discovery file was lost) and stops any duplicate on the profile,
 and one it launched itself is stopped when the command ends — the one `login` left up is reused.

@@ -28,7 +28,7 @@ from .. import cache, effort, expansion, fulltext, paths, project, scoring, surv
 from ..admission import decide
 from ..aggregate import identity
 from ..backends._entitled import EntitledBackend
-from ..browser import session_from_config
+from ..browser import PlaywrightTimeoutError, session_from_config
 from ..config import get_all_backends
 from ..errors import BadInput, LitcliError
 from ..models import AcademicItem
@@ -328,7 +328,7 @@ def _land(item: AcademicItem, deps: Deps, survey_project: project.Project) -> st
         return "no-doi"
     try:
         info = deps.resolve(item.doi)
-    except (LitcliError, OSError, RuntimeError):
+    except (LitcliError, OSError, RuntimeError, PlaywrightTimeoutError):
         return "unavailable"
     if not info or not info.get("has_fulltext"):
         return "unavailable"
@@ -367,7 +367,10 @@ def _fetch_info(info: dict, doi: str, deps: Deps) -> bytes | None:
     for route in routes:
         try:
             data = route()
-        except (LitcliError, OSError, RuntimeError):
+        except (LitcliError, OSError, RuntimeError, PlaywrightTimeoutError):
+            # A page that accepts the request and then never answers raises playwright's own
+            # TimeoutError, which is not an OSError: caught here it costs the route, like the
+            # rest, instead of unwinding the whole walk through `_land`.
             continue
         if data:
             return bytes(data)
@@ -417,6 +420,21 @@ def _download(item: AcademicItem, deps: Deps, survey_project: project.Project,
     _detach_sessions(deps.publishers)
     status = _land(item, deps, survey_project)
     return "cookie" if status == "ok" else status
+
+
+def _download_kept(item: AcademicItem, deps: Deps, survey_project: project.Project,
+                   session_was_alive: bool) -> str:
+    """``_download`` with the failure contained: a dead or slow link costs this copy, not the walk.
+
+    A document store that accepts the request and then hangs (a handle that 302s to a repository
+    which never answers) raises out of the fetch after the navigation timeout, and an uncaught
+    raise ended the whole run — at hop 0, on a seed, before anything was walked. The status is
+    recorded as ``error:<type>`` so a resume skips the copy and the trace says what happened.
+    """
+    try:
+        return _download(item, deps, survey_project, session_was_alive)
+    except Exception as e:  # one link must not sink a walk
+        return "error:" + type(e).__name__
 
 
 def _row_item(row: dict) -> AcademicItem:
@@ -532,7 +550,7 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
                     continue
                 counters["publisher"] -= 1
                 item = _row_item(row)
-                status = _download(item, deps, survey_project, session_was_alive)
+                status = _download_kept(item, deps, survey_project, session_was_alive)
                 landed[identity_now] = status
                 landed_total += status in ("ok", "cookie")
                 _write_meta(survey_project, item, status)
@@ -591,7 +609,7 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
                             best = total
                         if counters["publisher"] > 0:
                             counters["publisher"] -= 1
-                            status = _download(candidate, deps, survey_project, session_was_alive)
+                            status = _download_kept(candidate, deps, survey_project, session_was_alive)
                         else:
                             status = "unavailable"
                         landed_total += status in ("ok", "cookie")

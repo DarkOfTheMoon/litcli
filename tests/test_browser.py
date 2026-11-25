@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import litcli.browser as browser
 import litcli.paths as paths
 from litcli.browser import Session
-from tests.fake_browser import FakeLauncher
+from tests.fake_browser import FakeDownload, FakeLauncher
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 #: A child process that starts the shared session and then exits, like `browser login` does.
@@ -156,6 +156,18 @@ class SessionTest(unittest.TestCase):
             answer = self.s.page("https://arc.aiaa.org/")
         self.assertEqual((answer.status, "AIAA" in answer.text), (200, True))
 
+    def test_a_navigation_aborted_outright_still_hands_back_the_page(self):
+        # doi.org answers some links with the file itself and Chrome aborts the navigation
+        # (net::ERR_ABORTED); that is not a dead host, the page is the answer.
+        self.s.start()
+        page = mock.MagicMock()
+        page.goto.side_effect = browser.PlaywrightError(
+            "Page.goto: net::ERR_ABORTED at https://doi.org/10.1063/1.870872")
+        page.content.return_value = "<html><title>AIP</title></html>"
+        with mock.patch.object(self.s, "_page", return_value=page):
+            answer = self.s.page("https://doi.org/10.1063/1.870872")
+        self.assertEqual((answer.status, "AIP" in answer.text), (200, True))
+
     def test_a_gate_page_is_returned_not_raised(self):
         self.s.start()
         self.launcher.queue.append((403, "<html>__cf_chl</html>"))
@@ -167,14 +179,68 @@ class SessionTest(unittest.TestCase):
         self.launcher.queue.append(b"%PDF-1.4 body")
         self.assertTrue(self.s.download("https://x/a.pdf").startswith(b"%PDF"))
 
+    def test_a_pdf_gets_five_minutes_to_arrive(self):
+        # The wait covers the challenge being solved and a slow link alike; four seconds cut
+        # both off and sent the request context at the interstitial instead of the file.
+        self.assertEqual(browser._DOWNLOAD_WAIT, 300.0)
+
+    def test_a_download_that_starts_late_is_still_taken(self):
+        # A gated host serves the interstitial and only becomes the file once it is solved.
+        self.s.start()
+        page = mock.MagicMock()
+        page.goto.return_value = mock.Mock(status=403, headers={}, url="https://x/a.pdf")
+        state = {"solved": False, "polls": 0}
+        handlers = {}
+        page.on.side_effect = lambda name, fn: handlers.__setitem__(name, fn)
+        page.content.side_effect = lambda: ("<html>PDF viewer</html>" if state["solved"]
+                                            else "<html>Just a moment...</html>")
+
+        def wait(_ms):
+            state["polls"] += 1
+            if state["polls"] == 3:
+                state["solved"] = True
+                handlers["download"](FakeDownload(b"%PDF-1.4 late"))
+
+        page.wait_for_timeout.side_effect = wait
+        with mock.patch.object(self.s, "_page", return_value=page), \
+                mock.patch.object(browser, "_CHALLENGE_POLL", 0):
+            data = self.s.download("https://x/a.pdf")
+        self.assertTrue(data.startswith(b"%PDF"))
+        self.assertEqual(state["polls"], 3)
+        self.assertEqual(self.s._runtime.context.request.calls, [], "the file never arrived "
+                         "as a download, so the fallback must not have run")
+
+    def test_a_viewer_page_falls_back_without_burning_the_whole_wait(self):
+        # An inline-rendered PDF never fires a download; waiting the full two minutes for one
+        # would be dead time, so a document that is no longer a challenge means "read it now".
+        self.s.start()
+        page = mock.MagicMock()
+        page.goto.return_value = mock.Mock(status=200, headers={}, url="https://x/a.pdf")
+        page.content.return_value = '<html><embed type="application/pdf"></html>'
+        polls = []
+        page.wait_for_timeout.side_effect = polls.append
+        with mock.patch.object(self.s, "_page", return_value=page), \
+                mock.patch.object(browser, "_CHALLENGE_POLL", 0):
+            data = self.s.download("https://x/a.pdf")
+        self.assertTrue(data.startswith(b"%PDF"))
+        self.assertLess(len(polls), 5)
+        # The fallback keeps the patience of the download it stands in for, and the session's
+        # other waits get their default back.
+        (_url, kw), = self.s._runtime.context.request.calls
+        self.assertEqual(kw["timeout"], browser._DOWNLOAD_WAIT * 1000)
+        self.assertIsNone(self.s._runtime.context.timeout)  # None == the library default
+
     def test_a_browser_dying_mid_download_is_an_unavailable(self):
-        # A Chrome closed while `expect_download` waits raises TargetClosedError, which is a
+        # A Chrome closed while the download is awaited raises TargetClosedError, which is a
         # Playwright error and not a timeout: unmapped it leaves the typed catches behind.
         self.s.start()
         page = mock.MagicMock()
-        page.expect_download.side_effect = browser.PlaywrightError("Target page, context "
-                                                                   "or browser has been closed")
+        page.goto.return_value = mock.Mock(status=403, headers={}, url="https://x/a.pdf")
+        page.content.return_value = "<html>Just a moment...</html>"
+        page.wait_for_timeout.side_effect = browser.PlaywrightError(
+            "Target page, context or browser has been closed")
         with mock.patch.object(self.s, "_page", return_value=page), \
+                mock.patch.object(browser, "_CHALLENGE_POLL", 0), \
                 self.assertRaises(browser.Unavailable):
             self.s.download("https://x/a.pdf")
 
