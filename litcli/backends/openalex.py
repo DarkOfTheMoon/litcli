@@ -237,6 +237,7 @@ class OpenAlexBackend(HttpBackend):
         if not ids:
             return []
         results: dict[str, AcademicItem] = {}
+        first_error: BaseException | None = None
         for start in range(0, len(ids), self.BATCH):
             chunk = ids[start:start + self.BATCH]
             bare = {i.rsplit("/", 1)[-1]: i for i in chunk}
@@ -244,14 +245,20 @@ class OpenAlexBackend(HttpBackend):
                                          "per_page": len(bare)}, safe=":|")
             try:
                 data = self.fetch_json(self._with_mailto(f"{self._base}?{qs}"))
-            except (LitcliError, RuntimeError, http.client.HTTPException, OSError, ValueError):
+            except (LitcliError, RuntimeError, http.client.HTTPException, OSError,
+                    ValueError) as e:
                 # One bad batch costs only its own ids; the other batches still land.
+                first_error = first_error or e
                 continue
             for rec in data.get("results") or []:
                 key = str(rec.get("id") or "").rsplit("/", 1)[-1]
                 wanted = bare.get(key)
                 if wanted is not None and wanted not in results:
                     results[wanted] = _work_to_item(rec, self.name)
+        if not results and first_error is not None:
+            # Nothing at all came back, so the caller cannot tell "cites nothing" from "was
+            # throttled away" — and a 429 used to reach the CLI as `[no related]`.
+            raise first_error
         return [results[i] for i in ids if i in results]
 
     def _inline_works(self, key: str, field: str, limit: int = 5,

@@ -479,10 +479,27 @@ def _again_later(exc: BaseException) -> bool:
     return isinstance(exc, Unavailable)
 
 
+def _consumed(trace: list[dict]) -> set[str]:
+    """Identities a hop has taken off the frontier for good.
+
+    An ``error`` event speaks for its own hop: an identity that hop lists in ``expanded`` but
+    also errors on was not really expanded, and the next run has to try it again (a 429 burst
+    used to be written down as an expansion, so those traces stop on `saturated` at hop 0 with
+    no request at all). Tracing that is what makes an old project resumable without hand edits.
+    ``abandoned`` is the deliberate opposite: a row retried once and written off for good.
+    """
+    errored = {(str(e.get("identity")), e.get("hop"))
+               for e in trace if e.get("event") == "error"}
+    done = {str(w) for e in trace if e.get("event") == "hop_end"
+            for w in e.get("abandoned") or []}
+    done.update(str(w) for e in trace if e.get("event") == "hop_end"
+                for w in e.get("expanded") or [] if (str(w), e.get("hop")) not in errored)
+    return done
+
+
 def _frontier(seen_rows: list[dict], trace: list[dict]) -> tuple[list[dict], set[str]]:
     """Admitted works never expanded, and the identities of all expanded ones."""
-    expanded = {str(work) for event in trace if event.get("event") == "hop_end"
-                for work in event.get("expanded") or []}
+    expanded = _consumed(trace)
     return [row for row in seen_rows
             if row.get("admit") and str(row.get("identity")) not in expanded], expanded
 
@@ -577,6 +594,7 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
             batch, frontier = frontier[: int(envelope["frontier"])], frontier[int(envelope["frontier"]):]
             fresh = errored = 0
             expanded_now = []
+            abandoned_now = []
             for row in batch:
                 item = _row_item(row)
                 # The axis cells are edges read from EACH work, so a row starts with its full
@@ -602,15 +620,16 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
                     errored += 1
                     identity_now = str(row.get("identity"))
                     # A row that failed was not really expanded, so the failure must not cost
-                    # it: it goes back on the frontier for the next hop. A row the graph cannot
-                    # resolve at all (a 404, an id the source does not know) gets one retry and
-                    # is then written off, or it would run the topic to `max_hops` alone; the
-                    # write-off stays in `expanded`, so a resume does not spend another hop on
-                    # it either. `errored` keeps either case off the saturation streak below.
+                    # it: it goes back on the frontier for the next hop, and stays out of
+                    # `expanded` so an interruption does not lose it either. A row the graph
+                    # cannot resolve at all (a 404, an id the source does not know) gets one
+                    # retry and is then written off into `abandoned`, or it would run the topic
+                    # to `max_hops` alone. `errored` keeps either case off the streak below.
                     if identity_now not in retried or _again_later(e):
                         retried.add(identity_now)
                         frontier.append(row)
-                    expanded_now.append(identity_now)
+                    else:
+                        abandoned_now.append(identity_now)
                     emit("error", hop=hop, identity=identity_now, reason=str(e))
                 else:
                     expanded_now.append(str(row.get("identity")))
@@ -673,8 +692,8 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
                 streak = 0
             elif not errored:
                 streak += 1
-            emit("hop_end", hop=hop, new=fresh, expanded=expanded_now, hits=hits,
-                 charged=charged, refund=refund, errored=errored,
+            emit("hop_end", hop=hop, new=fresh, expanded=expanded_now, abandoned=abandoned_now,
+                 hits=hits, charged=charged, refund=refund, errored=errored,
                  remaining={key: counters[key] for key in ("openalex", "arxiv", "publisher")})
             project.save(survey_project)
         emit("stop", reason=stop, admitted=admitted_total)

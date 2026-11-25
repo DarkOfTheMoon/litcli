@@ -382,6 +382,29 @@ class SurveyRunTest(unittest.TestCase):
         self.assertEqual(result["stop"], "max_hops")
         self.assertTrue(all(e.get("errored") for e in hops))
 
+    def test_a_hop_that_only_errored_leaves_its_rows_unexpanded(self):
+        # An errored row is written back to the frontier in memory; `expanded` is what a
+        # resume reads, so it must not claim the row either — otherwise the interruption a 429
+        # burst usually causes is exactly what loses the row.
+        self.backend.references = raising(Unavailable("[openalex] HTTP 429"))
+        survey.run_loop(self.project, self.deps)
+        hops = [e for e in project.read_trace(self.project) if e["event"] == "hop_end"]
+        self.assertTrue(hops)
+        self.assertEqual([e["expanded"] for e in hops], [[] for _ in hops])
+        self.assertEqual([e["abandoned"] for e in hops], [[] for _ in hops])
+
+    def test_a_trace_from_before_the_fix_still_resumes(self):
+        # The broken accounting wrote 429-killed rows into `expanded`, so those projects stop on
+        # `saturated` at hop 0 with zero requests. The `error` event of the same hop is the
+        # signal that the write was a lie, and it is already in the old traces.
+        project.append_trace(self.project, {"event": "start", "hop": 0})
+        project.append_trace(self.project, {"event": "error", "hop": 1,
+                                            "identity": "doi:10.1002/seed", "reason": "429"})
+        project.append_trace(self.project, {"event": "hop_end", "hop": 1, "new": 0,
+                                            "expanded": ["doi:10.1002/seed"], "errored": 1})
+        survey.run_loop(self.project, self.deps)
+        self.assertGreater(self.backend.references_calls, 0)
+
     def test_a_dead_row_gets_one_retry_and_a_throttled_one_keeps_its_place(self):
         # `HttpError` is itself an `Unavailable`, so which of the two a row is has to be read
         # off the status: a 404 is the row's own fault and earns exactly one more hop, a 429 is
@@ -502,8 +525,10 @@ class SurveyRunTest(unittest.TestCase):
                 self.backend.references = references
                 self.assertEqual(survey.run_loop(self.project, self.deps)["stop"], "saturated")
                 trace = project.read_trace(self.project)
-                hop_end = next(e for e in trace if e["event"] == "hop_end")
-                self.assertIn("doi:10.1002/seed", hop_end["expanded"])  # not retried forever
+                hops = [e for e in trace if e["event"] == "hop_end"]
+                self.assertEqual(len(hops), 2)  # the row got its retry and no more
+                self.assertEqual(hops[0]["expanded"], [])  # a failed hop claims nothing
+                self.assertEqual(hops[1]["abandoned"], ["doi:10.1002/seed"])  # written off
                 errors = [e for e in trace if e["event"] == "error"]
                 self.assertEqual(errors[0]["identity"], "doi:10.1002/seed")
 

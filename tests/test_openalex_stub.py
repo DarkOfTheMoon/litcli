@@ -2,6 +2,7 @@
 import os
 import sys
 import unittest
+import urllib.parse
 
 import httpx
 
@@ -224,6 +225,49 @@ class OpenAlexStubTest(unittest.TestCase):
         self.be._transport = router
         items = self.be.references("10.1038/nature14539", limit=2)
         self.assertEqual([it.title for it in items], ["R2"])
+
+    def test_a_rate_limited_batch_is_not_an_empty_bibliography(self):
+        # Swallowing every batch failure kept one bad batch from costing the others, but a 429
+        # then reached the CLI as `[no related]` — the exact shape of "this work cites nothing",
+        # so the user retried nothing and the run read a throttled source as wiped.
+        class _Throttled(_Router):
+            def _handle(self, request):
+                if "filter=openalex" in str(request.url):
+                    self.urls.append(str(request.url))
+                    return httpx.Response(429, text="slow", request=request)
+                return super()._handle(request)
+
+        self.be._transport = _Throttled({}, WORK)
+        with self.assertRaises(HttpError) as cm:
+            self.be.references("10.1038/nature14539", limit=2)
+        self.assertEqual(cm.exception.status, 429)
+
+    def test_one_failed_batch_still_lets_the_others_land(self):
+        # Only when *nothing* came back does the failure surface: 50 ids of a 60-work
+        # bibliography are still a bibliography.
+        ids = [f"https://openalex.org/W{i}" for i in range(60)]
+
+        class _Half(httpx.MockTransport):
+            def __init__(self):
+                self.urls = []
+                super().__init__(self._handle)
+
+            def _handle(self, request):
+                url = str(request.url)
+                self.urls.append(url)
+                if "filter=openalex" not in url:
+                    return httpx.Response(200, json={**WORK, "referenced_works": ids},
+                                          request=request)
+                wanted = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)["filter"][0]
+                if "W59" in wanted:
+                    return httpx.Response(429, text="slow", request=request)
+                return httpx.Response(200, json={"results": [
+                    {"id": f"https://openalex.org/{w}", "display_name": w,
+                     "publication_year": 2020} for w in wanted.split(":", 1)[1].split("|")]},
+                    request=request)
+
+        self.be._transport = _Half()
+        self.assertEqual(len(self.be.references("10.1038/nature14539", limit=60)), 50)
 
     def test_citing_uses_cites_filter_sorted(self):
         # citing: single ``filter=cites:<wid>&sort=cited_by_count:desc`` request, no per-work fetch.
