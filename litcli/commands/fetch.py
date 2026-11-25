@@ -372,7 +372,24 @@ def _emit_fulltext(args, probe: _Probe) -> int:
 
     fmt = info.get("format") or "pdf"
     _announce_hit(kind, info, fmt)
-    if args.no_download or fmt == "html":
+    if args.no_download:
+        out(info["url"])
+        return 0
+    if fmt == "html" and probe.scihub_backend is not None:
+        # The user asked for a copy and allowed a public one, and a landing page is no copy:
+        # stopping on it without even asking Sci-Hub reads as the flag being ignored. Only a
+        # step that answers with a file displaces the page; the page still wins otherwise.
+        tail = fulltext_mod.resolve_fulltext(key, probe.email, tail_only=True,
+                                             scihub_backend=probe.scihub_backend)
+        for reason in tail.get("errors") or []:
+            note(f"  [skipped] {reason}")
+        if tail.get("has_fulltext") and tail.get("url") and tail.get("format") != "html":
+            note("  note: the landing page is not a file; a copy was found behind it")
+            info, kind = tail, tail["kind"]
+            _announce_meta(info, kind)
+            fmt = info.get("format") or "pdf"
+            _announce_hit(kind, info, fmt)
+    if fmt == "html":
         out(info["url"])
         return 0
 

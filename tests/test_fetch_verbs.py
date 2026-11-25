@@ -94,6 +94,33 @@ class PastedPdfUrlTest(unittest.TestCase):
         written = "".join(str(call.args[0]) for call in out.write.call_args_list)
         self.assertIn("https://x/landing", written)
 
+    def test_an_html_landing_still_gives_scihub_its_turn(self):
+        # `--scihub` is a request for a copy and a landing page is none: ending on the page
+        # without even asking Sci-Hub reads as the flag being ignored.
+        info = {"has_fulltext": True, "kind": "unpaywall", "url": "https://x/landing",
+                "format": "html"}
+        probe = self._probe(info)._replace(scihub_backend=mock.Mock())
+        tail = {"has_fulltext": True, "kind": "scihub", "url": "https://s/x.pdf", "format": "pdf"}
+        with mock.patch.object(fetch.pdfutil, "download", return_value=b"%PDF-1.4 x") as dl, \
+                mock.patch.object(fetch.fulltext_mod, "resolve_fulltext", return_value=tail) as rs, \
+                mock.patch("sys.stdout"):
+            self.assertEqual(fetch._emit_fulltext(self._args(), probe), 0)
+        self.assertTrue(rs.call_args.kwargs["tail_only"])
+        self.assertEqual(dl.call_args.args[0], "https://s/x.pdf")
+        self.assertEqual(len(os.listdir(self.tmp.name)), 1)
+
+    def test_the_landing_still_wins_when_the_tail_has_no_file(self):
+        info = {"has_fulltext": True, "kind": "unpaywall", "url": "https://x/landing",
+                "format": "html"}
+        probe = self._probe(info)._replace(scihub_backend=mock.Mock())
+        tail = {"has_fulltext": False, "errors": ["[scihub] no copy"]}
+        with mock.patch.object(fetch.fulltext_mod, "resolve_fulltext", return_value=tail) as rs, \
+                mock.patch("sys.stdout") as out:
+            self.assertEqual(fetch._emit_fulltext(self._args(), probe), 0)
+        self.assertTrue(rs.call_args.kwargs["tail_only"])
+        written = "".join(str(c.args[0]) for c in out.write.call_args_list)
+        self.assertIn("https://x/landing", written)
+
     def test_a_pdf_url_normalizes_into_a_direct_probe(self):
         probe = fetch._probe_fulltext({}, self._args(), URL)
         self.assertTrue(probe.info["direct"])
