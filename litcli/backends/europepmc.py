@@ -19,6 +19,7 @@ from .http import HttpBackend
 
 _SEARCH = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
 _FULLTEXT_XML = "https://www.ebi.ac.uk/europepmc/webservices/rest/{pmcid}/fullTextXML"
+_EDGE = "https://www.ebi.ac.uk/europepmc/webservices/rest/{source}/{id}/{edge}"
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _KEY_RE = re.compile(r"^(?:europepmc/)?((?:PMC)?\d+)$", re.I)
@@ -98,6 +99,35 @@ def result_to_item(result: dict, source: str = "europepmc") -> AcademicItem:
     )
 
 
+def _edge_to_item(row: dict, source: str) -> AcademicItem | None:
+    """One edge row (a citation record) as an item; ``None`` when it carries no identity."""
+    doi = (row.get("doi") or "").strip()
+    ident = str(row.get("id") or "")
+    title = _strip_tags(row.get("title") or "").rstrip(".")
+    if not doi and not ident and not title:
+        return None
+    src = str(row.get("source") or "MED")
+    # The key must be re-askable by ``get``/``_ident``: the renderer adds the source name in
+    # front already, so the key carries the bare identifier (PMC-prefixed where that is the id).
+    key = ident if ident.startswith("PMC") else (f"PMC{ident}" if src == "PMC" else ident)
+    return AcademicItem(
+        source=source,
+        key=doi or key,
+        title=title,
+        creators=_creators({"authorString": row.get("authorString") or ""}),
+        year=extract_year(str(row.get("pubYear") or "")),
+        doi=doi,
+        url=f"https://europepmc.org/article/{src}/{ident}" if ident else (
+            f"https://doi.org/{doi}" if doi else ""),
+        item_type="article",
+        container_title=row.get("journalAbbreviation") or "",
+        volume=str(row.get("volume") or ""),
+        issue=str(row.get("issue") or ""),
+        page=row.get("pageInfo") or "",
+        cited_by_count=row.get("citedByCount") or 0,
+    )
+
+
 class EuropePmcBackend(HttpBackend):
     """Read-only biomedical search with an open-access JATS XML fulltext hook."""
 
@@ -113,7 +143,7 @@ class EuropePmcBackend(HttpBackend):
     @property
     def capabilities(self) -> set[str]:
         # ``attachment`` stays off: the XML is a URL, not a local-store copy (same as scihub).
-        return {"read"}
+        return {"read", "refs", "citing"}
 
     def _query(self, query: str, page_size: int = 10, result_type: str = "lite") -> list[dict]:
         # pageSize > 1000 answers HTTP 200 with only {"errCode": 404} (no resultList), i.e. a
@@ -134,6 +164,54 @@ class EuropePmcBackend(HttpBackend):
             parts.append(f"PUB_YEAR:{filters['year']}")
         q = " AND ".join(p for p in parts if p) or "*"
         return [result_to_item(r, self.name) for r in self._query(q, limit)][:max(1, limit)]
+
+    def _ident(self, key: str) -> tuple[str, str] | None:
+        """``(source, id)`` for the edge endpoints: a PMID/PMCID literally, or one lookup."""
+        k = (key or "").strip()
+        if k.startswith("https://doi.org/"):
+            k = k[len("https://doi.org/"):]
+        link = _URL_RE.search(k)
+        if link:
+            k = link.group(1)
+        m = _KEY_RE.match(k)
+        if m and not k.lower().startswith("10."):
+            ident = m.group(1).upper()
+            return ("PMC", ident) if ident.startswith("PMC") else ("MED", ident)
+        if k.lower().startswith("10."):
+            found = self._query(f'DOI:"{k}"', page_size=1, result_type="core")
+            if not found:
+                return None
+            row = found[0]
+            source = str(row.get("source") or "MED")
+            ident = str(row.get("id") or row.get("pmid") or "")
+            return (source, ident) if ident else None
+        return None
+
+    def _edge(self, key: str, edge: str, box: str, slot: str, limit: int) -> list[AcademicItem]:
+        resolved = self._ident(key)
+        if resolved is None:
+            return []
+        source, ident = resolved
+        params = urllib.parse.urlencode({"format": "json",
+                                         "pageSize": min(max(1, int(limit)), 100)})
+        data = self.fetch_json(_EDGE.format(source=source, id=ident, edge=edge) + f"?{params}")
+        # The two directions are boxed differently by EBI: citations under ``citationList``,
+        # references under ``referenceList``. Reading the wrong one answers empty forever.
+        rows = ((data or {}).get(box) or {}).get(slot) or []
+        out = []
+        for row in rows:
+            item = _edge_to_item(row, self.name)
+            if item is not None:
+                out.append(item)
+            if len(out) >= limit:
+                break
+        return out
+
+    def references(self, key: str, limit: int = 5, sort_cited: bool = True) -> list[AcademicItem]:
+        return self._edge(key, "references", "referenceList", "reference", limit)
+
+    def citing(self, key: str, limit: int = 5, sort_cited: bool = True) -> list[AcademicItem]:
+        return self._edge(key, "citations", "citationList", "citation", limit)
 
     def get(self, key: str) -> AcademicItem:
         k = (key or "").strip()

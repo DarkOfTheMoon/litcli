@@ -105,7 +105,8 @@ class RenderTest(unittest.TestCase):
         self.assertIn("__fish_use_subcommand", out)
         self.assertIn("-l backend -a 'zotero arxiv crossref openalex openlibrary uspto cnki douban "
                       "scihub zlibrary doaj europepmc doab zenodo "
-                      "sciencedirect wiley springer cambridge aip acm aps iop tandf aiaa ieee'", out)
+                      "semanticscholar opencitations sciencedirect wiley springer cambridge aip acm "
+                      "aps iop tandf aiaa ieee'", out)
 
 
 

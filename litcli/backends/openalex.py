@@ -162,7 +162,8 @@ class OpenAlexBackend(HttpBackend):
 
     @property
     def capabilities(self) -> set[str]:
-        return {"read"}
+        # The only source that answers all three graph axes inline; the gates key off this.
+        return {"read", "refs", "citing", "related"}
 
 
     def _with_mailto(self, url: str) -> str:

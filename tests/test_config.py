@@ -177,9 +177,11 @@ class TestConfig(unittest.TestCase):
             self.assertIn(name, reg)
 
     def test_open_access_backends_are_read_only(self):
+        # Graph axes are reads too; what these must never claim is a write or an attachment.
         for name in ("doaj", "europepmc", "doab", "zenodo"):
             be = config.get_backend(name, config={"backends": {"zotero": {"type": "zotero_local"}}})
-            self.assertEqual(sorted(be.capabilities), ["read"], name)
+            self.assertIn("read", be.capabilities, name)
+            self.assertLessEqual(be.capabilities, {"read", "refs", "citing", "related"}, name)
 
     def test_arxiv_field_passthrough(self):
         backends = config.discover_backends({"backends": {"a": {"type": "arxiv", "max_results": 5}}})

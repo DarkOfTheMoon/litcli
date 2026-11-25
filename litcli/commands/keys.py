@@ -8,7 +8,16 @@ from __future__ import annotations
 
 import re
 
-from ..config import _registry, get_backend
+from ..backends.base import GRAPH_AXES, GraphSource, missing_axes
+from ..config import _registry, get_all_backends, get_backend
+
+#: Graph sources, best first. The keyless ones come early on purpose: the walk must survive a
+#: spent budget or a 429 on the first, and the axes decide who is even asked (crossref answers
+#: `refs` only). OpenAlex leads because its graph and metadata are the richest.
+GRAPH_PREFERENCE = ("openalex", "semanticscholar", "opencitations", "crossref", "europepmc")
+
+#: Axis name -> the ``Backend`` method that answers it (the table itself lives on the contract).
+EDGE_METHODS = GRAPH_AXES
 
 # Source prefixes the table output / export files put in front of a key.
 _SOURCE_PREFIXES = ("openalex/", "arxiv/", "crossref/", "zotero/", "scihub/")
@@ -74,6 +83,46 @@ def split_source(key: str) -> tuple[str, str]:
     if sep and rest and head in known_sources():
         return head, rest
     return "", key
+
+
+def optional_backend(name: str, cfg):
+    """A backend instance, or ``None`` when it cannot be built at all.
+
+    A section present but broken (a bad ``base``, an unknown type) raises out of
+    ``get_backend``; one unusable source must cost its axis, not the whole walk.
+    """
+    try:
+        return get_backend(name, cfg)
+    except (KeyError, RuntimeError):
+        return None
+
+
+def graph_sources(cfg: dict, backends: dict | None = None,
+                  preference=GRAPH_PREFERENCE) -> list[GraphSource]:
+    """Every source that can answer at least one graph axis, in preference order.
+
+    ``backends`` lets a caller hand its already-built registry in (the survey does); otherwise
+    they are discovered here. A source nobody configured is still included when it is keyless
+    — that is the whole point of a fallback when the first source's budget is gone.
+    """
+    from ..expansion import AXES
+
+    made = backends if backends is not None else get_all_backends(cfg)
+    out = []
+    for name in preference:
+        source = made.get(name) or optional_backend(name, cfg)
+        if source is None:
+            continue
+        caps = getattr(source, "capabilities", None)
+        # A source that declares no capability set at all is let through (test doubles do).
+        if isinstance(caps, (set, frozenset)) and not caps & set(AXES):
+            continue
+        # A source that claims an axis it never implemented would fail as an AttributeError
+        # mid-hop; dropping it here costs that source instead of the run.
+        if missing_axes(source):
+            continue
+        out.append(source)
+    return out
 
 
 def resolve_backend(cfg, explicit: str | None, key: str, fallback: str):

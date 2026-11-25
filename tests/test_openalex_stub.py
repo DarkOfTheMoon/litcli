@@ -297,13 +297,17 @@ class OpenAlexStubTest(unittest.TestCase):
         self.assertIn("sort=cited_by_count:desc", cite_url)
 
     def test_references_not_supported_on_other_backends(self):
-        # Non-openalex read-only backends raise NotSupportedError for references/citing.
+        # A source that cannot answer an axis raises instead of returning nothing, so the
+        # caller falls through to the next one (the graph commands rely on exactly this).
         from litcli.backends.base import NotSupportedError
         from litcli.backends.crossref import CrossrefBackend
-        be = CrossrefBackend(mailto="t@e.com")
+        from litcli.backends.doaj import DoajBackend
         for method in ("references", "citing"):
             with self.assertRaises(NotSupportedError):
-                getattr(be, method)("10.1/x", 5)
+                getattr(DoajBackend(), method)("10.1/x", 5)
+        # Crossref carries a deposited reference list, never a forward image.
+        with self.assertRaises(NotSupportedError):
+            CrossrefBackend(mailto="t@e.com").citing("10.1/x", 5)
 
     def test_5xx_retries_then_success(self):
         rec = stub(self.be, (500, "Server Error"), (200, RESULTS))

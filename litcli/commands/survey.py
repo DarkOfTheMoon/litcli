@@ -28,6 +28,7 @@ from .. import cache, effort, expansion, fulltext, paths, project, scoring, surv
 from ..admission import decide
 from ..aggregate import identity
 from ..backends._entitled import EntitledBackend
+from ..backends.base import GraphSource
 from ..backends.http import RETRY_CODES
 from ..browser import PlaywrightTimeoutError, session_from_config
 from ..config import get_all_backends
@@ -36,6 +37,7 @@ from ..models import AcademicItem
 from ..pdf import download as download_bytes
 from ..provenance import stamp
 from ..transport import HttpError
+from .keys import graph_sources
 
 #: Candidates the opening search may supply when the user named no seeds.
 OPENING_SEEDS = 3
@@ -255,20 +257,33 @@ class Deps:
 
     backend: Any
     resolve: Callable[[str], dict]
+    #: Graph sources in preference order. ``expand`` walks the axes over all of them; ``backend``
+    #: stays the OpenAlex one (or None) for the id lookups only it can answer.
+    graph: list[GraphSource] = field(default_factory=list)
+    #: ``name -> backend`` for stamping a candidate with the source that actually yielded it.
+    by_name: dict[str, Any] = field(default_factory=dict)
     publishers: dict = field(default_factory=dict)
     session_alive: Callable[[], bool] = lambda: True
     browser_fetch: Callable[[str], bytes] | None = None
     close: Callable[[], None] = lambda: None
     stream: Any = None
 
+    def sources(self) -> list[GraphSource]:
+        """The graph sources to walk (the single ``backend`` when a test built one directly)."""
+        if self.graph:
+            return list(self.graph)
+        return [self.backend] if self.backend is not None else []
+
 
 def deps_from_config(cfg: dict, survey_project: project.Project) -> Deps:
     """The real dependencies: configured backends, the fulltext chain, the live session."""
     backends = get_all_backends(cfg)
     backend = backends.get("openalex")
-    if backend is None:
-        raise BadInput("a survey walks the citation graph, which only openalex supplies; "
-                       "configure [backends.openalex]")
+    graph = graph_sources(cfg, backends)
+    if not graph:
+        raise BadInput("a survey walks the citation graph and no source supplies one; enable "
+                       "[backends.openalex], [backends.semanticscholar], [backends.opencitations],"
+                       " [backends.crossref] or [backends.europepmc]")
     publishers = {name: b for name, b in backends.items() if isinstance(b, EntitledBackend)}
     session = next((b.session for b in publishers.values() if b.session is not None), None)
     if session is None:
@@ -287,6 +302,7 @@ def deps_from_config(cfg: dict, survey_project: project.Project) -> Deps:
                                          scihub_backend=backends.get("scihub"))
 
     return Deps(backend=backend, resolve=resolve, publishers=publishers,
+                graph=graph, by_name={b.name: b for b in graph},
                 session_alive=_session_alive(session) if session is not None else (lambda: True),
                 browser_fetch=session.download if session is not None else None,
                 # `terminate`, not `close`: a run that started a browser has to stop it, or
@@ -621,7 +637,7 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
                 try:
                     # Pulled eagerly: a failing axis must keep the candidates already handed
                     # back, and one unexpandable row must not take the rest of the hop with it.
-                    for pair in expansion.expand(item, deps.backend, envelope, counters):
+                    for pair in expansion.expand(item, deps.sources(), envelope, counters):
                         pairs.append(pair)
                 except (LitcliError, KeyError, ValueError, TypeError) as e:
                     # KeyError is a 200 with no body, ValueError a 200 that is not JSON at all;
@@ -648,7 +664,7 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
                 counters["openalex"] -= overspend
                 charged += overspend
                 for candidate, axis in pairs:
-                    stamp([candidate], deps.backend)
+                    stamp([candidate], deps.by_name.get(candidate.source) or deps.sources()[0])
                     total, parts = scoring.score(candidate, survey_project, collected, trace)
                     candidate.extra["score"] = total
                     verdict = decide(candidate, survey_project, seen, fresh, caps)

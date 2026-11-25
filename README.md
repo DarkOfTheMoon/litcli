@@ -101,7 +101,7 @@ shell 补全只有 bash/zsh/fish（PowerShell 下可在 Git Bash 里生成）。
 | 命令 | 说明 |
 |---|---|
 | `litcli search "X" [--all] [--backend B] [--type T] [--limit N] [--no-cite]` | 检索候选（`--format table\|json\|csl`）；`--no-cite` 不在表格里附行内引文；字段过滤与排序见下节 |
-| `litcli refs <key>` / `citing <key>` / `related <key>`（均可 `--limit N`、`--sort cited`、`--format table\|json\|csl`） | 参考文献（回溯奠基）／引用该文的文献（前向跟进）／语义邻居（OpenAlex 图谱；该文没有邻居列表时退回按标题实词检索并标注） |
+| `litcli refs <key>` / `citing <key>` / `related <key>`（均可 `--limit N`、`--sort cited`、`--format table\|json\|csl`） | 参考文献（回溯奠基）／引用该文的文献（前向跟进）／语义邻居；按 openalex → semanticscholar → opencitations → crossref → europepmc 依次问，前一个被限流就明说 `[skipped]` 并换下一个，`--backend` 或 `源/` 前缀可钉死一个源；该文没有邻居列表时退回按标题实词检索并标注 |
 | `litcli data get <key> [--format table\|json\|csl]` | 单条全字段 |
 | `litcli export <key>... [--format csljson\|bibtex\|ris\|text] [--no-cite]` | 导出引文；`csljson` 可喂 `pandoc --citeproc`；`--no-cite` 只对 `text` 生效。arXiv key 仅在 `--backend openalex\|crossref` 下归一为 DOI |
 | `litcli fetch <DOI 或出版社文章 URL> [--out DIR] [--no-download] [--lines N] [--email ADDR] [--scihub]`（旧动词 `fetch fulltext <doi>`、旧旗标 `--download` 仍接受） | 保存全文：本地库 → Unpaywall → OpenAlex → Europe PMC → Zenodo → 各出版社订阅副本（按其 DOI 前缀自动尝试，见下表）→ 落地页；`--lines` 顺带预览正文前 N 行，`--email` 作为 Unpaywall/OpenAlex 礼貌池的联系邮箱 |
@@ -177,7 +177,8 @@ CNKI / 豆瓣另需浏览器依赖。
 |---|---|---|---|
 | `zotero` | 读 / 写 / 附件 | 你的本机库 | 本地 API，写库一次授权 |
 | `arxiv` · `crossref` · `openalex` | 读（arxiv 另给 PDF 直链） | 开放，免 key | 元数据；arxiv / openalex 按 IP 限速并已退避 |
-| `doaj` · `europepmc` · `doab` · `zenodo` | 读 | 开放获取（OA），免 key | 公开 OA 记录；europepmc 给 JATS XML、zenodo 给开放文件 |
+| `doaj` · `europepmc` · `doab` · `zenodo` | 读 | 开放获取（OA），免 key | 公开 OA 记录；europepmc 给 JATS XML、zenodo 给开放文件，并答引文图谱的两个方向 |
+| `semanticscholar` · `opencitations` | 读 | 开放，免 key | 引文图谱：S2 答三方向（含推荐即语义邻居，配 `api_key` 提速率）、COCI 只答引用/被引的 DOI 对（CC0）；两者都**不进** `--all` 扇出，用 `--backend` 或在图谱命令里作为兜底 |
 | `openlibrary` · `uspto` | 读 | 开放（uspto 需免费 key） | 图书题录 / 专利全文；默认不内置 |
 | `cnki` | 读 | 知网网页 | 公开**题录**，不抓付费墙全文；需可见浏览器、人工过滑块 |
 | `douban` | 读 | 豆瓣网页 | 公开**书目**（书名/作者/ISBN/版次/页数），默认无头 |

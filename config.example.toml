@@ -212,6 +212,15 @@ type = "doab"
 [backends.zenodo]                  # Zenodo 开放数据集/软件/预印本(文件可直接下载)
 type = "zenodo"
 
+# 引文图谱的兜底源(均为只读、免 key、无需配置即可参与 refs/citing/related 的降级链;
+# 它们不进 `search` 的全量扇出,要搜它们得写 --backend)。OpenAlex 的日额度耗尽(429
+# `Insufficient budget`,按出口 IP 共享)时,这两个源接着答,不会被前一个拖死。
+[backends.semanticscholar]         # Semantic Scholar 图谱 API:references/citations/recommendations 三方向
+type = "semanticscholar"
+# api_key = "***"                  # 可选:免费申请,免共享池的重度限流(请求头 x-api-key)
+[backends.opencitations]           # OpenCitations COCI:CC0 的引用/被引 DOI 对(只答两个方向,无题录)
+type = "opencitations"
+
 # 可选:统一代理(校园/VPN 访问海外学术源)。留空则默认读环境变量 HTTP_PROXY / HTTPS_PROXY。
 [network]
 # proxy = "http://127.0.0.1:7890"

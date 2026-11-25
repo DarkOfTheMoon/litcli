@@ -104,5 +104,48 @@ class CrossrefStubTest(unittest.TestCase):
         self.assertIn("404", str(ctx.exception))
 
 
+REF_MSG = {"message": {
+    "DOI": "10.1/seed",
+    "reference": [
+        {"key": "r1", "DOI": "10.1/foundation", "article-title": "A foundation",
+         "journal-title": "Renewable Energy", "year": "1999", "author": "Doe, J."},
+        {"key": "r2", "article-title": "No DOI here", "unstructured": "Smith 2001, some journal"},
+    ],
+}}
+
+
+class CrossrefReferencesTest(unittest.TestCase):
+    """The backward axis Crossref can answer: the reference list the publisher deposited."""
+
+    def setUp(self):
+        self.be = CrossrefBackend()
+        speed_up(self.be)
+
+    def test_the_deposited_reference_list_becomes_items(self):
+        stubr = stub(self.be, (200, REF_MSG))
+        out = self.be.references("10.1/seed", limit=5)
+        self.assertIn("/works/10.1%2Fseed", stubr.urls[0])
+        self.assertEqual([(i.doi, i.title) for i in out],
+                         [("10.1/foundation", "A foundation"), ("", "No DOI here")])
+        self.assertEqual(out[0].container_title, "Renewable Energy")
+
+    def test_a_row_with_neither_a_doi_nor_a_title_is_skipped(self):
+        msg = {"message": {"reference": [{"key": "r1"}, {"DOI": "10.1/kept"}]}}
+        stub(self.be, (200, msg))
+        self.assertEqual([i.doi for i in self.be.references("10.1/seed")], ["10.1/kept"])
+
+    def test_the_limit_truncates(self):
+        stub(self.be, (200, REF_MSG))
+        self.assertEqual(len(self.be.references("10.1/seed", limit=1)), 1)
+
+    def test_a_deposit_without_references_answers_empty(self):
+        stub(self.be, (200, {"message": {"DOI": "10.1/seed"}}))
+        self.assertEqual(self.be.references("10.1/seed"), [])
+
+    def test_there_is_no_forward_axis(self):
+        self.assertIn("refs", self.be.capabilities)
+        self.assertNotIn("citing", self.be.capabilities)
+
+
 if __name__ == "__main__":
     unittest.main()

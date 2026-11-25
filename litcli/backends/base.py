@@ -8,9 +8,52 @@ NotSupportedError.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Protocol, runtime_checkable
 
 from ..errors import Unsupported
 from ..models import AcademicItem
+
+#: Citation-graph axes, and the method that answers each. A source declares the axes it answers
+#: in ``capabilities``; the walk only ever asks a declared one. One table, because the axis name
+#: and the method name are two spellings of the same thing.
+GRAPH_AXES = {"refs": "references", "citing": "citing", "related": "related"}
+
+
+@runtime_checkable
+class GraphSource(Protocol):
+    """What a source must offer to be asked a citation-graph axis.
+
+    The walk needs no more than this: an identity to stamp rows with, a declaration of which
+    axes it answers, and those methods. It is structural on purpose — every graph source is
+    also a ``Backend`` today, and the protocol is only the part the walk relies on, so a
+    mis-declared source is caught as a shape mismatch instead of an ``AttributeError`` deep in
+    a hop.
+    """
+
+    name: str
+    capabilities: set[str]
+
+    def references(self, key: str, limit: int = 5, sort_cited: bool = True) -> list[AcademicItem]:
+        ...
+
+    def citing(self, key: str, limit: int = 5, sort_cited: bool = True) -> list[AcademicItem]:
+        ...
+
+    def related(self, key: str, limit: int = 5, sort_cited: bool = False) -> list[AcademicItem]:
+        ...
+
+
+def missing_axes(source) -> set[str]:
+    """Axes ``source`` declares but has no method for: a broken source, not an empty one.
+
+    A source whose ``capabilities`` is not a real set (a hand-rolled double, a mock) is taken
+    at face value — the axis gate needs an iterable, not a specific type.
+    """
+    caps = getattr(source, "capabilities", None)
+    if not isinstance(caps, (set, frozenset)):
+        return set()
+    return {axis for axis, method in GRAPH_AXES.items()
+            if axis in caps and not callable(getattr(source, method, None))}
 
 
 class NotSupportedError(Unsupported, NotImplementedError):

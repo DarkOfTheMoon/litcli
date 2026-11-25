@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from litcli import project, survey_events
 from litcli.commands import survey
-from litcli.errors import BotWall, NotFound, Unavailable
+from litcli.errors import BadInput, BotWall, NotFound, Unavailable
 from litcli.models import AcademicItem
 from litcli.transport import HttpError
 from tests.fake_browser import FakeSession
@@ -38,15 +38,16 @@ class FakeDiscovery:
     """An OpenAlex-shaped source: one candidate, answered for every expansion."""
 
     name = "openalex"
-    capabilities: ClassVar[set[str]] = {"read"}
+    capabilities: ClassVar[set[str]] = {"read", "refs", "citing", "related"}
 
-    def __init__(self):
+    def __init__(self, name="openalex"):
+        self.name = name
         self.references_calls = 0
         self.citing_calls = 0
         self.related_calls = 0
 
     def _candidate(self):
-        return AcademicItem(source="openalex", key="W1", doi="10.1002/x", title="A candidate",
+        return AcademicItem(source=self.name, key="W1", doi="10.1002/x", title="A candidate",
                             year="2020", cited_by_count=40,
                             extra={"openalex_type": "article", "referenced_works": []})
 
@@ -61,6 +62,15 @@ class FakeDiscovery:
     def related(self, key, limit=5):
         self.related_calls += 1
         return []
+
+
+class WalledDiscovery(FakeDiscovery):
+    """The preferred source while its budget is spent: every axis answers 429."""
+
+    def references(self, key, limit=5):
+        raise Unavailable("[openalex] HTTP 429: Too Many Requests")
+
+    citing = related = references
 
 
 class FakePublisher:
@@ -127,6 +137,65 @@ class DepsFromConfigTest(unittest.TestCase):
         self.assertTrue(deps.session_alive())  # and starting it is the first check's job
         self.assertEqual(session.starts, 1)
         self.assertEqual(deps.browser_fetch("https://e.test/x.pdf"), b"%PDF-1.4\nbrowser\n")
+
+    def test_the_graph_sources_follow_a_fixed_preference(self):
+        # OpenAlex first (it has the richest graph), then the services that can stand in when
+        # its shared budget is gone: S2's graph, then the CC0 link service, then the deposits.
+        seen: list[str] = []
+
+        def optional(name, cfg):
+            seen.append(name)
+            made = mock.Mock()
+            made.name = name
+            return made
+
+        with mock.patch("litcli.commands.keys.optional_backend", optional), \
+                mock.patch.object(survey, "session_from_config", lambda cfg: None):
+            graph = {}
+            for label in ("openalex", "crossref"):
+                graph[label] = mock.Mock()
+                graph[label].name = label
+            deps = self.build({}, graph)
+        self.assertEqual([b.name for b in deps.sources()],
+                         ["openalex", "semanticscholar", "opencitations", "crossref",
+                          "europepmc"])
+        self.assertEqual(seen, ["semanticscholar", "opencitations", "europepmc"])
+
+    def test_a_source_claiming_an_axis_it_never_implemented_is_dropped(self):
+        # Otherwise the first hop dies on an AttributeError, which used to escape the run.
+        class Broken:
+            name = "semanticscholar"
+            capabilities = frozenset({"read", "refs"})
+
+        with mock.patch("litcli.commands.keys.optional_backend", lambda name, cfg: None), \
+                mock.patch.object(survey, "session_from_config", lambda cfg: None):
+            deps = self.build({}, {"openalex": FakeDiscovery(), "semanticscholar": Broken()})
+        self.assertEqual([b.name for b in deps.sources()], ["openalex"])
+
+    def test_a_keyless_graph_source_participates_unconfigured(self):
+        # Nothing configured but crossref: S2 and OpenCitations are keyless, so the walk still
+        # has a graph instead of dying on the 429 of a source nobody can now reach.
+        def optional(name, cfg):
+            if name != "semanticscholar":
+                return None
+            made = mock.Mock()
+            made.name = name
+            return made
+
+        with mock.patch("litcli.commands.keys.optional_backend", optional), \
+                mock.patch.object(survey, "session_from_config", lambda cfg: None):
+            only = mock.Mock()
+            only.name = "crossref"
+            deps = self.build({}, {"crossref": only})
+        self.assertIsNone(deps.backend)
+        self.assertEqual([b.name for b in deps.sources()], ["semanticscholar", "crossref"])
+
+    def test_no_graph_source_at_all_is_an_error_that_names_them(self):
+        with mock.patch("litcli.commands.keys.optional_backend", lambda name, cfg: None), \
+                mock.patch.object(survey, "session_from_config", lambda cfg: None), \
+                self.assertRaises(BadInput) as caught:
+            self.build({}, {})
+        self.assertIn("semanticscholar", str(caught.exception))
 
     def test_the_run_stops_the_browser_it_started(self):
         # A survey run is one of many, and `close` only detaches: left at that, every run
@@ -238,6 +307,24 @@ class SurveyRunTest(unittest.TestCase):
         self.seed_trace_with_one_expanded_hop()
         survey.run_loop(self.project, self.deps)
         self.assertEqual(self.backend.references_calls, 1)
+
+    def test_a_walled_source_hands_the_hop_to_the_next_one(self):
+        # The whole point of the chain: a spent budget on the first source is not the hop's end.
+        walled, good = WalledDiscovery(), FakeDiscovery("semanticscholar")
+        self.deps.graph, self.deps.by_name = [walled, good], {"semanticscholar": good}
+        survey.run_loop(self.project, self.deps)
+        row = self.seen_for("10.1002/x")
+        self.assertEqual(row["source"], "semanticscholar")
+        ends = [e for e in project.read_trace(self.project) if e.get("event") == "hop_end"]
+        self.assertEqual(ends[0]["errored"], 0)
+
+    def test_a_row_where_every_source_walled_keeps_its_place(self):
+        self.deps.graph = [WalledDiscovery()]
+        survey.run_loop(self.project, self.deps)
+        ends = [e for e in project.read_trace(self.project) if e.get("event") == "hop_end"]
+        self.assertEqual((ends[0]["errored"], ends[0]["expanded"]), (1, []))
+        self.assertFalse([r for r in project.read_seen(self.project)
+                          if r.get("identity") == "doi:10.1002/x"])
 
     def test_a_run_that_landed_a_copy_exits_0(self):
         with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):

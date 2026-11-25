@@ -49,11 +49,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     for name, help_ in (("refs", "references (bibliography): works cited by this item, look backward for foundations"),
                         ("citing", "works citing this item (forward tracking, by citation count desc)"),
-                        ("related", "semantically related works (OpenAlex related_works, neighbors)")):
+                        ("related", "semantically related works (OpenAlex neighbours, S2 recommendations)")):
         pg = sub.add_parser(name, help=help_)
         pg.add_argument("key")
         pg.add_argument("--backend", default=None,
-                        help="backend (default openalex; only openalex implements it; "
+                        help="pin one source (default: openalex, then the other graph sources; "
                              "a 'source/key' prefix also selects it)")
         pg.add_argument("--limit", type=int, default=5)
         pg.add_argument("--format", choices=["table", "json", "csl"], default="table")

@@ -96,7 +96,7 @@ class CrossrefBackend(HttpBackend):
 
     @property
     def capabilities(self) -> set[str]:
-        return {"read"}
+        return {"read", "refs"}
 
 
     def search(self, query: str, limit: int = 10, filters: dict | None = None) -> list[AcademicItem]:
@@ -114,6 +114,36 @@ class CrossrefBackend(HttpBackend):
         data = self.fetch_json(f"{self._base}?{urllib.parse.urlencode(params)}")
         items = data.get("message", {}).get("items") or []
         return [_item_to_academic(i, self.name) for i in items]
+
+    def references(self, key: str, limit: int = 5, sort_cited: bool = True) -> list[AcademicItem]:
+        """The works ``key`` cites, from the reference list the publisher deposited.
+
+        Only the backward direction exists: Crossref has no cited-by endpoint. Entries carry a
+        ``DOI`` when the publisher stored one; the rest keep their unstructured text as the
+        title, which is still enough to score and to show.
+        """
+        doi = urllib.parse.quote(key, safe="")
+        data = self.fetch_json(f"{self._base}/{doi}")
+        refs = (data.get("message") or {}).get("reference") or []
+        out = []
+        for ref in refs:
+            ref_doi = (ref.get("DOI") or "").strip()
+            title = (ref.get("article-title") or ref.get("unstructured") or "").strip()
+            if not ref_doi and not title:
+                continue
+            out.append(AcademicItem(
+                source=self.name,
+                key=ref_doi or title,
+                title=title,
+                doi=ref_doi,
+                url=f"https://doi.org/{ref_doi}" if ref_doi else "",
+                container_title=(ref.get("journal-title") or "").strip(),
+                year=str(ref.get("year") or ""),
+                item_type="article",
+            ))
+            if len(out) >= limit:
+                break
+        return out
 
     def get(self, key: str) -> AcademicItem:
         doi = urllib.parse.quote(key, safe="")

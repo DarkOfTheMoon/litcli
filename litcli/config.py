@@ -85,7 +85,8 @@ _OPTIONAL_BACKENDS = (
     ("openlibrary", "OpenLibraryBackend"), ("uspto", "UsptoBackend"), ("cnki", "CnkiBackend"),
     ("douban", "DoubanBackend"), ("scihub", "ScihubBackend"), ("zlibrary", "ZlibraryBackend"),
     ("doaj", "DoajBackend"), ("europepmc", "EuropePmcBackend"), ("doab", "DoabBackend"),
-    ("zenodo", "ZenodoBackend"),
+    ("zenodo", "ZenodoBackend"), ("semanticscholar", "SemanticScholarBackend"),
+    ("opencitations", "OpenCitationsBackend"),
 )
 
 

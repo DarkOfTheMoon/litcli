@@ -99,5 +99,75 @@ class EuropePmcStubTest(unittest.TestCase):
             self.be.get("10.1/absent")
 
 
+SEED = {"resultList": {"result": [{"id": "30693666", "source": "MED", "doi": "10.1/seed",
+                                      "title": "Seed", "pubYear": "2019"}]}}
+REFERENCE = {"referenceList": {"reference": [
+    {"id": "28963611", "source": "MED", "doi": "10.1/foundation", "title": "Sexual dimorphism.",
+     "authorString": "Jaillon S.", "pubYear": "2018"},
+]}}
+CITATION = {"citationList": {"citation": [
+    {"id": "41858289", "source": "MED", "doi": "10.1/citing", "title": "A citing paper.",
+     "authorString": "Ke C, Hu W.", "journalAbbreviation": "J Leukoc Biol", "pubYear": "2026",
+     "volume": "118", "issue": "4", "pageInfo": "qiag041", "citedByCount": 3},
+]}}
+
+
+class EdgeTest(unittest.TestCase):
+    """The two directional axes: Europe PMC serves them for the records it indexes."""
+
+    def setUp(self):
+        self.be = EuropePmcBackend()
+        speed_up(self.be)
+        self.addCleanup(self.be.close)
+
+    def test_both_directions_are_declared(self):
+        self.assertTrue({"read", "refs", "citing"} <= self.be.capabilities)
+
+    def test_citing_resolves_the_record_then_asks_the_citations_endpoint(self):
+        rec = stub(self.be, (200, SEED), (200, CITATION))
+        out = self.be.citing("10.1/seed", limit=5)
+        self.assertTrue(any("/MED/30693666/citations" in u for u in rec.urls))
+        self.assertEqual([(i.doi, i.title) for i in out],
+                         [("10.1/citing", "A citing paper")])
+        self.assertEqual(out[0].container_title, "J Leukoc Biol")
+
+    def test_references_reads_its_own_endpoint_and_container(self):
+        # EBI wraps the two directions differently: references live under ``referenceList``,
+        # so reading ``citationList`` there answers empty forever.
+        rec = stub(self.be, (200, SEED), (200, REFERENCE))
+        out = self.be.references("10.1/seed")
+        self.assertTrue(any("/MED/30693666/references" in u for u in rec.urls))
+        self.assertEqual([(i.doi, i.title) for i in out],
+                         [("10.1/foundation", "Sexual dimorphism")])
+
+    def test_an_unresolvable_key_answers_empty(self):
+        stub(self.be, (200, {"resultList": {"result": []}}))
+        self.assertEqual(self.be.citing("10.1/nothing"), [])
+
+    def test_the_limit_truncates(self):
+        stub(self.be, (200, SEED), (200, CITATION))
+        self.assertEqual(len(self.be.citing("10.1/seed", limit=1)), 1)
+
+    def test_a_pmc_sourced_row_keys_as_a_pmcid(self):
+        row = {"id": "7654321", "source": "PMC", "title": "An OA paper."}
+        stub(self.be, (200, {"citationList": {"citation": [row]}}))
+        out = self.be.citing("30693666")
+        self.assertEqual(out[0].key, "PMC7654321")
+        rec = stub(self.be, (200, {"citationList": {"citation": []}}))
+        self.be.citing(out[0].key)
+        self.assertTrue(any("/PMC/PMC7654321/citations" in u for u in rec.urls))
+
+    def test_an_edge_row_keeps_an_id_get_can_take_back(self):
+        # Rows without a DOI fall back to the identifier, and that key must be re-askable —
+        # the renderer already puts the source name in front, so the key must not repeat it.
+        row = {"id": "41858289", "source": "MED", "title": "A citing paper."}
+        stub(self.be, (200, {"citationList": {"citation": [row]}}))
+        out = self.be.citing("30693666")
+        self.assertEqual(out[0].key, "41858289")
+        rec = stub(self.be, (200, {"citationList": {"citation": []}}))
+        self.be.citing(out[0].key)
+        self.assertTrue(any("/MED/41858289/citations" in u for u in rec.urls))
+
+
 if __name__ == "__main__":
     unittest.main()

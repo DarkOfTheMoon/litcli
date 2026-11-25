@@ -12,9 +12,9 @@ description: 用 litcli 与用户的学术资料互操作——检索、读取�
 ## 一条检索怎么走
 
 1. **先看用户自己的库**：`litcli search "关键词" --backend zotero`（不带 `--backend` 时是全部来源一起搜，本机库只是其中之一）。
-2. **库里没有才外扩**：`litcli search "关键词"` 默认就跨全部已配置来源 + 免 key 的 OA 语料聚合（去重/合并，`extra["sources"]` 标来源），或用 `--backend arxiv|crossref|openalex|doaj|europepmc|doab|zenodo` 指定开放源；中文文献用 `--backend cnki`，中文图书用 `--backend douban`。
+2. **库里没有才外扩**：`litcli search "关键词"` 默认就跨全部已配置来源 + 免 key 的 OA 语料聚合（去重/合并，`extra["sources"]` 标来源），或用 `--backend arxiv|crossref|openalex|doaj|europepmc|doab|zenodo|semanticscholar` 指定开放源；中文文献用 `--backend cnki`，中文图书用 `--backend douban`。
 3. **收敛**：`--type article` 降噪，`--title/--author/--year/--container` 字段级过滤，`--sort cited` 按被引降序。结果只是候选，**引用前核对题名/作者/年份**，不要把摘要当结论。
-4. **顺藤摸瓜**：`refs`（回溯奠基）／`citing`（前向跟进）／`related`（语义邻居）——都基于 OpenAlex 引文图谱。
+4. **顺藤摸瓜**：`refs`（回溯奠基）／`citing`（前向跟进）／`related`（语义邻居）——走引文图谱，先 openalex，被限流就逐个换 semanticscholar / opencitations / crossref / europepmc（前一个失败会明说 `[skipped]`）。
 5. **落盘**：要入库走 `data add`（先查重、经确认）；只要引文走 `export --format csljson`（喂 `pandoc --citeproc`）；要全文走 `fetch <doi|arXiv id>`（默认落盘，stdout 只有路径；要正文且合法源拿不到时加 `--scihub`）。
 6. **拿不到就说拿不到**：每条结论必须落到可追溯的条目（DOI / 来源 / key），不编造题录。
 
@@ -28,9 +28,9 @@ description: 用 litcli 与用户的学术资料互操作——检索、读取�
 | 任务 | 命令 | 读写 |
 |---|---|---|
 | 检索候选 | `litcli search "关键词" [--all] [--limit N] [--type article] [--title ..] [--author ..] [--year ..] [--container ..] [--sort cited]` | 只读 |
-| 参考文献(回溯) | `litcli refs <key> [--limit N] [--backend openalex]` 该文所引文献,按被引降序(奠基在前) | 只读 |
-| 引用该文(前向) | `litcli citing <key> [--limit N] [--backend openalex]` 引用该文的文献,按被引降序(跟进在前) | 只读 |
-| 语义相关 | `litcli related <key> [--limit N] [--backend openalex]` OpenAlex `related_works` 邻居;该文无邻居列表时退回标题实词检索(`extra["related_via"]=keyword`);不支持的只读后端 `[skipped]` 退出码 2 | 只读 |
+| 参考文献(回溯) | `litcli refs <key> [--limit N] [--backend openalex\|semanticscholar\|opencitations\|crossref]` 该文所引文献,按被引降序(奠基在前);默认按 openalex → semanticscholar → opencitations → crossref → europepmc 逐个问,前一个被限流就 `[skipped]` 换下一个 | 只读 |
+| 引用该文(前向) | `litcli citing <key> [--limit N] [--backend openalex\|semanticscholar\|opencitations\|europepmc]` 引用该文的文献,按被引降序(跟进在前);兜底顺序同上(crossref 只存参考文献,不答前向) | 只读 |
+| 语义相关 | `litcli related <key> [--limit N] [--backend openalex\|semanticscholar]` OpenAlex `related_works` / S2 推荐的邻居;该文无邻居列表时退回标题实词检索(`extra["related_via"]=keyword`);不支持的只读后端 `[skipped]` 退出码 2 | 只读 |
 | 单条全字段 | `litcli data get <key> [--format table\|json\|csl]`（默认 `table`） | 只读 |
 | 导出引文 | `litcli export <key> [--format csljson\|bibtex\|ris\|text]`（arXiv key 如 `arxiv/1806.09180` 在 `--backend openalex\|crossref` 下归一为 DOI；csljson/bibtex 含期刊名/卷/页/出版社） | 只读 |
 | 定位全文 | `litcli fetch <doi\|arXiv id\|出版社文章 URL/PII> [--out DIR] [--no-download] [--scihub]`（旧写法 `fetch fulltext <doi>` 仍认；URL 形态覆盖 ScienceDirect / Wiley / Springer / Cambridge / AIP / ACM / APS / IOP / Taylor & Francis / AIAA / IEEE） 本地→OA→对应出版社订阅副本（按 DOI 前缀自动试，凭机构订阅；金 OA 免配置）默认落盘；加 `--scihub` 才兜底公开副本(会标注) | 只读 |
