@@ -101,7 +101,7 @@ shell 补全只有 bash/zsh/fish（PowerShell 下可在 Git Bash 里生成）。
 | 命令 | 说明 |
 |---|---|
 | `litcli search "X" [--all] [--backend B] [--type T] [--limit N] [--no-cite]` | 检索候选（`--format table\|json\|csl`）；`--no-cite` 不在表格里附行内引文；字段过滤与排序见下节 |
-| `litcli refs <key>` / `citing <key>` / `related <key>`（均可 `--limit N`、`--sort cited`、`--format table\|json\|csl`） | 参考文献（回溯奠基）／引用该文的文献（前向跟进）／语义邻居；按 openalex → semanticscholar → opencitations → crossref → europepmc 依次问，前一个被限流就明说 `[skipped]` 并换下一个，`--backend` 或 `源/` 前缀可钉死一个源；该文没有邻居列表时退回按标题实词检索并标注 |
+| `litcli refs <key>` / `citing <key>` / `related <key>`（均可 `--limit N`、`--sort cited`、`--format table\|json\|csl`） | 参考文献（回溯奠基）／引用该文的文献（前向跟进）／语义邻居；按 openalex → semanticscholar → opencitations → crossref → europepmc 依次问；`refs` 与 `related` 会把其余能答的源接着问完、按身份去重补到 `--limit`（`citing` 只取第一个答案，引文索引重叠太高），被限流就明说 `[skipped]` 换下一个，`--backend` 或 `源/` 前缀钉死一个源、不再补；该文没有邻居列表时退回按标题实词检索并标注 |
 | `litcli data get <key> [--format table\|json\|csl]` | 单条全字段 |
 | `litcli export <key>... [--format csljson\|bibtex\|ris\|text] [--no-cite]` | 导出引文；`csljson` 可喂 `pandoc --citeproc`；`--no-cite` 只对 `text` 生效。arXiv key 仅在 `--backend openalex\|crossref` 下归一为 DOI |
 | `litcli fetch <DOI 或出版社文章 URL> [--out DIR] [--no-download] [--lines N] [--email ADDR] [--scihub]`（旧动词 `fetch fulltext <doi>`、旧旗标 `--download` 仍接受） | 保存全文：本地库 → Unpaywall → OpenAlex → Europe PMC → Zenodo → 各出版社订阅副本（按其 DOI 前缀自动尝试，见下表）→ 落地页；`--lines` 顺带预览正文前 N 行，`--email` 作为 Unpaywall/OpenAlex 礼貌池的联系邮箱 |

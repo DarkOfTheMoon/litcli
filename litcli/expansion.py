@@ -109,28 +109,36 @@ def expand(item: AcademicItem, sources: Sequence[GraphSource], caps: dict,
     handed = False
     for axis in AXES:
         room = min(int(caps.get(axis, 0)), int(counters.get(axis, 0)))
-        for source in sources:
+        askers = [s for s in sources
+                  if axis in getattr(s, "capabilities", set()) and target_for(s, item)]
+        for index, source in enumerate(askers):
             if room <= 0:
                 break
-            if axis not in getattr(source, "capabilities", set()):
-                continue
+            # The ask is shared out rather than first-come-first-served: one source's full
+            # bibliography would otherwise spend the whole room and the rest never get asked.
+            # Shares are rounded up so none goes to zero, and a short answer hands its leftover
+            # to the next source instead of losing it.
+            share = -(-room // (len(askers) - index))
             target = target_for(source, item)
-            if not target:
-                continue
             try:
-                found = getattr(source, GRAPH_AXES[axis])(target, limit=room)
+                found = getattr(source, GRAPH_AXES[axis])(target, limit=share)
             except NotSupportedError:
                 continue
             except (LitcliError, RuntimeError, AttributeError, KeyError, ValueError) as e:
                 failed = failed or e
                 continue
+            # ``share`` is also the per-source ceiling, so a source that ignores ``limit``
+            # cannot eat the next one's ration. Only handed rows count: a duplicate costs the
+            # share nothing, or a heavily overlapping source would spend it on repeats.
+            taken = 0
             for candidate in list(found):
-                if room <= 0:
+                if room <= 0 or taken >= share:
                     break
                 mine = identity(candidate)
                 if mine in seen:
                     continue
                 seen.add(mine)
+                taken += 1
                 room -= 1
                 counters[axis] = int(counters.get(axis, 0)) - 1
                 handed = True

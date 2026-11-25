@@ -121,20 +121,23 @@ class DupeSource(FakeBackend):
 
 class MultiSourceTest(unittest.TestCase):
     def test_sources_are_asked_in_order_for_the_room_left(self):
-        first, second = FakeBackend(), SourceSpy()
+        first, second = FakeBackend(), OwnKeys()
         first.counts = {"refs": 1, "citing": 0, "related": 0}
         second.counts = {"refs": 3, "citing": 0, "related": 0}
         out = list(expansion.expand(item("seed", 0), [first, second], CAPS, dict(CAPS)))
-        self.assertEqual([it.key for it, _a in out], ["refs0", "refs1", "refs2"])
-        self.assertEqual([c for c in first.calls if c[0] == "refs"], [("refs", 3)])
-        self.assertEqual([c for c in second.calls if c[0] == "refs"], [("refs", 2)])  # what was left
+        # The room is shared out, so the second source still gets asked once the first is short.
+        self.assertEqual([it.key for it, _a in out],
+                         ["refs0", "semanticscholar-refs0", "semanticscholar-refs1"])
+        self.assertEqual([c for c in first.calls if c[0] == "refs"], [("refs", 2)])
+        self.assertEqual([c for c in second.calls if c[0] == "refs"], [("refs", 2)])
 
     def test_the_same_work_from_two_sources_is_yielded_once(self):
         first, dupes = FakeBackend(), DupeSource()
         first.counts = {"refs": 3, "citing": 0, "related": 0}
         dupes.counts = {"refs": 2, "citing": 0, "related": 0}
         out = list(expansion.expand(item("seed", 0), [first, dupes], CAPS, dict(CAPS)))
-        self.assertEqual([it.key for it, _a in out], ["refs0", "refs1", "refs2"])
+        # The duplicate source has nothing of its own to add, and costs the table nothing.
+        self.assertEqual([it.key for it, _a in out], ["refs0", "refs1"])
 
     def test_a_source_without_the_axis_is_never_asked(self):
         meta = SourceSpy(name="crossref", axes=("refs",))
@@ -282,3 +285,38 @@ class HydrationTest(unittest.TestCase):
         meta.get = lambda key: (_ for _ in ()).throw(RuntimeError("down"))
         out = list(expansion.expand(item("seed", 0), [link, meta], {"refs": 1}, {"refs": 1}))
         self.assertEqual([(it.key, it.title) for it, _a in out], [("10.1/refs0", "")])
+
+
+class OwnKeys(SourceSpy):
+    """Distinct identities per source, so a shared room is not eaten by duplicates."""
+
+    def _answer(self, axis, limit):
+        self.calls.append((axis, limit))
+        return [AcademicItem(source=self.name, key=f"{self.name}-{axis}{n}",
+                             doi=f"10.2/{self.name}{axis}{n}")
+                for n in range(self.counts[axis])]
+
+
+class RoomShareTest(unittest.TestCase):
+    """One source must not eat a row's whole room: the ask is shared, leftovers flow forward."""
+
+    CAPS4: ClassVar[dict] = {"refs": 4, "citing": 0, "related": 0}
+
+    def _asks(self, backend):
+        return [c for c in backend.calls if c[0] == "refs"]
+
+    def test_the_room_is_split_across_the_sources(self):
+        first, second = FakeBackend(), OwnKeys()
+        out = list(expansion.expand(item("seed", 0), [first, second], self.CAPS4,
+                                    dict(self.CAPS4)))
+        self.assertEqual(self._asks(first), [("refs", 2)])
+        self.assertEqual(self._asks(second), [("refs", 2)])
+        self.assertEqual(len(out), 4)
+
+    def test_a_short_answer_hands_its_share_on(self):
+        first, second = FakeBackend(), OwnKeys()
+        first.counts = {"refs": 1, "citing": 0, "related": 0}
+        out = list(expansion.expand(item("seed", 0), [first, second], self.CAPS4,
+                                    dict(self.CAPS4)))
+        self.assertEqual(self._asks(second), [("refs", 3)])
+        self.assertEqual(len(out), 4)

@@ -18,6 +18,9 @@ __all__ = ["EDGE_METHODS", "cmd_edge"]
 #: Words that carry nothing into a keyword search.
 _STOP = {"a", "an", "the", "of", "on", "in", "for", "and", "to", "with", "by", "from", "at", "as"}
 
+#: Axes where the neighbourhood itself is the point, so every source that answers adds to it.
+_UNION = frozenset({"references", "related"})
+
 
 def _keywords(title: str, count: int = 5) -> list[str]:
     words = [w for w in re.findall(r"\w+", (title or "").lower()) if w not in _STOP]
@@ -54,20 +57,38 @@ def _sources(cfg, args) -> list[tuple[object, str]]:
     return [(source, args.key) for source in graph_sources(cfg)]
 
 
+def _cited_key(item) -> tuple[int, int]:
+    """Sort key for a merged table: cited rows first, best cited first, uncited ones last."""
+    count = int(getattr(item, "cited_by_count", 0) or 0)
+    return (0, -count) if count else (1, 0)
+
+
 def cmd_edge(cfg, args, method: str) -> int:
-    """Dispatch ``method`` (references/citing/related), falling over to the next source."""
+    """Dispatch ``method`` (references/citing/related), falling over to the next source.
+
+    ``refs`` and ``related`` are a neighbourhood hunt, so the sources after the first one keep
+    adding to the table until it is full; ``citing`` is left to a single index because the
+    citation indexes overlap heavily and a second one would buy mostly duplicates. Pinning a
+    source (``--backend`` or a ``source/`` prefix) means the reader named it, so nothing is
+    added from anywhere else.
+    """
     items: list = []
+    extra: list = []
     last: Exception | None = None
     #: The last wall (throttle / spent budget). It outranks a 404 as the reason to report: "the
     #: source is spent" explains an empty edge better than "that bare DOI service has no record".
     walled: Exception | None = None
     answered: tuple[object, str] | None = None
     pairs = _sources(cfg, args)
+    union = method in _UNION and len(pairs) > 1
     for backend, key in pairs:
         bare = normalize_related_key(key)
+        if union and len(items) >= args.limit:
+            break  # the table is full; another source would only add rows that get truncated
         try:
             # Ordering (by citation count) is owned by the backend, selected via ``sort_cited``.
-            items = stamp(getattr(backend, method)(bare, args.limit,
+            found = stamp(getattr(backend, method)(bare, args.limit if not union
+                                                   else max(1, args.limit - len(items)),
                                                    sort_cited=(args.sort == "cited")), backend)
         except NotSupportedError as e:
             last = last or e
@@ -83,13 +104,34 @@ def cmd_edge(cfg, args, method: str) -> int:
             last = e
             print(f"[skipped] {getattr(backend, 'name', backend)}: {e}", file=sys.stderr)
             continue
-        answered = (backend, bare)
-        if items:  # a real answer; an empty one still lets the next source speak
+        if answered is None:
+            # The preferred source sets the table's order; an empty answer still lets the next
+            # source speak and still leaves the keyword fallback below reachable.
+            answered = (backend, bare)
+            items = found
+        elif found:
+            extra.extend(found)
+        if items and not union:
             break
     if answered is None:
         if walled is not None or last is not None:
             raise walled or last
         return print_items(items, args.format, args.no_cite, "[no related]")
+    if extra:
+        # An addition is a candidate like any other: same work under one identity, and a bare
+        # DOI from a link source is hydrated below together with the base rows.
+        have = {identity(it) for it in items}
+        pool = []
+        for it in extra:
+            mine = identity(it)
+            if mine not in have:
+                have.add(mine)
+                pool.append(it)
+        # Cited order sorts the whole table; otherwise the first source's order is the reader's
+        # expectation and the extras sort only among themselves.
+        items = (sorted(items + pool, key=_cited_key) if args.sort == "cited"
+                 else items + sorted(pool, key=_cited_key))
+        items = items[: args.limit]
     if any(not (it.title or "").strip() for it in items):
         # A link-only source (COCI) hands back bare DOIs; a row without a title is not usable,
         # so it is filled in from whichever source can read it. A pinned source is not a reason

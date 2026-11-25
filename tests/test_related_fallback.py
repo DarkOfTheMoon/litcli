@@ -111,6 +111,14 @@ class _GraphSource:
         self.asked = key
         return list(self.items)
 
+    def citing(self, key, limit=5, sort_cited=True):
+        self.asked = key
+        return list(self.items)
+
+    def related(self, key, limit=5, sort_cited=False):
+        self.asked = key
+        return list(self.items)
+
 
 class _LinkSource:
     """A DOI-pair service: answers the edge with bare DOIs and carries no metadata itself."""
@@ -215,3 +223,90 @@ class GraphFallbackTest(unittest.TestCase):
             self._run([_Raising(Unavailable("[openalex] HTTP 429")),
                        _Raising(NotFound("[semanticscholar] no such paper"))])
         self.assertIn("429", str(caught.exception))
+
+
+class _Counting(_GraphSource):
+    """A source whose rows carry citation counts, so ordering can be observed."""
+
+    def __init__(self, rows, name="semanticscholar"):
+        super().__init__([AcademicItem(source=name, key=k, doi=k, title=k, cited_by_count=c)
+                          for k, c in rows])
+        self.name = name
+
+
+class GraphUnionTest(unittest.TestCase):
+    """``refs``/``related`` are a neighbourhood hunt: every source that answers adds to it."""
+
+    def _run(self, sources, method="references", **over):
+        seen = []
+        err = io.StringIO()
+        args = _args(backend=None, **over)
+        with mock.patch.object(graph, "graph_sources", return_value=sources), \
+                mock.patch.object(graph, "print_items",
+                                  side_effect=lambda its, *a: seen.extend(its) or 0), \
+                contextlib.redirect_stderr(err):
+            rc = graph.cmd_edge({}, args, method)
+        return rc, seen, err.getvalue()
+
+    def test_refs_takes_the_other_sources_too(self):
+        first = _GraphSource([AcademicItem(key="10.1/a", doi="10.1/a", title="A")])
+        second = _Counting([("10.1/b", 3), ("10.1/c", 1)])
+        _rc, seen, _err = self._run([first, second])
+        self.assertEqual([i.key for i in seen], ["10.1/a", "10.1/b", "10.1/c"])
+        self.assertEqual(second.asked, "10.1/seed")
+
+    def test_citing_keeps_the_first_answer(self):
+        first = _GraphSource([AcademicItem(key="10.1/a", doi="10.1/a", title="A")])
+        second = _Counting([("10.1/b", 3)])
+        _rc, seen, _err = self._run([first, second], method="citing")
+        self.assertEqual([i.key for i in seen], ["10.1/a"])
+        self.assertIsNone(second.asked)
+
+    def test_a_pinned_backend_does_not_pull_in_the_others(self):
+        first = _GraphSource([AcademicItem(key="10.1/a", doi="10.1/a", title="A")])
+        other = _Counting([("10.1/b", 3)])
+        seen = []
+        with mock.patch.object(graph, "graph_sources", return_value=[first, other]), \
+                mock.patch.object(graph, "resolve_backend", return_value=(first, "10.1/seed")), \
+                mock.patch.object(graph, "print_items",
+                                  side_effect=lambda its, *a: seen.extend(its) or 0), \
+                contextlib.redirect_stderr(io.StringIO()):
+            graph.cmd_edge({}, _args(backend="openalex"), "references")
+        self.assertEqual([i.key for i in seen], ["10.1/a"])
+        self.assertIsNone(other.asked)
+
+    def test_a_work_from_two_sources_appears_once(self):
+        same = AcademicItem(key="10.1/a", doi="10.1/a", title="A")
+        first = _GraphSource([same])
+        second = _GraphSource([AcademicItem(key="10.1/a", doi="10.1/a", title="A"),
+                               AcademicItem(key="10.1/b", doi="10.1/b", title="B")])
+        _rc, seen, _err = self._run([first, second])
+        self.assertEqual([i.key for i in seen], ["10.1/a", "10.1/b"])
+
+    def test_extra_rows_come_after_the_base_and_best_cited_first(self):
+        base = _Counting([("10.1/t", 1)], name="openalex")
+        second = _Counting([("10.1/u2", 0), ("10.1/u3", 5), ("10.1/u1", 9)])
+        _rc, seen, _err = self._run([base, second], limit=4)
+        # the first source's table order is the reader's expectation; extras sort among themselves
+        self.assertEqual([i.key for i in seen], ["10.1/t", "10.1/u1", "10.1/u3", "10.1/u2"])
+
+    def test_cited_sort_orders_the_merged_rows_and_puts_uncited_last(self):
+        base = _Counting([("10.1/t", 1)], name="openalex")
+        second = _Counting([("10.1/u", 9), ("10.1/n", 0)])
+        _rc, seen, _err = self._run([base, second], sort="cited")
+        self.assertEqual([i.key for i in seen], ["10.1/u", "10.1/t", "10.1/n"])
+
+    def test_the_limit_caps_the_union(self):
+        first = _GraphSource([AcademicItem(key="10.1/a", doi="10.1/a", title="A")])
+        second = _Counting([("10.1/b", 3), ("10.1/c", 1)])
+        _rc, seen, _err = self._run([first, second], limit=2)
+        self.assertEqual([i.key for i in seen], ["10.1/a", "10.1/b"])
+
+    def test_a_wall_on_an_extra_source_keeps_the_base_rows(self):
+        from litcli.errors import Unavailable
+
+        first = _GraphSource([AcademicItem(key="10.1/a", doi="10.1/a", title="A")])
+        rc, seen, err = self._run([first, _Raising(Unavailable("[semanticscholar] 429"))])
+        self.assertEqual([i.key for i in seen], ["10.1/a"])
+        self.assertIn("[skipped] openalex", err)
+        self.assertEqual(rc, 0)
