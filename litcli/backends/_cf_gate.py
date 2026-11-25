@@ -25,7 +25,10 @@ import re
 #: is *not* listed on its own: Cloudflare injects that script into every served page too.
 CHALLENGE_MARKERS = ("CPE00001", "cf-mitigated", "Enable JavaScript and cookies to continue",
                      "Are you a robot", "__cf_chl", "Just a moment...", "gokuProps",
-                     "awsWafCookieDomainList")
+                     "awsWafCookieDomainList",
+                     # Elsevier's own bot check: a 200 page titled "Security verification" that
+                     # re-issues the request from script (seen in place of a signed PDF).
+                     "Security verification")
 
 
 def is_challenge_page(page_html: str, status: int = 200) -> bool:

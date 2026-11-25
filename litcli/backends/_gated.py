@@ -24,6 +24,7 @@ from typing import ClassVar
 from urllib.parse import urlparse
 
 from .. import provenance
+from ..browser import looks_like_pdf
 from ..errors import BadInput, NotFound, Paywalled
 from ..models import AcademicItem, extract_year, normalize_author_name
 from ..transport import HttpError
@@ -401,7 +402,8 @@ class GatedBackend(EntitledBackend):
             url = f"https://doi.org/{urllib.parse.quote(normalized[len('doi:'):], safe='/')}"
         response = self._open(url)  # a gate is turned into BotWall; 404 propagates
         landed = str(response.url) or url
-        if not self._on_site(landed):
+        if not self._on_site(landed) and not looks_like_pdf(landed):
+            # A route may serve the file itself from a CDN host; that is this item, not a miss.
             raise NotFound(f"[{self.name}] DOI does not resolve to an {self.SITE_NAME} item: "
                            f"{normalized}")
         self._memo[normalized] = (response.text, landed)
@@ -423,18 +425,25 @@ class GatedBackend(EntitledBackend):
                 raise NotFound(f"[{self.name}] no such item: {key}") from e
             raise
         item = self.page_to_item(body, normalized, landed)
+        pdf_landing = looks_like_pdf(landed)
+        if pdf_landing and not item.doi and doi_from(normalized):
+            # The route served the file, so there is no page to parse a title off: the key's own
+            # DOI is the identity, and it lets the item through without one.
+            item.doi = doi_from(normalized)
         if normalized.startswith("url:") and item.doi:
             # The URL named only an internal id; the page named the real identity, which also
             # becomes the memo key so the PDF download reuses this page.
             item.key = f"doi:{item.doi}"
             self._memo[f"doi:{item.doi}"] = (body, landed)
-        return self._finish_item(item, body, landed)
+        return self._finish_item(item, body, landed, require_title=not pdf_landing)
 
     def get_attachment(self, key: str) -> bytes:
         """Download the item PDF (only a session the site lets through serves it)."""
         normalized = self.normalize_key(key)
         page, landed = self._page(normalized)
-        url = self.extract_pdf_url(page, doi_from(normalized), self.item_id(landed))
+        # A route that landed on the file itself needs no link picked out of it.
+        url = landed if looks_like_pdf(landed) \
+            else self.extract_pdf_url(page, doi_from(normalized), self.item_id(landed))
         if not url:
             raise Paywalled(f"[{self.name}] the item page carries no PDF link: {landed}")
         return self._gated_download(url, page, landed)

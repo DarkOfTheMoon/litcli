@@ -82,6 +82,7 @@ class FakePage:
         self._body = ""
         self._solved = None
         self._listeners = {}
+        self.url = ""
 
     def on(self, event, handler):
         self._listeners.setdefault(event, []).append(handler)
@@ -106,6 +107,8 @@ class FakePage:
         status, body, *solved = step
         self._body = body
         self._solved = solved[0] if solved else None
+        # A fourth element is where the navigation landed (a redirect into the file itself).
+        self.url = solved[-1] if len(solved) > 1 else url
         return FakeResponse(status, body, url)
 
     def content(self) -> str:

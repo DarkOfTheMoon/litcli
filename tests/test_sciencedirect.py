@@ -110,6 +110,17 @@ class NormalizeKeyTest(unittest.TestCase):
         self.assertEqual(normalize_key(url), "pii:S0045782505000733")
         self.assertEqual(normalize_key("S0045-7825(05)00073-3"), "pii:S0045782505000733")
 
+    def test_a_pdf_asset_url(self):
+        # The link a browser download hands you (a signed CDN URL, five minutes to live) names
+        # the article by `pii=` and by its `1-s2.0-<PII>` path segment; neither is a /pii/ path.
+        url = (f"https://pdf.sciencedirectassets.com/271985/1-s2.0-{PII[:14]}X00097/"
+               f"1-s2.0-{PII}/am.pdf?X-Amz-Expires=300&pii={PII}&type=client")
+        self.assertEqual(normalize_key(url), f"pii:{PII}")
+
+    def test_a_pdf_asset_url_without_the_query_still_works(self):
+        url = f"https://pdf.sciencedirectassets.com/271985/1-s2.0-{PII}/am.pdf"
+        self.assertEqual(normalize_key(url), f"pii:{PII}")
+
     def test_a_doi_query_tail_is_not_part_of_the_doi(self):
         self.assertEqual(normalize_key("10.1016/j.apm.2014.03.020?download=true"),
                          "doi:10.1016/j.apm.2014.03.020")
@@ -252,6 +263,26 @@ class ExtractPdfUrlTest(unittest.TestCase):
                 'content="https://www.sciencedirect.com/science/article/pii/X/pdfft">')
         self.assertEqual(extract_pdf_url(page),
                          "https://www.sciencedirect.com/science/article/pii/X/pdfft")
+
+    def test_the_open_manuscript_link_is_a_pdf_link(self):
+        # A bronze / open-archive article serves its accepted manuscript at ``/am/pii/<PII>``,
+        # which redirects to the file; the served page carries that link and no pdfft of its
+        # own, so refusing it leaves an openly readable article with no copy.
+        page = (f'<a href="/science/article/am/pii/{PII}" target="_blank" '
+                'aria-label="View Open Manuscript">View Open Manuscript</a>')
+        self.assertEqual(extract_pdf_url(page, PII),
+                         f"https://www.sciencedirect.com/science/article/am/pii/{PII}")
+
+    def test_another_articles_open_manuscript_is_ignored(self):
+        page = ('<a href="/science/article/am/pii/S0045782599002005" '
+                'aria-label="View Open Manuscript">View Open Manuscript</a>')
+        self.assertEqual(extract_pdf_url(page, PII), "")
+
+    def test_a_pdfft_anchor_wins_over_the_open_manuscript(self):
+        # The pdfft is the version of record; the manuscript is the fallback, not the target.
+        page = (self._page((PII, "a" * 32))
+                + f'<a href="/science/article/am/pii/{PII}">View Open Manuscript</a>')
+        self.assertIn("/pdfft?", extract_pdf_url(page, PII))
 
     def test_missing_returns_empty(self):
         self.assertEqual(extract_pdf_url(NO_PDF_PAGE), "")

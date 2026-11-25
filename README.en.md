@@ -310,7 +310,10 @@ base = "http://localhost:23119/api"     # the write key is written by `litcli ba
   setting `email`/`password`.
 - ScienceDirect's PDF sits behind a **second acceptance gate** (`craft/challenge/pdf`): a page that opens does
   not guarantee the bytes. `fetch` downloads through the backend's session and, when gated, says so and prints
-  the PDF link to open in your entitled browser. Wiley's PDF endpoint answers an HTML abstract page (a silent
+  the PDF link to open in your entitled browser. An open-archive (bronze) article carries no record-version
+  `pdfft` anchor; the page offers an accepted-manuscript link under `/am/pii/…` instead. `fetch` takes it, and
+  since that route redirects into the file itself, the bytes are read from where it landed (asking the route
+  again only earns the site's bot check). Wiley's PDF endpoint answers an HTML abstract page (a silent
   redirect) instead of 403 for unentitled sessions, and `fetch` reports "not entitled / session expired" with
   the link. SpringerLink does the same: an unentitled session is sent back to the article page. A failed
   download on any of the three first finishes the chain's tail (legal landing page, `--scihub`).

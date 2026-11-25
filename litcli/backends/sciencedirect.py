@@ -27,6 +27,7 @@ import urllib.parse
 from typing import ClassVar
 from urllib.parse import urlparse
 
+from ..browser import looks_like_pdf
 from ..errors import BadInput, NotFound, Paywalled, for_status
 from ..models import AcademicItem, extract_year, normalize_author_name
 from ._cf_gate import gate_message
@@ -53,6 +54,11 @@ _DOI_PREFIX_RE = re.compile(r"^(?:https?://(?:dx\.)?doi\.org/|doi:\s*)", re.I)
 _PII_RE = re.compile(r"^S[\dX]{4,}[0-9X]\d+$", re.I)
 #: A PII embedded in an article / linkinghub URL (``/pii/<ID>``, ``/retrieve/pii/<ID>``).
 _URL_PII_RE = re.compile(r"(?:/pii/|/retrieve/pii/)([A-Za-z0-9()\-]+)", re.I)
+#: The two forms a downloaded PDF's own URL names the article by: a ``pii=`` query parameter and
+#: the ``1-s2.0-<PII>`` path segment. A file the browser saved for you carries neither ``/pii/``
+#: nor a DOI, and it is the thing in hand when the signed link is still fresh.
+_QUERY_PII_RE = re.compile(r"[?&]pii=([A-Za-z0-9()\-]+)", re.I)
+_ASSET_PII_RE = re.compile(r"/1-s2\.0-([A-Za-z0-9()\-]+)/", re.I)
 _NON_ALNUM_RE = re.compile(r"[^A-Za-z0-9]")
 
 
@@ -75,6 +81,9 @@ _PDFURL_RE = re.compile(r"""pdfUrl["']?\s*[:=]\s*["']([^"']+)["']""", re.I)
 _PDFFT_RE = re.compile(
     r"""["'](/?science/article/pii/([A-Za-z0-9()\-]+)/pdfft\?md5=[0-9a-f]{32}&(?:amp;)?pid=[^"']+)["']""",
     re.I)
+#: The accepted-manuscript route of a bronze / open-archive article. It has no token of its
+#: own (it is not entitlement-gated) and redirects to the file; related cards name other PIIs.
+_AM_RE = re.compile(r"""/science/article/am/pii/([A-Za-z0-9()\-]+)""", re.I)
 #: The PDF itself sits behind a second Elsevier acceptance gate (``craft/challenge/pdf``,
 #: ``cra-ch-clearance``) that only a browser clears; a page-level session is not enough.
 _PDF_GATE_MSG = ("the PDF sits behind a second ScienceDirect acceptance gate that only a "
@@ -107,6 +116,10 @@ def normalize_key(key: str) -> str:
     embedded = _URL_PII_RE.search(k)
     if embedded:
         return f"pii:{_canonical_pii(embedded.group(1))}"
+    for pattern in (_QUERY_PII_RE, _ASSET_PII_RE):
+        found = pattern.search(k)
+        if found:
+            return f"pii:{_canonical_pii(found.group(1))}"
     if k.lower().startswith("pii:"):
         k = k[len("pii:"):].strip()
     if _PII_RE.match(_canonical_pii(k)):
@@ -163,6 +176,14 @@ def extract_pdf_url(page_html: str, pii: str = "") -> str:
                 break
         if not raw and not want:
             raw = _unescaped_when_safe(first)
+    if not raw:
+        # A bronze / open-archive article has no pdfft of its own: the page offers its accepted
+        # manuscript instead, which redirects to the file. The version of record (pdfft) wins
+        # above; this is the fallback when there is none.
+        for match in _AM_RE.finditer(text):
+            if not want or _canonical_pii(match.group(1)) == want:
+                raw = _SITE + "/science/article/am/pii/" + match.group(1)
+                break
     if not raw:
         return ""
     if raw.startswith("//"):
@@ -417,20 +438,22 @@ class ScienceDirectBackend(GatedBackend):
         return self._pii_for_doi(normalized[4:]) if normalized.startswith("doi:") \
             else normalized[4:]
 
-    def _page(self, pii: str) -> str:
-        """Fetch the article page, turning a bot/entitlement gate into one clear error.
+    def _page(self, pii: str) -> tuple[str, str]:
+        """Fetch the article page as ``(html, landed url)``, a gate becoming one clear error.
 
         Replaces the inherited ``_page`` because the page lives at ``/pii/<id>`` rather than
         under a DOI: the resolved PII arrives here already. The shared per-key memo is kept, so
-        the fulltext chain's ``get`` and ``get_attachment`` share one request.
+        the fulltext chain's ``get`` and ``get_attachment`` share one request; the landed URL is
+        kept because a route can answer with the file itself.
         """
-        body = self._memo.get(pii)
-        if body is not None:
-            return body
+        hit = self._memo.get(pii)
+        if hit is not None:
+            return hit
         url = f"{_ARTICLE}/pii/{urllib.parse.quote(pii)}"
-        body = self._open(url).text
-        self._memo[pii] = body
-        return body
+        answer = self._open(url)
+        hit = (answer.text, str(answer.url) or url)
+        self._memo[pii] = hit
+        return hit
 
     # -- Backend ---------------------------------------------------------------
 
@@ -443,7 +466,7 @@ class ScienceDirectBackend(GatedBackend):
         take the item without a second page read.
         """
         pii = self._pii(key)
-        body = self._page(pii)
+        body, _landed = self._page(pii)
         item = page_to_item(body, f"pii:{pii}")
         # A DOI key has already been resolved to this PII, so the identity holds without a
         # title; and the page records no OA signal of its own (the pdfUrl is the only one).
@@ -462,12 +485,13 @@ class ScienceDirectBackend(GatedBackend):
         non-PDF answer are reported with that gate's wording (see :attr:`PDF_GATE_MSG`).
         """
         pii = self._pii(key)
-        page = self._page(pii)
-        url = extract_pdf_url(page, pii)
+        page, landed = self._page(pii)
+        # A route that landed on the file itself needs no link picked out of it.
+        url = landed if looks_like_pdf(landed) else extract_pdf_url(page, pii)
         if not url:
             raise Paywalled(f"[{self.name}] the article page carries no PDF link "
                             f"(not entitled, or the session needs an off-campus login)")
-        return self._gated_download(url, page, f"{_SITE}/science/article/pii/{pii}")
+        return self._gated_download(url, page, landed)
 
     def _not_entitled_reason(self, landed: str, response) -> str:
         return _PDF_GATE_MSG

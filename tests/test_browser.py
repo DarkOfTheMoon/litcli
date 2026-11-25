@@ -217,6 +217,7 @@ class SessionTest(unittest.TestCase):
         page = mock.MagicMock()
         page.goto.return_value = mock.Mock(status=200, headers={}, url="https://x/a.pdf")
         page.content.return_value = '<html><embed type="application/pdf"></html>'
+        page.url = "https://x/a.pdf"
         polls = []
         page.wait_for_timeout.side_effect = polls.append
         with mock.patch.object(self.s, "_page", return_value=page), \
@@ -230,6 +231,46 @@ class SessionTest(unittest.TestCase):
         self.assertEqual(kw["timeout"], browser._DOWNLOAD_WAIT * 1000)
         self.assertIsNone(self.s._runtime.context.timeout)  # None == the library default
 
+    def test_a_file_reached_by_redirect_is_read_from_where_it_landed(self):
+        # An open-archive route serves the viewer shell of itself and only then redirects to
+        # the file's own signed address; asking the request context for the route instead gets
+        # the site's bot check, not the file, so the fallback has to use the landed address.
+        self.s.start()
+        page = mock.MagicMock()
+        page.goto.return_value = mock.Mock(status=200, headers={},
+                                          url="https://x/am/pii/S1")
+        page.url = "https://x/am/pii/S1"
+        page.content.return_value = "<html><body></body></html>"  # the viewer shell
+        landed = "https://cdn.example/1-s2.0-S1/am.pdf?sig=1"
+
+        def wait(_ms):
+            page.url = landed
+            page.content.return_value = "<html><body></body></html>"
+
+        page.wait_for_timeout.side_effect = wait
+        with mock.patch.object(self.s, "_page", return_value=page), \
+                mock.patch.object(browser, "_CHALLENGE_POLL", 0):
+            data = self.s.download("https://x/am/pii/S1")
+        self.assertTrue(data.startswith(b"%PDF"))
+        (url, _kw), = self.s._runtime.context.request.calls
+        self.assertEqual(url, landed)
+
+    def test_an_answer_in_place_is_not_waited_out_to_the_cap(self):
+        # An unentitled endpoint may answer with a page at its own address instead of sending
+        # the client anywhere; that document is the answer, and five minutes would be dead time.
+        self.s.start()
+        page = mock.MagicMock()
+        page.goto.return_value = mock.Mock(status=200, headers={}, url="https://x/pii/S1/pdfft")
+        page.url = "https://x/pii/S1/pdfft"
+        page.content.return_value = "<html><title>ScienceDirect</title></html>"
+        polls = []
+        page.wait_for_timeout.side_effect = polls.append
+        with mock.patch.object(self.s, "_page", return_value=page), \
+                mock.patch.object(browser, "_CHALLENGE_POLL", 0), \
+                mock.patch.object(browser, "_REDIRECT_GRACE", 0):
+            self.s.download("https://x/pii/S1/pdfft")
+        self.assertLess(len(polls), 5)
+
     def test_a_navigation_that_never_answers_falls_back_instead_of_failing(self):
         # An endpoint that accepts the request and then says nothing (a handle 302ing to a
         # repository) runs the navigation out. The file is still worth one direct request,
@@ -238,6 +279,7 @@ class SessionTest(unittest.TestCase):
         page = mock.MagicMock()
         page.goto.side_effect = browser.PlaywrightTimeoutError("Page.goto: Timeout 300000ms "
                                                               "exceeded.")
+        page.url = "https://hdl.handle.net/11511/123"
         page.content.return_value = "<html>" + "x" * 50 + "</html>"
         with mock.patch.object(self.s, "_page", return_value=page), \
                 mock.patch.object(browser, "_CHALLENGE_POLL", 0):

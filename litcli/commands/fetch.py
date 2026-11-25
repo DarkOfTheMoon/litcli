@@ -22,6 +22,7 @@ from .. import fulltext as fulltext_mod
 from .. import pdf as pdfutil
 from .. import provenance, unpaywall
 from ..backends.base import Backend, NotSupportedError
+from ..browser import looks_like_pdf
 from ..config import get_all_backends, get_backend
 from ..errors import LitcliError, Unavailable
 from ..paths import target_path
@@ -271,6 +272,12 @@ def _probe_fulltext(cfg, args, target: str) -> _Probe | None:
                         "access": getattr(item, "access", "") or provenance.ENTITLED}
         if info is None and pages[spec.name]:
             unresolved.append((spec, got_page))
+    if info is None and looks_like_pdf(stripped):
+        # A file link handed over in place of a key is the target itself: re-deriving it from a
+        # page would only add a hop that can fail on its own (an unentitled ``pdfft``, a signed
+        # asset address that expires in minutes).
+        info = {"has_fulltext": True, "direct": True, "kind": "url", "url": stripped,
+                "format": "pdf"}
     if info is None and unresolved:
         # A pasted page the chain could not key on: probing every backend with a URL would not
         # help, so the report says which step is why.

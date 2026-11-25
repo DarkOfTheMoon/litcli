@@ -25,6 +25,7 @@ import time
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 from . import paths
 from .backends._cf_gate import is_challenge_page
@@ -47,10 +48,25 @@ def _still_coming(page) -> bool:
         return True
 
 
+def looks_like_pdf(url: str) -> bool:
+    """True when ``url`` is a file's own address.
+
+    After a navigation lands on a PDF, Chrome keeps that file's address in the page URL: it is
+    how a route that turned into the file is told from one that bounced back to a page (``/abs/``,
+    a sign-in page), and where the bytes then come from.
+    """
+    return urlparse(str(url or "")).path.lower().endswith(".pdf")
+
+
 #: The ceiling on waiting for a PDF endpoint. A clock cannot tell "no entitlement" from "still
 #: downloading" — the document can, so the wait ends the moment the page is a document rather
 #: than a challenge; this only bounds a challenge that never resolves, and the transfer after it.
 _DOWNLOAD_WAIT = 300.0
+
+#: How long a viewer shell under the route it was asked for is given to redirect into the file
+#: (~2 s in practice; a bot check in between takes longer). Past it the shell is taken as the
+#: answer, so an in-place HTML refusal does not sit out the whole ceiling above.
+_REDIRECT_GRACE = 30.0
 
 try:  # optional dependency: the module stays importable without Playwright
     from playwright.sync_api import Error as PlaywrightError
@@ -540,11 +556,14 @@ class Session:
                 text = self._settle(page)
             except PlaywrightError:
                 pass  # keep the gated answer already in hand
+        # The redirect target, not the address asked for: the route may have become the file.
+        landed = page.url or (response.url if response is not None else url)
         status = response.status if response is not None else 403
-        if text and not is_challenge_page(text):
-            status = 200  # the solved document, whatever the interstitial answered
-        return PageResponse(status=status, text=text,
-                            url=response.url if response is not None else page.url,
+        if looks_like_pdf(landed) or (text and not is_challenge_page(text)):
+            # The solved document where the interstitial answered, or the file itself: both are
+            # the answer, and a viewer's shell is not an error page.
+            status = 200
+        return PageResponse(status=status, text=text, url=landed,
                             headers=dict(response.headers) if response is not None else {})
 
     def _goto(self, page, url: str):
@@ -608,19 +627,34 @@ class Session:
             page.on("download", collect)
             response = _goto_allowing_download(page, url, wait_until="commit")
             deadline = time.monotonic() + _DOWNLOAD_WAIT
+            settled = time.monotonic() + _REDIRECT_GRACE
             while not caught:
                 # A started download leaves the previous document up, which says nothing, so it
                 # is the one case that keeps waiting without looking at the page.
-                if response is not _DOWNLOAD_STARTED and not _still_coming(page):
-                    break
+                if response is not _DOWNLOAD_STARTED:
+                    landed = page.url
+                    if looks_like_pdf(landed):
+                        break  # the file itself is up, where it was sent to
+                    # A route can answer with the shell of its own viewer and redirect to the
+                    # file a moment later (`/am/pii/…` → a signed CDN address). Told apart by
+                    # the address having moved: a shell still under the route is a wait, a
+                    # document at another address is the answer (`/abs/`, a sign-in page).
+                    coming = _still_coming(page)
+                    if landed != url and not coming:
+                        break
+                    if not coming and time.monotonic() >= settled:
+                        break  # the route kept its shell: take it, it is not going to move
                 if time.monotonic() >= deadline:
                     break
                 page.wait_for_timeout(_CHALLENGE_POLL * 1000)
             if caught:
                 saved = caught[0].path  # a str already on the offline stand-in
                 return Path(saved() if callable(saved) else saved).read_bytes()
+            # The bytes come from the address the navigation landed on: the route it started at
+            # answers a bare request with its bot check, the file's own address does not.
+            target = page.url if looks_like_pdf(page.url) else url
             # The request context keeps its own 30 s regardless of the setting above.
-            answer = context.request.get(url, headers={"Accept": "application/pdf"},
+            answer = context.request.get(target, headers={"Accept": "application/pdf"},
                                          timeout=_DOWNLOAD_WAIT * 1000)
             return answer.body()
         except PlaywrightError as e:

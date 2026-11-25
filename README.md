@@ -254,7 +254,7 @@ base = "http://localhost:23119/api"     # 写库 key 由 `litcli backends author
 - 专利检索要有 USPTO 免费 key：免 key 的公开源里专利记录趋近于 0。
 - Europe PMC 的 OA 全文是**文本（JATS XML）不是排版 PDF**；Unpaywall 只给落地页时会退到链末，输出 `HTML` 提示浏览器打开。
 - Sci-Hub 只按 DOI 解析，不能关键词检索；Z-Library 匿名下载有每日配额，可在配置里填 `email`/`password` 登录放宽。
-- ScienceDirect 的 PDF 另有**第二道验收关**（`craft/challenge/pdf`），页面能开也未必能直取：`fetch` 走后端会话下载，被拦时明确报因并给出 PDF 链接，让你在已授权的浏览器里打开。Wiley 的 PDF 端点对未订阅会话返回的是跳转后的 HTML 摘要页而非 403，`fetch` 会明说"未获授权或会话已失效"并给链接。SpringerLink 同理：未订阅（且非金 OA）时会话会被送回文章页，`fetch` 报"未获授权或会话已失效"并给链接。三者下载失败都会先把链的尾部（合法落地页、`--scihub`）走完再报错。
+- ScienceDirect 的 PDF 另有**第二道验收关**（`craft/challenge/pdf`），页面能开也未必能直取：`fetch` 走后端会话下载，被拦时明确报因并给出 PDF 链接，让你在已授权的浏览器里打开。开放存档（bronze）文章没有记录版 `pdfft` 锚点，页面给的是 `/am/pii/…` 的**接受稿**链接：`fetch` 认它，且该路由会直接重定向到文件本身，下载按落地地址取字节（拿原始路由再请求一次只会得到站点的验人页）。Wiley 的 PDF 端点对未订阅会话返回的是跳转后的 HTML 摘要页而非 403，`fetch` 会明说"未获授权或会话已失效"并给链接。SpringerLink 同理：未订阅（且非金 OA）时会话会被送回文章页，`fetch` 报"未获授权或会话已失效"并给链接。三者下载失败都会先把链的尾部（合法落地页、`--scihub`）走完再报错。
 - 二进制安装器不含 Chromium：知网 / 豆瓣要先 `litcli backends install-browser`，否则报错并给出该命令。
 - 配置里的 `api_key`、zlibrary 凭据，以及出版社会话的 `cookie` / `cookie_file` 都是明文：`backends authorize`
   会把配置 chmod 0600，手填的不会；导出的 cookies.txt 也按普通文件保存，别提交进公开仓库。
