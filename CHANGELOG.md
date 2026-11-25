@@ -7,24 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-25
+
 ### Added
 
-- 引文图谱四个新来源与逐源降级：`refs`/`citing`/`related` 与调查的每一跳不再只问 OpenAlex。源按能力轴选择
-  （`capabilities` 声明 `refs`/`citing`/`related`），按 openalex → semanticscholar → opencitations → crossref →
-  europepmc 逐个问，被限流、额度耗尽或查不到就 `[skipped] <源>: <原因>` 换下一个，只有全都答不上才抛最后一个
-  原因（墙压过 404：「源已用尽」比「这个 DOI 服务没有该记录」更能解释空结果）；一方答「没有」也让下一个说，
-  调查里报错的一行保住已交回的候选、不记作已展开。新增 Semantic Scholar（三轴齐备，推荐即语义邻居）与
-  OpenCitations COCI（CC0 的引用/被引 DOI 对、无题录）；crossref 补 `references`（沉积的参考文献表，仅反向）、
-  Europe PMC 补双向；OpenAlex 补声明它本就答的三轴。只有链接没有题录的源，行内裸 DOI 先用能读题录的源补齐，
-  打印出的标识符可以再问一次；跨源展开各说各的标识符、按聚合身份去重，每跳的轴内额度跨源共用。
-- 图谱契约 `GraphSource`（`backends/base.py`）：声明了某轴却没有对应方法的源在准入时就被 `missing_axes` 挡下，
-  不会等到跳内炸成 `AttributeError`；一个源的墙只损失它自己的回答。
+- 引文图谱多了四个应答来源：新增 Semantic Scholar（三轴齐备，推荐即语义邻居）与 OpenCitations COCI
+  （CC0 的引用/被引 DOI 对、无题录）；crossref 补 `references`（沉积的参考文献表，仅反向）、Europe PMC 补双向；
+  OpenAlex 补声明它本就答的三轴（此前只声明 `read`，被能力门当成无轴源，一条边都走不到）。
+- 逐源降级：`refs`/`citing`/`related` 与调查的每一跳不再只问 OpenAlex。源按能力轴选择，按
+  openalex → semanticscholar → opencitations → crossref → europepmc 逐个问，被限流、额度耗尽或查不到就
+  `[skipped] <源>: <原因>` 换下一个，只有全都答不上才抛最后一个原因（墙压过 404：「源已用尽」比「这个 DOI
+  服务没有该记录」更能解释空结果）；一方答「没有」也让下一个说，调查里报错的一行保住已交回的候选、不记作
+  已展开。只有链接没有题录的源，行内裸 DOI 先用能读题录的源补齐，打印出的标识符可以再问一次；跨源展开各说各的
+  标识符、按聚合身份去重，每跳的轴内额度跨源共用。
+- 图谱契约 `GraphSource`：声明了某轴却没有对应方法的源在准入时就被挡下，不会等到跳内炸成 `AttributeError`；
+  一个源的墙只损失它自己的回答。
 
 ### Fixed
 
 - Europe PMC 的参考文献与前向取错了容器：EBI 把两者分别放在 `referenceList/reference` 与 `citationList/citation`，
   此前按同名字段读，`references` 恒为空。
-- OpenAlex 只声明了 `read`，能力轴门把它当无轴源，真实调查里一条边都走不到；现已补全。
 - 图谱与调查对单条失败的捕获过窄，`AttributeError` 会穿过分类异常把整轮掀掉。
 
 ## [0.4.1] - 2026-11-25
