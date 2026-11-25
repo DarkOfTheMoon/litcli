@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-25
+
 ### Added
 
 - 课题调查 `litcli survey new|run|status|stop`：一个课题是一个目录（项目配置、候选理由、逐步 trace、
