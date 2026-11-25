@@ -16,6 +16,9 @@ type = "arxiv"                          # 联网,只读,无需 key
 # arXiv 开放 API 按 IP 限速,短时间连发会返回 HTTP 429 "Rate exceeded."(litcli 已按指数退避重试,
 # 至多 3 次,再失败给明确提示)。填一个可联系邮箱可降低被限速概率;仅建议,无需真校验。
 # mailto = "you@example.com"
+# 重试预算与 Retry-After 上限逐段可调(默认 3 次 / 30 秒);批量抓取时抬高 retries 更耐限速。
+# retries = 5
+# retry_after_cap = 60.0
 
 [backends.crossref]
 type = "crossref"                       # 内置默认,无需 key
@@ -25,6 +28,9 @@ type = "openalex"                       # 内置默认,无需 key
 # OpenAlex polite pool:库免费、限流很宽,填一个可联系的邮箱可进一步提升速率上限。
 # 开着即可(无需真校验);请求以 ~10 req/s 限速,并随每请求附 mailto 参数。
 # mailto = "you@example.com"
+# 长跑 survey 被 429 打断时抬这两个键(默认 3 次 / 30 秒)。
+# retries = 5
+# retry_after_cap = 60.0
 
 # 开放图书数据库(书籍元数据)。默认不内置,但本文件里是启用的;不想用就删掉本段。
 # 部分网络环境对 openlibrary.org / googleapis.com 无路由,若搜图书无响应请自查连通性。

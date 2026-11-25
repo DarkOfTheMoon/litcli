@@ -69,8 +69,9 @@ class ArxivBackend(HttpBackend):
     rate = 1
     min_interval = 3.0       # arXiv asks for ~1 request / 3 s
 
-    def __init__(self, name: str = "arxiv", max_results: int = 10, mailto: str = ""):
-        super().__init__(name=name)
+    def __init__(self, name: str = "arxiv", max_results: int = 10, mailto: str = "",
+                 retries: int | None = None, retry_after_cap: float | None = None):
+        super().__init__(name=name, retries=retries, retry_after_cap=retry_after_cap)
         self._max = max_results
         self._mailto = mailto
         self.UA = self._ua()

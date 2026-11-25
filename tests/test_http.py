@@ -13,7 +13,7 @@ import httpx
 from tenacity import wait_none
 
 import litcli.transport as transport_mod
-from litcli.backends.http import HttpBackend, HttpError
+from litcli.backends.http import HttpBackend, HttpError, retry_after_seconds
 from litcli.errors import Unavailable
 from litcli.transport import Session, set_proxy
 from tests.http_stub import Recorder, error, stub
@@ -97,6 +97,28 @@ class TransportTest(unittest.TestCase):
         self.assertEqual(cm.exception.status, 500)
         self.assertEqual(cm.exception.body, "boom")
         self.assertEqual(len(rec.requests), be.retries)
+
+    def test_the_retry_budget_is_configurable(self):
+        # The retry budget is a per-site matter (a fan-out source and a single-item reader
+        # differ): as a class attribute alone, `retries = 5` in a config section was a
+        # TypeError and the only way to raise it was to edit the code.
+        be = _Backend(retries=5)
+        rec = stub(be, (503, "busy"))
+        with self.assertRaises(HttpError):
+            be.fetch("https://x/api")
+        self.assertEqual(len(rec.requests), 5)
+
+    def test_the_retry_after_cap_is_configurable(self):
+        # A site whose penalty window runs in minutes asks for more than the 30 s default; the
+        # cap is what stops one `Retry-After` from eating the whole run.
+        self.assertEqual(retry_after_seconds(self._with_retry_after("600"), 600), 600.0)
+        self.assertEqual(retry_after_seconds(self._with_retry_after("600")), 30.0)
+
+    @staticmethod
+    def _with_retry_after(value):
+        response = httpx.Response(429, headers={"Retry-After": value},
+                                  request=httpx.Request("GET", "https://x/api"))
+        return httpx.HTTPStatusError("429", request=response.request, response=response)
 
     def test_404_is_not_retried(self):
         be = _Backend()

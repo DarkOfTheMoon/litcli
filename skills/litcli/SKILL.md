@@ -74,7 +74,7 @@ description: 用 litcli 与用户的学术资料互操作——检索、读取�
 - **写库前先授权一次**：`litcli backends authorize zotero` → 本地弹框批准 → key 写入 `[backends.zotero].api_key`，此后写操作自动携带、不再弹框。未授权时 `data add/set/del/attach` 报 `HTTP 401`（退出码 2）。
 - Better BibTeX 未装：引文走 `export --format csljson` 喂 `pandoc --citeproc`，不依赖 BBT。
 - 读 PDF 全文需系统 `pdftotext`。除 zotero 外都是只读后端，`data` 写操作一律报 `[skipped]`（退出码 2）；想确认某后端能不能写，看 `litcli backends list` 的能力列。
-- arXiv 按 IP 限速：连发可能 `HTTP 429 Rate exceeded.`（已退避重试）；检索若失败，隔几秒再试，或给 `[backends.arxiv]` 配 `mailto`。
+- arXiv 按 IP 限速：连发可能 `HTTP 429 Rate exceeded.`（已退避重试）；检索若失败，隔几秒再试，或给 `[backends.arxiv]` 配 `mailto`。批量抓取时用 `[backends.arxiv]`（及 `[backends.openalex]`）的 `retries` / `retry_after_cap` 调高重试预算与等待上限（默认 3 次 / 30 秒）。
 
 ## 注意
 

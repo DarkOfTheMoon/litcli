@@ -47,16 +47,17 @@ def _retryable(exc: BaseException, codes: frozenset[int]) -> bool:
 RETRY_AFTER_CAP = 30.0
 
 
-def retry_after_seconds(exc: BaseException) -> float | None:
+def retry_after_seconds(exc: BaseException, cap: float = RETRY_AFTER_CAP) -> float | None:
     """The server's own ``Retry-After`` (seconds), when it sent one.
 
     The exponential schedule starts at half a second; rate limiters here (arXiv, OpenAlex) ask
-    for tens of seconds, so ignoring the header means burning the attempts for nothing.
+    for tens of seconds, so ignoring the header means burning the attempts for nothing. A site
+    whose penalty window is measured in minutes needs a higher ``cap`` than the default.
     """
     response = getattr(exc, "response", None)
     value = (response.headers.get("Retry-After") if response is not None else None) or ""
     try:
-        return min(max(float(value.strip()), 0.0), RETRY_AFTER_CAP)
+        return min(max(float(value.strip()), 0.0), cap)
     except ValueError:
         return None
 
@@ -79,6 +80,9 @@ class HttpBackend(Session, Backend):
     #: Requests per second, enforced by the backend's own limiter.
     rate = 10
     retries = 3
+    #: Longest ``Retry-After`` this backend will honour (a site with a minute-scale penalty
+    #: window needs more than the default; the attempts themselves cap the total).
+    retry_after_cap = RETRY_AFTER_CAP
     #: Status codes worth another attempt; backends that read a status as a page state drop it.
     retry_codes = RETRY_CODES
     #: Backoff between retries; tests swap in ``wait_none()``.
@@ -89,7 +93,8 @@ class HttpBackend(Session, Backend):
     cacheable = True
 
     def __init__(self, name: str | None = None, timeout: float | None = None,
-                 rate: int | None = None, min_interval: float | None = None, **session_kw):
+                 rate: int | None = None, min_interval: float | None = None,
+                 retries: int | None = None, retry_after_cap: float | None = None, **session_kw):
         if name is not None:
             self.name = name
         if timeout is not None:
@@ -98,6 +103,13 @@ class HttpBackend(Session, Backend):
             self.rate = rate
         if min_interval is not None:
             self.min_interval = min_interval
+        # A per-site retry budget is a config matter: a fan-out source (OpenAlex) and a
+        # single-item reader have very different tolerances, and which one a run is, is the
+        # user's call rather than a class attribute.
+        if retries is not None:
+            self.retries = int(retries)
+        if retry_after_cap is not None:
+            self.retry_after_cap = float(retry_after_cap)
         super().__init__(timeout=self.timeout, ua=self.UA, headers=self.headers,
                          follow_redirects=self.follow_redirects, http2=self.http2, **session_kw)
         self._send = None
@@ -116,7 +128,7 @@ class HttpBackend(Session, Backend):
     def _wait(self, state) -> float:
         """Backoff for the next attempt: the server's ``Retry-After`` when given, else the schedule."""
         exc = state.outcome.exception() if state.outcome else None
-        asked = retry_after_seconds(exc) if exc is not None else None
+        asked = retry_after_seconds(exc, self.retry_after_cap) if exc is not None else None
         scheduled = self.retry_wait(state)
         return max(asked, scheduled) if asked is not None else scheduled
 

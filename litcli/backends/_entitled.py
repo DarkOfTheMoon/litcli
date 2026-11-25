@@ -51,7 +51,8 @@ class EntitledBackend(HttpBackend):
 
     def __init__(self, name: str = "", timeout: float | None = None,
                  delay: float | None = None, cookie: str = "", cookie_file: str = "",
-                 user_agent: str = "", session=None, **_unused):
+                 user_agent: str = "", session=None, retries: int | None = None,
+                 retry_after_cap: float | None = None, **_unused):
         #: A live browser session owned by the caller (:class:`litcli.browser.Session`). While it
         #: is alive it serves every page and PDF; a dead or absent one leaves the cookie path
         #: below exactly as it was, so existing configurations keep working.
@@ -72,7 +73,7 @@ class EntitledBackend(HttpBackend):
             if not any(h == host or h.endswith("." + host) for h in seeds):
                 seeds.append(host)
         super().__init__(name=name, timeout=timeout, min_interval=delay, seed_cookies=pairs,
-                         seed_hosts=seeds)
+                         seed_hosts=seeds, retries=retries, retry_after_cap=retry_after_cap)
         #: Fetched pages, per normalized key: a read and its PDF download share one request
         #: without a second key evicting the first. The value is whatever the site's ``_page``
         #: stores (an HTML body, or a body/landed-URL pair).

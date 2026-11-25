@@ -145,9 +145,11 @@ class OpenAlexBackend(HttpBackend):
     http2 = True
 
     def __init__(self, name: str = "openalex", mailto: str = "",
-                 base: str = _API, max_results: int = 10, rate_per_sec: float = 10.0):
+                 base: str = _API, max_results: int = 10, rate_per_sec: float = 10.0,
+                 retries: int | None = None, retry_after_cap: float | None = None):
         super().__init__(name=name, rate=int(rate_per_sec) or 10,
-                         min_interval=1.0 / rate_per_sec if rate_per_sec > 0 else 0.0)
+                         min_interval=1.0 / rate_per_sec if rate_per_sec > 0 else 0.0,
+                         retries=retries, retry_after_cap=retry_after_cap)
         self._base = base.rstrip("/")
         self._mailto = mailto
         self._max = max_results

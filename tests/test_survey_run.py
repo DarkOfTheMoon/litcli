@@ -24,6 +24,7 @@ from litcli import project, survey_events
 from litcli.commands import survey
 from litcli.errors import BotWall, NotFound, Unavailable
 from litcli.models import AcademicItem
+from litcli.transport import HttpError
 from tests.fake_browser import FakeSession
 
 
@@ -369,6 +370,44 @@ class SurveyRunTest(unittest.TestCase):
 
     def test_streak_stop_is_reported_as_saturation(self):
         self.assertEqual(survey.run_loop(self.project, self.deps)["stop"], "saturated")
+
+    def test_a_rate_limited_hop_does_not_spend_the_streak(self):
+        # A 429 burst answers the expansion with an error and no candidates. Read as an empty
+        # hop, two of them in a row ended the run as `saturated` (rc 0) one hop in, on a topic
+        # nothing had actually looked at yet.
+        self.backend.references = raising(Unavailable("[openalex] HTTP 429"))
+        result = survey.run_loop(self.project, self.deps)
+        hops = [e for e in project.read_trace(self.project) if e["event"] == "hop_end"]
+        self.assertGreater(len(hops), 2)  # `low` streaks at two empty hops
+        self.assertEqual(result["stop"], "max_hops")
+        self.assertTrue(all(e.get("errored") for e in hops))
+
+    def test_a_dead_row_gets_one_retry_and_a_throttled_one_keeps_its_place(self):
+        # `HttpError` is itself an `Unavailable`, so which of the two a row is has to be read
+        # off the status: a 404 is the row's own fault and earns exactly one more hop, a 429 is
+        # the source's mood and the row keeps its place while the envelope has hops left.
+        for status, stop_reason in ((404, "saturated"), (429, "max_hops")):
+            with self.subTest(status=status):
+                for stray in list(self.project.root.glob("seen.jsonl")):
+                    stray.unlink()
+                soup = self.project.root / "trace.jsonl"
+                if soup.exists():
+                    soup.unlink()
+                project.append_seen(self.project, {"identity": "doi:10.1002/seed", "admit": True,
+                                                   "reason": "seed", "seed": "flag",
+                                                   "key": "10.1002/seed", "score": 0.0, "parts": {}})
+                asked = []
+
+                def boom(key, limit=5, _asked=asked, _status=status):
+                    _asked.append(key)
+                    raise HttpError("openalex", _status, "nope")
+
+                self.backend.references = boom
+                self.assertEqual(survey.run_loop(self.project, self.deps)["stop"], stop_reason)
+                if status == 404:
+                    self.assertEqual(len(asked), 2)
+                else:
+                    self.assertGreater(len(asked), 2)
 
     def test_second_run_while_locked_exits_2(self):
         (self.project.root / "$.lock").write_text("1")

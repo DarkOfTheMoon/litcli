@@ -185,6 +185,17 @@ class TestConfig(unittest.TestCase):
         backends = config.discover_backends({"backends": {"a": {"type": "arxiv", "max_results": 5}}})
         self.assertEqual(backends["a"].name, "a")
 
+    def test_the_retry_keys_reach_the_rate_limited_sources(self):
+        # A section is passed to the constructor verbatim, so a key the constructor does not
+        # take is a TypeError from `backends list`. These two are the sources a long run gets
+        # 429'd by, and the retry budget is exactly what a run has to raise there.
+        for kind in ("openalex", "arxiv"):
+            with self.subTest(kind=kind):
+                be = config.get_backend(kind, config={"backends": {kind: {
+                    "type": kind, "retries": 5, "retry_after_cap": 60.0}}})
+                self.assertEqual(be.retries, 5)
+                self.assertEqual(be.retry_after_cap, 60.0)
+
     def test_write_backend_key_creates_skeleton(self):
         # When the file is missing, write the built-in default skeleton first, then inject api_key into
         # the zotero section

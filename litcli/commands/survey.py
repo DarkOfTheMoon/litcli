@@ -28,12 +28,14 @@ from .. import cache, effort, expansion, fulltext, paths, project, scoring, surv
 from ..admission import decide
 from ..aggregate import identity
 from ..backends._entitled import EntitledBackend
+from ..backends.http import RETRY_CODES
 from ..browser import PlaywrightTimeoutError, session_from_config
 from ..config import get_all_backends
-from ..errors import BadInput, LitcliError
+from ..errors import BadInput, LitcliError, Unavailable
 from ..models import AcademicItem
 from ..pdf import download as download_bytes
 from ..provenance import stamp
+from ..transport import HttpError
 
 #: Candidates the opening search may supply when the user named no seeds.
 OPENING_SEEDS = 3
@@ -463,6 +465,20 @@ def _raiser(signum: int) -> Callable:
     return raised
 
 
+def _again_later(exc: BaseException) -> bool:
+    """Whether the failure says "not now" rather than "not this one".
+
+    A 429 burst or an unreachable host is the source's mood and the row deserves every retry
+    the envelope allows; a 404 (or an answer that is not JSON at all) is the row itself, and one
+    retry is the whole of what another hop can learn about it. The status is read first:
+    ``HttpError`` is itself an :class:`Unavailable`, so a plain ``isinstance`` would call its
+    404 "not now" and retry a dead work every hop to `max_hops`.
+    """
+    if isinstance(exc, HttpError):
+        return exc.status in RETRY_CODES
+    return isinstance(exc, Unavailable)
+
+
 def _frontier(seen_rows: list[dict], trace: list[dict]) -> tuple[list[dict], set[str]]:
     """Admitted works never expanded, and the identities of all expanded ones."""
     expanded = {str(work) for event in trace if event.get("event") == "hop_end"
@@ -495,6 +511,7 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
     best = max((float(row.get("score") or 0.0) for row in seen_rows if row.get("admit")),
                default=0.0)
     streak = admitted_total = landed_total = 0
+    retried: set[str] = set()  # identities an error already cost once (a dead row gets no more)
     interrupted: list[int] = []
 
     def emit(event: str, **fields) -> None:
@@ -558,10 +575,9 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
                 emit("download", hop=hop, identity=identity_now, key=item.key, status=status)
             cache.reset_stats()
             batch, frontier = frontier[: int(envelope["frontier"])], frontier[int(envelope["frontier"]):]
-            fresh = 0
+            fresh = errored = 0
             expanded_now = []
             for row in batch:
-                expanded_now.append(str(row.get("identity")))
                 item = _row_item(row)
                 # The axis cells are edges read from EACH work, so a row starts with its full
                 # allowance every time; only the per-site caps are carried across the run.
@@ -583,7 +599,21 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
                 except (LitcliError, KeyError, ValueError, TypeError) as e:
                     # KeyError is a 200 with no body, ValueError a 200 that is not JSON at all;
                     # both are how the backends report one unreadable answer.
-                    emit("error", hop=hop, identity=str(row.get("identity")), reason=str(e))
+                    errored += 1
+                    identity_now = str(row.get("identity"))
+                    # A row that failed was not really expanded, so the failure must not cost
+                    # it: it goes back on the frontier for the next hop. A row the graph cannot
+                    # resolve at all (a 404, an id the source does not know) gets one retry and
+                    # is then written off, or it would run the topic to `max_hops` alone; the
+                    # write-off stays in `expanded`, so a resume does not spend another hop on
+                    # it either. `errored` keeps either case off the saturation streak below.
+                    if identity_now not in retried or _again_later(e):
+                        retried.add(identity_now)
+                        frontier.append(row)
+                    expanded_now.append(identity_now)
+                    emit("error", hop=hop, identity=identity_now, reason=str(e))
+                else:
+                    expanded_now.append(str(row.get("identity")))
                 # One `references` call is several requests behind a batch, so the axis charge
                 # above is only the floor: the site budget pays for what was really spent.
                 overspend = max(0, cache.stats()["misses"] - spent_before - attempted)
@@ -636,9 +666,15 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
             # hop actually charged, or the quota would drift above its cap on a hot cache.
             refund = min(hits, charged)
             counters["openalex"] += refund
-            streak = 0 if best > high_before else streak + 1
+            # A hop whose expansions errored (a 429 burst, an unreadable answer) found nothing
+            # because it could not look, not because there was nothing: it must not spend the
+            # saturation streak, or two rate-limited hops end a run that never got started.
+            if best > high_before:
+                streak = 0
+            elif not errored:
+                streak += 1
             emit("hop_end", hop=hop, new=fresh, expanded=expanded_now, hits=hits,
-                 charged=charged, refund=refund,
+                 charged=charged, refund=refund, errored=errored,
                  remaining={key: counters[key] for key in ("openalex", "arxiv", "publisher")})
             project.save(survey_project)
         emit("stop", reason=stop, admitted=admitted_total)
