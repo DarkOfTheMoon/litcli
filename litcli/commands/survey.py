@@ -38,6 +38,7 @@ from ..pdf import download as download_bytes
 from ..provenance import stamp
 from ..transport import HttpError
 from .keys import graph_sources
+from .search import relevance
 
 #: Candidates the opening search may supply when the user named no seeds.
 OPENING_SEEDS = 3
@@ -79,16 +80,28 @@ def _seed_identity(seed: str) -> str:
 
 
 def _opening_seeds(cfg: dict, question: str) -> list[AcademicItem]:
-    """One search across the configured sources, first hits only."""
+    """Ask every source once and keep the closest titles, deduplicated.
+
+    Stopping at the first source with enough hits let that one source's own order decide the
+    whole walk (a live run followed lattice-Boltzmann work on a reduced-order-model question
+    because an earlier source answered first); the sources are merged and ranked by the same
+    relevance ``search`` uses instead.
+    """
     found: list[AcademicItem] = []
     for name, backend in get_all_backends(cfg, corpora=True).items():
         try:
             found.extend(stamp(backend.search(question, limit=OPENING_SEEDS), backend))
         except Exception as e:  # one dead source must not sink the opening
             print(f"[skipped] {name}: {e}", file=sys.stderr)
-        if len(found) >= OPENING_SEEDS:
-            break
-    return found[:OPENING_SEEDS]
+    seen: set[str] = set()
+    unique = []
+    for item in found:
+        if identity(item) in seen:
+            continue
+        seen.add(identity(item))
+        unique.append(item)
+    unique.sort(key=lambda item: relevance(item, question))
+    return unique[:OPENING_SEEDS]
 
 
 def _expandable(key: str) -> bool:

@@ -124,6 +124,23 @@ class SurveyNewTest(unittest.TestCase):
         self.assertEqual(len(project.read_seen(p)), 3)
         self.assertTrue(all(r["seed"] == "search" for r in project.read_seen(p)))
 
+    def test_the_opening_asks_every_source_and_takes_the_closest_titles(self):
+        # The opening used to stop at the first source that returned three hits and keep them
+        # unranked: whatever that one source's own order was decided the whole walk, and the
+        # other sources were never asked (a live run followed the wrong field this way).
+        other = FakeBackend()
+        other.name = "crossref"
+        other.hits = [AcademicItem(source="crossref", key="10.5/rom", title="wick boiling review",
+                                   doi="10.5/rom", year="2020")]
+        with mock.patch.object(survey, "get_all_backends",
+                               lambda cfg, corpora=False: {"openalex": self.backend,
+                                                           "crossref": other}):
+            self.run_cmd()
+        self.assertEqual(other.search_calls, 1)
+        seeds = project.load(self.only_project()).seeds
+        self.assertIn("10.5/rom", seeds)
+        self.assertEqual(seeds[0], "10.5/rom")
+
     def test_a_search_seed_is_stored_as_its_work_id(self):
         # The seed-citer bonus compares against graph references, which are work ids: a DOI
         # here could never match, and the bonus would be dead for every search seed.

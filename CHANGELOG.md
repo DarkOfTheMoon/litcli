@@ -42,6 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `search` 全量扇出说法互相打架（这两段写出来就会进，内置免 key 语料并不含它们）；`SKILL.md` 的 `refs`
   备选少了 europepmc；`AGENTS.md` 的后端层没有图谱契约（`GraphSource`/`GRAPH_AXES`/`missing_axes`）。
 
+- 调查开局的种子取法：原来按注册表顺序逐个源问，某个源先凑够三篇就停止，三篇原样收下、不排序也不去重
+  ——整轮走查跟着那个源的排序走（实测「reduced-order models for turbulent combustion」被 arXiv 带回的一篇
+  lattice-Boltzmann 论文带偏，OpenAlex 等其余源一次都没问）。现在问遍所有源，按 `search` 用的同一套相关度
+  合并排序、按身份去重后取前三，同一问题得到的三篇种子全部直指该题。
+
 ### Known gaps
 
 - 调查的状态面保留了 `arxiv` 一份额度，但没有代码扣它：arXiv 后端不参与展开，入口只作全文来源。
