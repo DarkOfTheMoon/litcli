@@ -38,6 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   落成 `[skipped] scihub: <原因>`。
 - 出版社后端的 `retries` / `retry_after_cap`：crossref 与 Europe PMC 的构造函数完全不收，配了这两个键就整源
   建不起来；订阅出版社收下却接不到传输层，配置对它们静默失效。现在两者都显式转给基类。
+- OpenAlex 因 key 被拒时只说一句 `HTTP 403: Forbidden`，与机器人墙同形：待激活、已吊销、超预算的
+  403 正文里本来带着 `code` 与处理办法，现在一并带进消息（状态与分类不变，仍是 403）。
 - 文档：`README.md`/`README.en.md`/`config.example.toml` 对 Semantic Scholar 与 OpenCitations 是否进
   `search` 全量扇出说法互相打架（这两段写出来就会进，内置免 key 语料并不含它们）；`SKILL.md` 的 `refs`
   备选少了 europepmc；`AGENTS.md` 的后端层没有图谱契约（`GraphSource`/`GRAPH_AXES`/`missing_axes`）。

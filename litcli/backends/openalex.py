@@ -8,6 +8,7 @@ compliant full-text source that does not go through Sci-Hub.
 from __future__ import annotations
 
 import http.client
+import json
 import re
 import urllib.parse
 from typing import ClassVar
@@ -15,6 +16,7 @@ from typing import ClassVar
 from ..aggregate import cited_key
 from ..errors import LitcliError, NotFound
 from ..models import AcademicItem
+from ..transport import HttpError
 from .http import HttpBackend
 
 _API = "https://api.openalex.org/works"
@@ -27,6 +29,18 @@ _TYPE_MAP = {
     "grant": "document", "paratext": "document", "component": "document",
     "patent": "patent", "standard": "standard",
 }
+
+
+def _api_error(body: str) -> tuple[str, str]:
+    """``(code, message)`` from an OpenAlex JSON error body; ``("", "")`` for anything else."""
+    try:
+        parsed = json.loads(body or "")
+    except (TypeError, ValueError):
+        return "", ""
+    if not isinstance(parsed, dict):
+        return "", ""
+    code = str(parsed.get("code") or "")
+    return (code, str(parsed.get("message") or parsed.get("error") or "")) if code else ("", "")
 
 
 def _inverted_to_text(ai: dict) -> str:
@@ -165,6 +179,22 @@ class OpenAlexBackend(HttpBackend):
         # The only source that answers all three graph axes inline; the gates key off this.
         return {"read", "refs", "citing", "related"}
 
+
+    def fetch_json(self, url: str, **kw):
+        """Re-raise a refusal with the reason OpenAlex put in the body.
+
+        A pending, revoked or out-of-budget key answers 403 — the status a bot wall uses — and
+        the generic ``Forbidden`` reads as one. The body names the real cause
+        (``key_not_activated`` and the like), so it is carried into the message while the
+        status and its classification stay as they were.
+        """
+        try:
+            return super().fetch_json(url, **kw)
+        except HttpError as e:
+            code, message = _api_error(e.body)
+            if not code:
+                raise
+            raise HttpError(self.name, e.status, f"{code}: {message}", e.body) from e
 
     def _with_mailto(self, url: str) -> str:
         """Append the polite ``&mailto=`` and, when configured, ``&api_key=`` to a URL.

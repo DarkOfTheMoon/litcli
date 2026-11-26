@@ -54,6 +54,22 @@ class OpenAlexStubTest(unittest.TestCase):
         speed_up(self.be)
         self.be.cacheable = False  # tests swap the transport directly, cached bodies would win
 
+    def test_a_refused_key_says_why_instead_of_a_bare_403(self):
+        # A pending or revoked key answers 403, the same status a bot wall uses. OpenAlex names
+        # the actual reason in the body and the reader would otherwise be told "Forbidden".
+        stub(self.be, (403, {"error": "Forbidden", "code": "key_not_activated",
+                             "message": "This API key isn't activated yet."}))
+        with self.assertRaises(HttpError) as caught:
+            self.be.get("10.1002/x")
+        self.assertIn("key_not_activated", str(caught.exception))
+        self.assertEqual(caught.exception.status, 403)
+
+    def test_a_403_without_a_code_stays_the_bare_status(self):
+        stub(self.be, (403, "<html>Are you a robot</html>"))
+        with self.assertRaises(HttpError) as caught:
+            self.be.get("10.1002/x")
+        self.assertNotIn(":", str(caught.exception).split("HTTP 403: ", 1)[1].strip())
+
     def test_inverted_rebuild(self):
         self.assertEqual(_inverted_to_text(WORK["abstract_inverted_index"]),
                          "We review deep learning")
