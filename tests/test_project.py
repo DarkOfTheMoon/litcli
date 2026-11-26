@@ -49,7 +49,7 @@ class CreateTest(unittest.TestCase):
 
     def test_defaults_are_filled_in(self):
         p = project.create(self.root, "Wick boiling limit")
-        self.assertEqual(p.threshold, 2.5)
+        self.assertEqual(p.floor, project.DEFAULT_FLOOR)
         self.assertEqual(p.effort, "medium")
         self.assertEqual(p.status, "running")
         self.assertTrue(p.created)
@@ -65,7 +65,7 @@ class RoundTripTest(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name)
         self.p = project.create(self.root, "Wick boiling limit", seeds=["10.1016/j.ijheatmasstransfer.2020.1"],
-                                type_weight={"article": 1.0}, threshold=3.0)
+                                type_weight={"article": 1.0}, floor=0.3)
 
     def tearDown(self):
         self._tmp.cleanup()
@@ -77,7 +77,7 @@ class RoundTripTest(unittest.TestCase):
         self.assertEqual(again.status, "paused")
         self.assertEqual(again.seeds, self.p.seeds)
         self.assertEqual(again.type_weight, self.p.type_weight)
-        self.assertEqual(again.threshold, 3.0)
+        self.assertEqual(again.floor, 0.3)
 
     def test_a_record_survives_append_and_read(self):
         project.append_seen(self.p, {"key": "doi:10.1/x", "score": 2.75, "note": 'quo"te'})

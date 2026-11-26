@@ -48,7 +48,7 @@ class FakeDiscovery:
         self.related_calls = 0
 
     def _candidate(self):
-        return AcademicItem(source=self.name, key="W1", doi="10.1002/x", title="A candidate",
+        return AcademicItem(source=self.name, key="W1", doi="10.1002/x", title="A candidate on wick boiling",
                             year="2020", cited_by_count=40,
                             extra={"openalex_type": "article", "referenced_works": []})
 
@@ -317,7 +317,7 @@ class SurveyRunTest(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.project = project.create(Path(self._tmp.name), "wick boiling",
-                                      seeds=["10.1002/seed"], threshold=1.0, effort="low")
+                                      seeds=["10.1002/seed"], floor=0.0, effort="low")
         project.append_seen(self.project, {"identity": "doi:10.1002/seed", "admit": True,
                                            "reason": "seed", "seed": "flag",
                                            "key": "10.1002/seed", "score": 0.0, "parts": {}})

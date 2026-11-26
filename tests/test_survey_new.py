@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from litcli import project
 from litcli.commands import survey
-from litcli.errors import BotWall, NotFound
+from litcli.errors import BadInput, BotWall, NotFound
 from litcli.models import AcademicItem
 
 
@@ -92,7 +92,7 @@ class SurveyNewTest(unittest.TestCase):
         self.assertEqual((p.year_from, p.year_to), ("2019", "2024"))
         self.assertEqual(p.type_weight, {"review": 2.0})
         self.assertEqual(p.container, "Nature")
-        self.assertEqual(p.threshold, 2.5)
+        self.assertEqual(p.floor, project.DEFAULT_FLOOR)
         self.assertEqual(p.effort, "medium")
 
     def test_an_open_ended_year_is_recognised(self):
@@ -271,11 +271,18 @@ class SurveyNewTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertEqual(out, "")
 
-    def test_an_explicit_threshold_and_effort_are_kept(self):
-        self.run_cmd("--seed", "10.1002/x", "--threshold", "4", "--effort", "max")
+    def test_an_explicit_floor_and_effort_are_kept(self):
+        self.run_cmd("--seed", "10.1002/x", "--floor", "0.4", "--effort", "max")
         p = project.load(self.only_project())
-        self.assertEqual(p.threshold, 4.0)
+        self.assertEqual(p.floor, 0.4)
         self.assertEqual(p.effort, "max")
+
+    def test_a_floor_outside_the_evidence_scale_is_refused(self):
+        # The knob changed units from a score total to 0..1 evidence; `--floor 2.5` from old
+        # habit would silently admit nothing.
+        with self.assertRaises(BadInput) as caught:
+            self.run_cmd("--seed", "10.1002/x", "--floor", "2.5")
+        self.assertIn("0..1", str(caught.exception))
 
     def test_a_bad_effort_is_refused_by_the_parser(self):
         with self.assertRaises(SystemExit):

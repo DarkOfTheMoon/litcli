@@ -137,7 +137,7 @@ shell 补全只有 bash/zsh/fish（PowerShell 下可在 Git Bash 里生成）。
 
 | 命令 | 说明 |
 |---|---|
-| `litcli survey new "<课题>" [--seed DOI]... [--year A-B] [--type T] [--container 刊名] [--threshold N] [--effort 档]` | 建项目，只打印项目名；不给 `--seed` 先检索取前 3 条当种子 |
+| `litcli survey new "<课题>" [--seed DOI]... [--year A-B] [--type T] [--container 刊名] [--floor 0..1] [--effort 档]` | 建项目，只打印项目名；不给 `--seed` 先检索取前 3 条当种子 |
 | `litcli survey run <项目> [--effort 档] [--format jsonl\|md]` | 从最后一个检查点继续；stdout 是 JSONL 事件，`--format md` 换成按跳的表格 |
 | `litcli survey status <项目>` | 一行 JSON：课题、状态、跳数、准入数、最后停因、剩余额度 |
 | `litcli survey stop <项目>` | 写 `$.stop`，循环在下一个跳边界收尾 |

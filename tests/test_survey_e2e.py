@@ -112,7 +112,7 @@ class SurveyE2ETest(unittest.TestCase):
 
     def make_project(self, name):
         project_ = project.create(self.root / name, "wick boiling", seeds=["doi:10.1002/a"],
-                                  threshold=1.0, effort="low")
+                                  floor=0.0, effort="low")
         project.append_seen(project_, {"identity": "doi:10.1002/a", "admit": True,
                                        "reason": "seed", "key": "W1", "doi": "10.1002/a",
                                        "score": 0.0, "parts": {}})

@@ -4,13 +4,18 @@ its own standing.
 Five axes, each normalized to ``0..1`` *before* its weight is applied, so a weight only ever
 moves its own axis and a recorded score can be re-derived by hand:
 
-* ``c`` — the cluster skeleton: how many works it shares with what is already collected
-  (co-citation), 10 shared references saturating. This is the best evidence of the topic once
-  the collection is on it, so it gets the largest weight.
-* ``q`` — the question: how many of the question's words the candidate itself carries. ``c``
-  only ever says "like what we collected", so a collection that starts drifting pulls its own
-  neighbours in and the drift compounds; ``q`` is the anchor that does not move with it, and
-  the only axis that works on the first hop or for a record carrying nothing but a title.
+* ``c`` — the cluster skeleton: what share of the candidate's own bibliography it shares with
+  what is already collected (co-citation). Divided by its own reference count, because ten shared
+  references are a tenth of a 400-reference review but half of a focused 20-reference paper —
+  unnormalized, any long review saturates the axis on any topic. This is the best evidence of
+  the topic once the collection is on it, so it gets the largest weight.
+* ``q`` — the question: how much of it the candidate itself carries, as the *square* of the
+  share of its content words (stopwords excluded). Squared, because carrying half of what was
+  asked is not half an answer — one word of a seven-word question says almost nothing, and a
+  generic review would otherwise ride its citation count. ``c`` only ever says "like what we
+  collected", so a collection that starts drifting pulls its own neighbours in and the drift
+  compounds; ``q`` is the anchor that does not move with it, and the only axis that works on the
+  first hop or for a record carrying nothing but a title.
 * ``b`` — recency: a linear position inside the project's year window, halved so a candidate
   that cites one of the seeds can pull above the window's own top.
 * ``a`` — classicness, the fallback: citations per year of age. It only speaks loudly while
@@ -20,11 +25,12 @@ moves its own axis and a recorded score can be re-derived by hand:
 The last axis, ``d``, is the declared article type: a project weighs the types it wants
 (``--type review`` writes 2.0) and everything unlisted falls back to a floor.
 
-``q``, ``b`` and ``d`` are properties of the item and the project alone; nothing here does I/O.
+The total is a *ranking*; admission reads :func:`evidence` instead (see below). ``q``, ``b``
+and ``d`` are properties of the item and the project alone; nothing here does I/O.
 """
 from __future__ import annotations
 
-from .commands.search import overlap
+from .commands.search import coverage, overlap
 from .models import AcademicItem
 from .project import Project
 
@@ -42,8 +48,11 @@ DEFAULT_TYPES = frozenset({"article", "review", "preprint", "book", "book-chapte
 #: An undeclared type outside that set still counts, but well below it.
 UNLISTED_TYPE_WEIGHT = 0.2
 
-#: References shared with the collection that saturate ``c``.
+#: References shared with the collection that saturate ``c``; also the floor of its denominator,
+#: so a short bibliography is not punished for being short.
 CLUSTER_CAP = 10
+#: Works inside the collection that have to cite the candidate to saturate that signal.
+CITERS_CAP = 3
 #: Citations per year of age that saturate ``a``.
 PER_YEAR_CAP = 20
 #: A candidate citing a seed gets this much on top of its window position, capped at 1.
@@ -91,7 +100,7 @@ def _recency(item: AcademicItem, project: Project, seeds: set[str]) -> float:
     return position
 
 
-def _bare(work_id: str) -> str:
+def bare(work_id: str) -> str:
     """The bare work id of a reference, whatever its spelling.
 
     ``W22``, ``openalex:W22`` and ``https://openalex.org/W22`` all come back as ``W22``: the
@@ -106,8 +115,8 @@ def _cites_seed(item: AcademicItem, seeds: set[str]) -> bool:
     # The seed-citer bonus is a bonus above the window, so it has to work for a real seed.
     if not seeds:
         return False
-    wanted = {_bare(seed) for seed in seeds}
-    cited = {_bare(ref) for ref in (item.extra.get("referenced_works") or [])}
+    wanted = {bare(seed) for seed in seeds}
+    cited = {bare(ref) for ref in (item.extra.get("referenced_works") or [])}
     return bool(wanted & cited)
 
 
@@ -139,17 +148,62 @@ def sparse(project: Project, trace: list[dict]) -> bool:
     return all(int(entry.get("new") or 0) < SPARSE_NEW for entry in recent)
 
 
+def _refs(item: AcademicItem) -> set[str]:
+    return {str(r) for r in (item.extra.get("referenced_works") or [])}
+
+
+def _shared(item: AcademicItem, collected_refs: set[str]) -> int:
+    return len(_refs(item) & collected_refs)
+
+
+def coupling(item: AcademicItem, collected_refs: set[str]) -> float:
+    """Shared references over the candidate's own bibliography size, in ``0..1``.
+
+    The doc-frequency lesson from BM25's length normalization: a long bibliography shares a
+    little with everything, so raw counts say "big review" rather than "same topic". Divided by
+    the candidate's own count (never below ``CLUSTER_CAP``), 10 shared references of 400 read as
+    the tenth they are.
+    """
+    return _shared(item, collected_refs) / max(CLUSTER_CAP, len(_refs(item)))
+
+
+def _citers(item: AcademicItem, cited: dict[str, int]) -> float:
+    return min(1.0, cited.get(bare(item.key), 0) / CITERS_CAP)
+
+
+def evidence(item: AcademicItem, project: Project, collected_refs: set[str],
+             cited: dict[str, int] | None = None) -> float:
+    """What the item itself carries, in ``0..1``: the question, the cluster, or its citers.
+
+    Recency, classicness and type are about *when* and *how well known*, never about *what*:
+    a fresh, heavily cited paper on some other subject scores on all three, and all three
+    together reach exactly the old default threshold (``1.0 + 0.5 + 1.0``), so a total-based
+    gate let any recent well-cited work through. This one cannot: an item with no shared
+    reference and no question word is worth 0 however famous it is.
+
+    Three signals, in the order the citation-graph literature ranks them: being cited by
+    something already in the collection (direct, the strongest), sharing its references
+    (coupling), and carrying the question. A direct citation counts ``1 / CITERS_CAP``; coupling
+    is :func:`coupling`, already normalized by the candidate's own bibliography; coverage is
+    :func:`overlap`, which requires the question's own parts, not just its words.
+
+    The first hop has no cluster and no citers: it stands on ``q`` alone.
+    """
+    carried = overlap(item, project.question) + coupling(item, collected_refs)
+    return min(1.0, carried + _citers(item, cited or {}))
+
+
 def score(item: AcademicItem, project: Project, collected_refs: set[str],
           trace: list[dict]) -> tuple[float, dict[str, float]]:
     """``(total, parts)`` — the parts are the weighted contributions and are what gets recorded.
 
-    They sum to the total, so a ``seen.jsonl`` row explains its own verdict.
+    They sum to the total, so a ``seen.jsonl`` row explains its own verdict. Only the parts
+    carry the weights; :func:`evidence` is unweighted and is what admission compares.
     """
-    shared = len({str(r) for r in (item.extra.get("referenced_works") or [])} & collected_refs)
     classic_weight = W_CLASSIC_SPARSE if sparse(project, trace) else W_CLASSIC
     parts = {
-        "c": W_CLUSTER * min(1.0, shared / CLUSTER_CAP),
-        "q": W_QUESTION * overlap(item, project.question),
+        "c": W_CLUSTER * coupling(item, collected_refs),
+        "q": W_QUESTION * coverage(item, project.question),
         "b": W_RECENCY * _recency(item, project, {str(s) for s in project.seeds}),
         "a": classic_weight * _classicness(item),
         "d": _type_weight(item, project),

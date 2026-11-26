@@ -25,13 +25,17 @@ from .paths import safe_filename
 
 #: How many leading words of the question name the directory.
 _SLUG_WORDS = 6
-#: The admission score a candidate needs unless the project says otherwise.
-DEFAULT_THRESHOLD = 2.5
+#: The evidence a candidate needs before it may enter, unless the project says otherwise.
+#: Evidence is 0..1 (see ``scoring.evidence``), not the score total: two shared references of a
+#: ten-reference list, one citation from inside the collection, or two halves of the question
+#: sit at this floor. It has to stay strictly above 0, or a famous paper about another field
+#: enters on recency alone.
+DEFAULT_FLOOR = 0.2
 DEFAULT_EFFORT = "medium"
 
 #: TOML key order, fixed so two saves of the same project diff cleanly.
 _FIELDS = ("question", "seeds", "year_from", "year_to", "container", "type_weight",
-           "threshold", "effort", "status", "created")
+           "floor", "effort", "status", "created")
 
 
 @dataclass
@@ -45,7 +49,7 @@ class Project:
     year_to: str = ""
     container: str = ""
     type_weight: dict[str, float] = field(default_factory=dict)
-    threshold: float = DEFAULT_THRESHOLD
+    floor: float = DEFAULT_FLOOR
     effort: str = DEFAULT_EFFORT
     status: str = "running"
     created: str = ""
@@ -151,7 +155,9 @@ def load(root: Path) -> Project:
                 "created"):
         if key in data:
             setattr(project, key, data[key])
-    project.threshold = float(data.get("threshold", DEFAULT_THRESHOLD))
+    # Older projects stored a score floor under the old key, in units that no longer fit the
+    # 0..1 scale; the new key is what is read, and its absence means the new default.
+    project.floor = float(data.get("floor", DEFAULT_FLOOR))
     _read_jsonl(project.seen_file)
     _read_jsonl(project.trace_file)
     return project

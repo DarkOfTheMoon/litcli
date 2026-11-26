@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from litcli import scoring
+from litcli import project, scoring
 from litcli.models import AcademicItem
 from litcli.project import Project
 
@@ -88,6 +88,39 @@ class QuestionTest(unittest.TestCase):
         topic_total, _ = scoring.score(on_topic, self.question_project(), set(), list(trace))
         self.assertGreater(topic_total, classic_total)
 
+    def test_half_the_question_scores_a_quarter_of_it(self):
+        # Coverage is squared, so carrying half of what was asked is not half an answer: a
+        # title with one word of a seven-word question would otherwise count as on-topic.
+        question = "transient growth of viscoelastic instabilities in microfluidic flows"
+        third = make_item(title="Growth instabilities in a duct")  # 2 of 6 content words
+        self.assertAlmostEqual(parts_of(third, make_project(question=question))["q"],
+                               scoring.W_QUESTION * (1 / 3) ** 2)
+
+    def test_a_stopword_is_not_coverage(self):
+        # "for" sits in nearly every title; counting it lets any paper answer any question.
+        self.assertAlmostEqual(parts_of(make_item(title="A general approach"),
+                                        make_project(question="models for flows"))["q"], 0.0)
+
+    def test_a_different_word_form_still_counts(self):
+        # Titles and questions disagree on number; "models" against "model" is the same word.
+        self.assertAlmostEqual(parts_of(make_item(title="A model for flow"),
+                                        make_project(question="models for flows"))["q"],
+                               scoring.W_QUESTION)
+
+    def test_a_one_word_question_cannot_be_answered_by_one_hit(self):
+        self.assertAlmostEqual(parts_of(make_item(title="Boiling"),
+                                        make_project(question="boiling"))["q"],
+                               scoring.W_QUESTION * 0.25)
+
+    def test_a_generic_review_matching_one_word_of_seven_is_no_evidence(self):
+        # Three thousand citations and a place in the canon do not make it about the question:
+        # one word of six is under any sane floor, and the total cannot rescue it.
+        question = "transient growth of viscoelastic instabilities in microfluidic flows"
+        review = make_item(title="The origins and the future of microfluidics",
+                           year="2003", cited_by_count=3000)
+        proj = make_project(question=question)
+        self.assertLess(scoring.evidence(review, proj, set()), project.DEFAULT_FLOOR)
+
     def test_the_cluster_axis_still_outweighs_the_question_axis(self):
         # Co-citation is the better evidence once the collection is on topic; the question is
         # what keeps it there.
@@ -95,6 +128,75 @@ class QuestionTest(unittest.TestCase):
 
     def test_a_question_of_punctuation_alone_scores_zero(self):
         self.assertAlmostEqual(parts_of(make_item(), make_project(question="--"))["q"], 0.0)
+
+
+class EvidenceTest(unittest.TestCase):
+    """What the candidate itself carries — the only thing admission may look at.
+
+    Recency, classicness and type say when and how famous a work is, never what it is about: a
+    fresh, well-cited article about something else scores on all three and would otherwise walk
+    through any gate built on the total.
+    """
+
+    def project(self, question="reduced-order models for turbulent combustion"):
+        return make_project(question=question)
+
+    def test_a_shared_reference_is_evidence(self):
+        item = make_item(extra={"referenced_works": ["W7"]})
+        self.assertAlmostEqual(scoring.evidence(item, self.project(), {"W7"}), 0.1)
+
+    def test_ten_shared_references_saturate(self):
+        refs = [f"W{i}" for i in range(10)]
+        item = make_item(extra={"referenced_works": refs})
+        self.assertAlmostEqual(scoring.evidence(item, self.project(), set(refs)), 1.0)
+
+    def test_question_words_are_evidence(self):
+        partial = make_item(title="Reduced-order models for a turbulent wake",
+                            extra={"referenced_works": []})
+        self.assertGreater(scoring.evidence(partial, self.project(), set()), 0.0)
+
+    def test_one_half_of_a_two_part_question_is_no_evidence(self):
+        # "X for Y" is a conjunction: work on reduced-order models of something else is not
+        # work on reduced-order models of combustion.
+        half = make_item(title="Reduced-order models for a reheat duct",
+                         extra={"referenced_works": []})
+        self.assertAlmostEqual(scoring.evidence(half, self.project(), set()), 0.0)
+
+    def test_nothing_carried_is_zero(self):
+        item = make_item(title="A note on flame stretch", extra={"referenced_works": ["W9"]})
+        self.assertAlmostEqual(scoring.evidence(item, self.project(), {"W1"}), 0.0)
+
+    def test_coupling_is_shared_over_the_candidates_own_bibliography(self):
+        # Ten shared references are a tenth of a 100-reference list but half of a focused
+        # 20-reference one. Unnormalized, any long review saturates the axis on any topic: a
+        # 640-reference generic review and a 43-reference on-topic paper both hit the cap.
+        shared = {f"W{i}" for i in range(10)}
+        review = make_item(extra={"referenced_works": [f"W{i}" for i in range(400)]})
+        focused = make_item(extra={"referenced_works": [f"W{i}" for i in range(20)]})
+        self.assertAlmostEqual(scoring.evidence(focused, self.project(), shared), 0.5)
+        self.assertAlmostEqual(scoring.evidence(review, self.project(), shared), 0.025)
+        self.assertLess(scoring.evidence(review, self.project(), shared),
+                        project.DEFAULT_FLOOR)
+
+    def test_a_citation_from_inside_the_collection_is_evidence(self):
+        # A direct citation is the strongest local signal there is — better than a shared
+        # reference (coupling), which only says two works read the same papers.
+        item = make_item(key="openalex:W5", title="A note on flame stretch",
+                         extra={"referenced_works": ["W9"]})
+        self.assertAlmostEqual(scoring.evidence(item, self.project(), {"W1"}), 0.0)
+        cited = {"W5": 1}
+        self.assertGreaterEqual(scoring.evidence(item, self.project(), {"W1"}, cited),
+                                project.DEFAULT_FLOOR)
+
+    def test_three_citations_from_inside_the_collection_saturate(self):
+        item = make_item(key="W5", title="A note", extra={"referenced_works": []})
+        self.assertAlmostEqual(scoring.evidence(item, self.project(), set(), {"W5": 3}), 1.0)
+
+    def test_a_reference_and_a_word_add_up_but_stay_capped(self):
+        refs = [f"W{i}" for i in range(10)]
+        item = make_item(title="Reduced-order models for turbulent combustion",
+                         extra={"referenced_works": refs})
+        self.assertAlmostEqual(scoring.evidence(item, self.project(), set(refs)), 1.0)
 
 
 class RecencyTest(unittest.TestCase):

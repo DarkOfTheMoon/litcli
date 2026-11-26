@@ -19,6 +19,7 @@ import json
 import os
 import signal
 import sys
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -56,8 +57,10 @@ def add_new_parser(p: argparse.ArgumentParser) -> None:
     p.add_argument("--type", action="append", default=[],
                    help="prefer this OpenAlex article type, repeatable (weight 2.0)")
     p.add_argument("--container", default="", help="require this journal/conference substring")
-    p.add_argument("--threshold", type=float, default=None,
-                   help=f"admission score floor (default {project.DEFAULT_THRESHOLD})")
+    p.add_argument("--floor", type=float, default=None,
+                   help="evidence floor a candidate needs, 0..1 (default "
+                        f"{project.DEFAULT_FLOOR}): two shared references, one citation from inside "
+                        "the collection, or two halves of the question")
     p.add_argument("--effort", default=effort.DEFAULT,
                    choices=effort.LEVELS,
                    help=f"how wide to walk (default {effort.DEFAULT})")
@@ -109,10 +112,9 @@ def _expandable(key: str) -> bool:
     return (key.startswith("W") and key[1:].isdigit()) or key.startswith("10.")
 
 
-def _bare_id(work_id: str) -> str:
-    """A work id without its URL or source prefix (``https://openalex.org/W1`` -> ``W1``)."""
-    tail = str(work_id).strip().rstrip("/").rsplit("/", 1)[-1]
-    return tail.partition(":")[2] or tail
+#: A work id without its URL or source prefix (``https://openalex.org/W1`` -> ``W1``). The
+#: spelling has to match on both sides of every id comparison, and scoring already owns it.
+_bare_id = scoring.bare
 
 
 def _graph_id(item, backend) -> str:
@@ -229,13 +231,16 @@ def cmd_survey_new(cfg, args) -> int:
     question = " ".join(args.question).strip()
     if not question:
         raise BadInput("a survey needs a question")
+    if args.floor is not None and not 0.0 <= args.floor <= 1.0:
+        raise BadInput(f"--floor {args.floor:g} is outside the 0..1 evidence scale "
+                       "(it is not the old score total)")
     year_from, year_to = _split_year(args.year)
     fields = {
         "year_from": year_from,
         "year_to": year_to,
         "container": args.container or "",
         "type_weight": {kind: 2.0 for kind in args.type},
-        "threshold": args.threshold if args.threshold is not None else project.DEFAULT_THRESHOLD,
+        "floor": args.floor if args.floor is not None else project.DEFAULT_FLOOR,
         "effort": args.effort,
     }
     typed = [s.strip() for s in args.seed if s.strip()]
@@ -586,6 +591,12 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
     landed = _landed(seen_rows)
     collected = {str(work) for row in seen_rows if row.get("admit")
                  for work in row.get("referenced_works") or []}
+    #: How many works already in the collection cite each work id. A direct citation from inside
+    #: the set is the strongest local signal there is, stronger than a shared reference.
+    cited: Counter[str] = Counter()
+    for row in seen_rows:
+        if row.get("admit"):
+            cited.update(scoring.bare(work) for work in row.get("referenced_works") or [])
     envelope = effort.resolve(survey_project.effort)
     #: Every graph source is its own site with its own allowance: a fallback answering for a
     #: throttled first source must not be paid for out of that first source's budget.
@@ -671,6 +682,8 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
             #: The collection as it stood when the hop opened. Frozen for the whole hop, so two
             #: candidates of the same hop are scored against the same thing.
             collected_at_hop_start = set(collected)
+            #: Citers as they stood when the hop opened, frozen for the same reason.
+            cited_at_hop_start = Counter(cited)
             #: What the whole hop charged, per site, for the refund below: a warm cache over a
             #: batch refunds every row that hit it, not only the last one.
             charged_by: dict[str, int] = {}
@@ -730,9 +743,12 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
                 charged += row_charge
                 for candidate, axis in pairs:
                     stamp([candidate], deps.by_name.get(candidate.source) or deps.sources()[0])
+                    carried = scoring.evidence(candidate, survey_project,
+                                               collected_at_hop_start, cited_at_hop_start)
                     total, parts = scoring.score(candidate, survey_project,
                                                  collected_at_hop_start, trace)
                     candidate.extra["score"] = total
+                    candidate.extra["evidence"] = carried
                     verdict = decide(candidate, survey_project, seen)
                     seen.add(verdict["identity"])
                     pending.append({
@@ -740,7 +756,7 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
                         "reason": verdict["reason"], "hop": hop, "axis": axis,
                         "source": candidate.source, "key": candidate.key,
                         "title": candidate.title, "doi": candidate.doi, "year": candidate.year,
-                        "score": total, "parts": parts,
+                        "score": total, "evidence": carried, "parts": parts,
                         "referenced_works": candidate.extra.get("referenced_works") or [],
                         "item": candidate})
             # The hop is judged; now spend it. Best first, and only as many as the envelope
@@ -759,6 +775,7 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
                                      "doi": row["doi"], "source": row["source"],
                                      "title": row["title"], "year": row["year"]})
                     collected.update(str(w) for w in row["referenced_works"])
+                    cited.update(scoring.bare(w) for w in row["referenced_works"])
                     best = max(best, float(row["score"]))
                     if counters["publisher"] > 0:
                         counters["publisher"] -= 1

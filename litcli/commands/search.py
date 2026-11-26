@@ -16,6 +16,33 @@ from .render import print_items
 
 _TOKEN_RE = re.compile(r"\w+", re.UNICODE)
 
+#: Words that stand in nearly every title, so matching one says nothing about the topic. Left
+#: in, they hand any record a share of every question that happens to use them.
+_STOPWORDS = frozenset({
+    "a", "an", "and", "are", "as", "at", "be", "been", "by", "for", "from", "in", "into", "is",
+    "it", "its", "of", "on", "or", "such", "than", "that", "the", "their", "them", "then",
+    "there", "these", "they", "this", "those", "to", "upon", "via", "was", "were", "what",
+    "when", "where", "which", "while", "who", "will", "with", "without",
+})
+
+#: Words that join the parts of a question ("X for Y", "A in B"). They are stopwords already;
+#: here they also mark where one part ends and the next begins, so the parts can be required one
+#: by one instead of the whole string being averaged.
+_LEG_JOINERS = frozenset({"for", "in", "of", "on", "onto", "using", "via", "with", "without",
+                          "to", "from", "into", "upon", "by", "under", "through", "and"})
+
+#: Suffix rewrites of the smallest stemmer that is still worth having — Porter's step 1 minus
+#: the parts that need the full algorithm. Titles and questions disagree on number constantly,
+#: and a literal comparison throws away the half of the question that happens to be plural.
+_SUFFIXES = (("ies", "y"), ("es", ""), ("s", ""), ("ing", ""), ("ed", ""))
+
+#: Share of a long question's parts that must be carried to count as an answer. Elasticsearch's
+#: ``minimum_should_match`` conditional form (``2<75%``): every part of a one- or two-part
+#: question ("X for Y" has both halves), 75% of a longer one (rounded down, never under one).
+#: Three parts is where the questions in use sit ("X of Y in Z"), and demanding all three starves
+#: the walk: the literature answers two of them at a time, never all three in one title.
+LEG_SHARE = 0.75
+
 #: Seconds the whole fan-out may take before the stragglers are given up on.
 DEADLINE = 45.0
 #: Sources searched at the same time.
@@ -58,7 +85,52 @@ def _fan_out(backends: dict, query: str, limit: int, filters: dict,
 
 
 def _tokens(query: str) -> list[str]:
-    return [t.lower() for t in _TOKEN_RE.findall(query or "")]
+    return [t for t in (w.lower() for w in _TOKEN_RE.findall(query or ""))
+            if t not in _STOPWORDS]
+
+
+def _stem(word: str) -> str:
+    for suffix, replacement in _SUFFIXES:
+        if len(word) > len(suffix) + 2 and word.endswith(suffix):
+            return word[: -len(suffix)] + replacement
+    return word
+
+
+def _same(a: str, b: str) -> bool:
+    """Whether two words are the same word: equal stems, or one inside the other.
+
+    The containment covers compounding — ``nanofluidic`` carries ``fluidic``, and
+    ``viscoelastic`` carries the ``elastic`` a title may spell on its own. It needs four
+    characters at the shorter end, or the article ``a`` sits inside half the query.
+    """
+    if _stem(a) == _stem(b):
+        return True
+    short, long_ = (a, b) if len(a) <= len(b) else (b, a)
+    return len(short) >= 4 and short in long_
+
+
+def legs(query: str) -> list[list[str]]:
+    """The question's parts, split at the words that join them ("X for Y", "A in B").
+
+    A question is usually a conjunction: the work that answers only one half of "machine
+    learning for thermal hydraulics" is not the work that was asked for. Splitting keeps the
+    parts separately weighable, so one of them cannot be bought with the other's words.
+    """
+    parts: list[list[str]] = [[]]
+    for word in _TOKEN_RE.findall(query or ""):
+        word = word.lower()
+        if word in _LEG_JOINERS:
+            parts.append([])
+        elif word not in _STOPWORDS:
+            parts[-1].append(word)
+    return [part for part in parts if part]
+
+
+def _required(count: int) -> int:
+    """How many parts must be carried — all of two or fewer, :data:`LEG_SHARE` of more, min one."""
+    if count <= 2:
+        return count
+    return max(1, int(count * LEG_SHARE))
 
 
 def matches(item: AcademicItem, filters: dict) -> bool:
@@ -80,20 +152,52 @@ def matches(item: AcademicItem, filters: dict) -> bool:
     return True
 
 
-def overlap(item: AcademicItem, query: str) -> float:
-    """Share of the query's words this item carries, in ``0..1``, saturating at all of them.
+def _leg_coverage(item: AcademicItem, part: list[str]) -> float:
+    """Share of one part's words this item carries, in ``0..1``.
 
     A title hit counts whole, an abstract hit for half: a title is what the authors chose the
     work to be about. Matching is by substring, so a query word inside a longer one still
-    counts (``for`` in ``formaldehyde``) — cheap, and close enough for ranking.
+    counts (``wick`` in ``wicking``) — cheap, and close enough for ranking.
+    """
+    title = _TOKEN_RE.findall((item.title or "").lower())
+    abstract = _TOKEN_RE.findall((item.abstract or "").lower())
+    hits = sum(1 for w in part if any(_same(w, t) for t in title))
+    hits += 0.5 * sum(1 for w in part if any(_same(w, t) for t in abstract))
+    return min(1.0, hits / max(2, len(part)))
+
+
+def coverage(item: AcademicItem, query: str) -> float:
+    """Share of the query's content words the item carries, squared — the ranking axis ``q``.
+
+    Unlike :func:`overlap` this knows nothing about the question's parts: partial answers keep
+    their proportion, which is what orders two candidates that both already passed the gate. The
+    share is divided by two words at least, so a one-word question cannot be answered whole by a
+    single hit, and squared, so carrying half of what was asked is not half an answer.
     """
     tokens = _tokens(query)
     if not tokens:
         return 0.0
-    title = (item.title or "").lower()
-    abstract = (item.abstract or "").lower()
-    hits = sum(1 for t in tokens if t in title) + 0.5 * sum(1 for t in tokens if t in abstract)
-    return min(1.0, hits / len(tokens))
+    return _leg_coverage(item, tokens) ** 2
+
+
+def overlap(item: AcademicItem, query: str) -> float:
+    """How much of the question the item answers, in ``0..1``, as the *weakest required part*.
+
+    The parts are the question's conjunction members (:func:`legs`), and answering the question
+    means carrying enough of them — all of a one- or two-part question, three quarters of a
+    longer one (see :data:`LEG_SHARE`). The score is the smallest coverage among the parts it
+    had to carry, so one strong half cannot buy a missing one; a part matching nothing drags the
+    result to 0 however many of the other words are there.
+
+    Squared, because carrying half of a part is not half an answer: a generic work matching one
+    word of a seven-word question would otherwise count as on-topic.
+    """
+    parts = legs(query)
+    if not parts:
+        return 0.0
+    coverages = sorted(_leg_coverage(item, part) for part in parts)
+    required = coverages[-_required(len(parts)):]
+    return required[0] ** 2
 
 
 def relevance(item: AcademicItem, query: str) -> tuple:
@@ -103,16 +207,16 @@ def relevance(item: AcademicItem, query: str) -> tuple:
     shares a word; citation count breaks ties, then year and title make the order stable.
     """
     tokens = _tokens(query)
-    title = (item.title or "").lower()
-    abstract = (item.abstract or "").lower()
-    container = (item.container_title or "").lower()
-    score = sum(3 for t in tokens if t in title)
-    score += sum(2 for t in tokens if t in container)
-    score += sum(1 for t in tokens if t in abstract)
-    if tokens and all(t in title for t in tokens):
+    title = _TOKEN_RE.findall((item.title or "").lower())
+    abstract = _TOKEN_RE.findall((item.abstract or "").lower())
+    container = _TOKEN_RE.findall((item.container_title or "").lower())
+    score = sum(3 for t in tokens if any(_same(t, w) for w in title))
+    score += sum(2 for t in tokens if any(_same(t, w) for w in container))
+    score += sum(1 for t in tokens if any(_same(t, w) for w in abstract))
+    if tokens and all(any(_same(t, w) for w in title) for t in tokens):
         score += 5
     return (-score, -item.cited_by_count, -(int(item.year) if (item.year or "").isdigit() else 0),
-            title)
+            (item.title or ""))
 
 
 def search_filters(args) -> dict:

@@ -56,6 +56,63 @@ class RelevanceTest(unittest.TestCase):
         partial = _item("Neural networks", abstract="graph")
         self.assertLess(relevance(exact, "graph neural networks"), relevance(partial, "graph neural networks"))
 
+    def test_a_stopword_hit_does_not_stand_for_the_query(self):
+        # "for" is in nearly every title. Counted, it ties a title that carries a real query word
+        # and the tie falls through to the title's alphabetical order ("A tool…" first).
+        stopword_only = _item("A tool for analysts")
+        on_topic = _item("Flow regimes")
+        self.assertLess(relevance(on_topic, "flow for analysis"),
+                        relevance(stopword_only, "flow for analysis"))
+
+    def test_the_query_words_drop_stopwords(self):
+        self.assertEqual(search._tokens("for the flows of"), ["flows"])
+
+    def test_a_question_is_split_into_its_parts(self):
+        self.assertEqual(search.legs("machine learning for nuclear thermal hydraulics"),
+                         [["machine", "learning"], ["nuclear", "thermal", "hydraulics"]])
+
+    def test_a_question_without_a_connective_is_one_part(self):
+        self.assertEqual(search.legs("wick boiling"), [["wick", "boiling"]])
+
+    def test_two_parts_both_have_to_be_there(self):
+        # "X for Y" is a conjunction: the half that answers only one of the two is not the
+        # thing that was asked for.
+        both = _item("Machine learning for nuclear thermal hydraulics")
+        half = _item("Nuclear thermal hydraulics of a water loop")
+        q = "machine learning for nuclear thermal hydraulics"
+        self.assertGreater(search.overlap(both, q), search.overlap(half, q))
+        self.assertAlmostEqual(search.overlap(half, q), 0.0)
+
+    def test_one_of_three_parts_may_be_missing(self):
+        # The literature answers a three-part question two parts at a time and almost never all
+        # three in one title; demanding all three starves the walk.
+        q = "transient growth of viscoelastic instabilities in microfluidic flows"
+        two_of_three = _item("Viscoelastic instabilities in microfluidic flows")
+        one_of_three = _item("Droplet microfluidic platforms")
+        self.assertAlmostEqual(search.overlap(two_of_three, q), 1.0)
+        self.assertAlmostEqual(search.overlap(one_of_three, q), 0.0)
+
+    def test_a_long_question_may_lose_a_quarter_of_its_parts(self):
+        # Four parts or more: a quarter may be missing, rounded down, never fewer than one part.
+        q = "transient growth of viscoelastic instabilities in narrow microfluidic channel flows"
+        most = _item("Transient growth of viscoelastic instabilities in microfluidic flows")
+        self.assertGreater(search.overlap(most, q), 0.0)
+
+    def test_a_plural_and_its_singular_are_the_same_word(self):
+        # Titles and questions disagree on number constantly ("instabilities" vs "instability",
+        # "flows" vs "flow"); a rule that only compares literal spellings loses the on-topic
+        # half of every question that happens to be plural.
+        singular = search.overlap(_item("Instability of channel flow"),
+                                  "instability of channel flow")
+        self.assertGreater(singular, 0.0)
+        self.assertAlmostEqual(
+            search.overlap(_item("Instability of channel flow"),
+                           "instabilities of channel flows"), singular)
+
+    def test_a_compound_word_carries_its_part(self):
+        self.assertGreater(search.overlap(_item("Purely elastic instability"),
+                                          "viscoelastic instabilities"), 0.0)
+
     def test_citations_break_a_tie(self):
         weak = _item("Graph analysis")
         strong = _item("Graph analysis", cited_by_count=90)

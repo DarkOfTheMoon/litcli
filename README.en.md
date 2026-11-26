@@ -162,14 +162,14 @@ A backend without the field folds it into free text, or ignores it:
 ### Surveying a subject
 
 A survey turns "collect the literature around a subject" into a long-running project: `survey new`
-writes the project (seeds, year window, journal constraint, threshold, effort level) to
+writes the project (seeds, year window, journal constraint, evidence floor, effort level) to
 `project.toml`, `survey run` casts the citation graph one hop at a time, lands every admitted
 fulltext and its metadata in `corpus/`, and records every step in `trace.jsonl` so a walk can be
 resumed and audited.
 
 | Command | What it does |
 |---|---|
-| `litcli survey new "<subject>" [--seed DOI]... [--year A-B] [--type T] [--container JOURNAL] [--threshold N] [--effort LEVEL]` | create a project; prints only its name; without `--seed` it first searches and takes the first 3 hits as seeds |
+| `litcli survey new "<subject>" [--seed DOI]... [--year A-B] [--type T] [--container JOURNAL] [--floor 0..1] [--effort LEVEL]` | create a project; prints only its name; without `--seed` it first searches and takes the first 3 hits as seeds |
 | `litcli survey run <project> [--effort LEVEL] [--format jsonl\|md]` | resume from the last checkpoint; stdout is JSONL events, `--format md` prints one table per hop instead |
 | `litcli survey status <project>` | one JSON line: question, status, hops, admitted, last stop, remaining quota |
 | `litcli survey stop <project>` | write `$.stop`; the walk ends at its next hop boundary |
