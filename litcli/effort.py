@@ -20,16 +20,21 @@ DEFAULT = "medium"
 #: The envelope per level: ``frontier`` candidates per step, ``admit`` of them kept, ``refs`` /
 #: ``citing`` / ``related`` edges read from each work, ``streak`` dry steps allowed,
 #: ``graph_cap`` requests per graph source, ``arxiv_cap`` / ``publisher_cap`` per site, and
-#: ``max_hops`` steps.
+#: ``max_hops`` steps. A site allowance is sized to cover the whole walk the same row
+#: allows (``admit × max_hops × ~10``, one expansion of one row measured at ~10 requests
+#: because ``references`` is one call plus one per cited work), or it spends out by the
+#: second hop and the walk stops on "budget" instead of on the topic. It is a
+#: reservation, not a hard stop: a single wide answer can carry a site a request or two
+#: past its number, and the counter records the truth (it may go slightly negative).
 _TABLE = {
     "low": dict(frontier=4, admit=2, refs=10, citing=10, related=5, streak=2,
-                graph_cap=40, arxiv_cap=10, publisher_cap=2, max_hops=6),
+                graph_cap=120, arxiv_cap=10, publisher_cap=2, max_hops=6),
     "medium": dict(frontier=8, admit=5, refs=20, citing=20, related=10, streak=3,
-                   graph_cap=200, arxiv_cap=40, publisher_cap=6, max_hops=20),
+                   graph_cap=1000, arxiv_cap=40, publisher_cap=6, max_hops=20),
     "high": dict(frontier=16, admit=8, refs=30, citing=30, related=15, streak=4,
-                 graph_cap=600, arxiv_cap=100, publisher_cap=15, max_hops=50),
+                 graph_cap=4000, arxiv_cap=100, publisher_cap=15, max_hops=50),
     "max": dict(frontier=24, admit=12, refs=50, citing=50, related=25, streak=6,
-                graph_cap=1500, arxiv_cap=200, publisher_cap=30, max_hops=120),
+                graph_cap=14400, arxiv_cap=200, publisher_cap=30, max_hops=120),
 }
 
 

@@ -837,7 +837,8 @@ class SurveyRunTest(unittest.TestCase):
         self.assertTrue(hop_end)
         first = hop_end[0]
         self.assertEqual(first["refund"], first["charged"])
-        self.assertEqual(first["remaining"]["openalex"], 40)  # low effort cap: 3 charged, refunded
+        # the low effort allowance, whole again: 3 charged, all refunded
+        self.assertEqual(first["remaining"]["openalex"], effort.resolve("low")["graph_cap"])
 
     def test_the_same_hop_without_a_hit_keeps_the_charge(self):
         # The other half of the bracket: with no hits the counter must fall, or the test above
@@ -845,7 +846,8 @@ class SurveyRunTest(unittest.TestCase):
         survey.run_loop(self.project, self.deps)
         first = next(e for e in project.read_trace(self.project) if e["event"] == "hop_end")
         self.assertEqual(first["refund"], 0)
-        self.assertEqual(first["remaining"]["openalex"], 40 - first["charged"])
+        self.assertEqual(first["remaining"]["openalex"],
+                         effort.resolve("low")["graph_cap"] - first["charged"])
 
     def test_a_cache_hit_refunds_every_charged_row_of_the_hop(self):
         # The refund used to be settled from the *last* row's charges only: a warm cache over a
@@ -861,7 +863,7 @@ class SurveyRunTest(unittest.TestCase):
         first = self._hop_ends()[0]
         self.assertEqual(first["charged"], 6)  # two rows, three axes each
         self.assertEqual(first["refund"], 6)
-        self.assertEqual(first["remaining"]["openalex"], 40)
+        self.assertEqual(first["remaining"]["openalex"], effort.resolve("low")["graph_cap"])
 
     def test_a_row_past_a_mid_batch_budget_stays_unexpanded(self):
         # The budget stop is only read between hops, so the tail of the batch that spent the
@@ -911,7 +913,8 @@ class SurveyRunTest(unittest.TestCase):
             survey.run_loop(self.project, self.deps)
         first = next(e for e in project.read_trace(self.project) if e["event"] == "hop_end")
         self.assertGreaterEqual(first["charged"], 12)
-        self.assertEqual(first["remaining"]["openalex"], 40 - first["charged"])
+        self.assertEqual(first["remaining"]["openalex"],
+                         effort.resolve("low")["graph_cap"] - first["charged"])
 
     def test_a_corpus_file_carries_one_extension(self):
         # safe_filename(..., "") leaves a trailing dot, so appending ".pdf" to it yields
