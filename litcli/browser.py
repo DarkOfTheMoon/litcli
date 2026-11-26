@@ -58,10 +58,23 @@ def looks_like_pdf(url: str) -> bool:
     return urlparse(str(url or "")).path.lower().endswith(".pdf")
 
 
-#: The ceiling on waiting for a PDF endpoint. A clock cannot tell "no entitlement" from "still
+#: The ceiling on the page work of one item. A clock cannot tell "no entitlement" from "still
 #: downloading" — the document can, so the wait ends the moment the page is a document rather
-#: than a challenge; this only bounds a challenge that never resolves, and the transfer after it.
+#: than a challenge; this only bounds a challenge that never resolves. It is one clock for the
+#: whole item (navigation, challenge, then the last-resort request), not one per stage: three
+#: stages of five minutes each held a run for a quarter of an hour on a single dead link. The
+#: awaited transfer itself is not timed; it ends when the artifact lands or Chrome gives up.
 _DOWNLOAD_WAIT = 300.0
+
+#: The navigation's share of :data:`_DOWNLOAD_WAIT`. It waits only for the commit, so this is
+#: ample for the ones that do answer; an answer that never comes still leaves most of the clock
+#: to the fallback request, which is where a dead navigation's file can still turn up.
+_NAV_WAIT = 60.0
+
+#: The least the last-resort request gets when the clock above is spent — the budget the
+#: navigation had. A request cut to the leftover second is as good as not made, and it can only
+#: be reached after the loop has already waited the rest out.
+_FALLBACK_WAIT = 60.0
 
 #: How long a viewer shell under the route it was asked for is given to redirect into the file
 #: (~2 s in practice; a bot check in between takes longer). Past it the shell is taken as the
@@ -658,8 +671,12 @@ class Session:
         context.set_default_timeout(_DOWNLOAD_WAIT * 1000)
         try:
             page.on("download", collect)
-            response = _goto_allowing_download(page, url, wait_until="commit")
+            #: The whole item runs against one clock, so no stage can spend the next one's. The
+            #: navigation takes its own share of it, and at most the clock whole (a test pins
+            #: the clock lower than the share).
             deadline = time.monotonic() + _DOWNLOAD_WAIT
+            response = _goto_allowing_download(page, url, wait_until="commit",
+                                               timeout=min(_NAV_WAIT, _DOWNLOAD_WAIT) * 1000)
             settled = time.monotonic() + _REDIRECT_GRACE
             while not caught:
                 # A started download leaves the previous document up, which says nothing, so it
@@ -681,9 +698,10 @@ class Session:
                         break
                     if not coming and time.monotonic() >= settled:
                         break  # the route kept its shell: take it, it is not going to move
-                if time.monotonic() >= deadline:
+                left = deadline - time.monotonic()
+                if left <= 0:
                     break
-                page.wait_for_timeout(_CHALLENGE_POLL * 1000)
+                page.wait_for_timeout(min(_CHALLENGE_POLL, left) * 1000)
             if caught:
                 saved = caught[0].path  # a str already on the offline stand-in
                 return Path(saved() if callable(saved) else saved).read_bytes()
@@ -692,9 +710,12 @@ class Session:
             landed = page.url
             fresh = landed != before or response is not None
             target = landed if fresh and looks_like_pdf(landed) else url
-            # The request context keeps its own 30 s regardless of the setting above.
-            answer = context.request.get(target, headers={"Accept": "application/pdf"},
-                                         timeout=_DOWNLOAD_WAIT * 1000)
+            # The request context ignores the setting above and keeps its own 30 s, so its
+            # timeout is named here: the clock's remainder, but never less than what the
+            # navigation itself was given — by this point the loop may have spent it all.
+            answer = context.request.get(
+                target, headers={"Accept": "application/pdf"},
+                timeout=max(_FALLBACK_WAIT, deadline - time.monotonic()) * 1000)
             return answer.body()
         except PlaywrightError as e:
             # The window was closed mid-download (TargetClosedError) or the page went away:

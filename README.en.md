@@ -169,9 +169,9 @@ resumed and audited.
 
 | Command | What it does |
 |---|---|
-| `litcli survey new "<subject>" [--seed DOI]... [--year A-B] [--type T] [--container JOURNAL] [--floor 0..1] [--effort LEVEL]` | create a project; prints only its name; without `--seed` it first searches and takes the first 3 hits as seeds |
+| `litcli survey new "<subject>" [--seed DOI|TITLE]... [--year A-B] [--type T] [--container JOURNAL] [--floor 0..1] [--effort LEVEL]` | create a project; prints only its name; without `--seed` it first searches and takes the first 3 hits as seeds |
 | `litcli survey run <project> [--effort LEVEL] [--format jsonl\|md]` | resume from the last checkpoint; stdout is JSONL events, `--format md` prints one table per hop instead |
-| `litcli survey status <project>` | one JSON line: question, status, hops, admitted, last stop, remaining quota |
+| `litcli survey status <project>` | one JSON line: question, status, floor (`floor_legacy` names a migration from `threshold`), seeds (with their question coverage — `?` when the title is unknown — and `weak`), hops, admitted, last stop, remaining quota; `--why` switches to a text audit view |
 | `litcli survey stop <project>` | write `$.stop`; the walk ends at its next hop boundary |
 
 The level decides how wide to walk, not how much to collect — a hot subject keeps scoring new
@@ -188,7 +188,7 @@ The quota counts requests: a cache hit costs nothing, a retry still costs. One `
 at a time (an existing `$.lock` exits 2); resume with the same command — expanded works are never
 expanded twice. Every `seen.jsonl` row carries its reason (`score 3.21 >= 2.50`, `seen`,
 `year … outside …`), and a failed download is marked `unavailable` without dropping the
-candidate. `run` exits 1 when not one copy landed in `corpus/` — metadata sidecars do not count.
+candidate. `run` exits 1 when not one copy landed in `corpus/` — metadata sidecars do not count — and 130/143 when a second Ctrl-C/SIGTERM aborts it, with the status settled to `stopped` and the same command resuming.
 
 ## Backends and what they may fetch
 

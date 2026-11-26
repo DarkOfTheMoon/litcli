@@ -79,6 +79,19 @@ class RoundTripTest(unittest.TestCase):
         self.assertEqual(again.type_weight, self.p.type_weight)
         self.assertEqual(again.floor, 0.3)
 
+    def test_an_old_threshold_project_is_marked_for_migration(self):
+        # 2.5 is the old score-total floor; read as a 0..1 evidence floor it would admit
+        # everything, and nothing in the file would say the units changed.
+        path = self.p.root / "project.toml"
+        text = path.read_text(encoding="utf-8").replace("floor = 0.3", "threshold = 2.5")
+        path.write_text(text, encoding="utf-8")
+        again = project.load(self.p.root)
+        self.assertEqual(again.floor, project.DEFAULT_FLOOR)
+        self.assertEqual(again.legacy_floor, "threshold")
+
+    def test_a_current_project_needs_no_migration(self):
+        self.assertIsNone(project.load(self.p.root).legacy_floor)
+
     def test_a_record_survives_append_and_read(self):
         project.append_seen(self.p, {"key": "doi:10.1/x", "score": 2.75, "note": 'quo"te'})
         self.assertEqual(project.read_seen(self.p),

@@ -1,0 +1,115 @@
+{
+ "walk": "v7",
+ "question": "machine learning for nuclear reactor thermal hydraulics",
+ "floor": 0.2,
+ "rows": [
+  {
+   "title": "Multifluid flow dynamics of core relocation in pressurized water reactors",
+   "year": "2025",
+   "label": "off",
+   "evidence": 0.4412,
+   "note": "reactor thermal hydraulics but no learning; the walk admitted it",
+   "overlap": 0.0,
+   "coupling": 0.4412,
+   "citers": 0.0,
+   "known_admit": true
+  },
+  {
+   "title": "Evaluation of optimized machine learning models for nuclear reactor accident prediction",
+   "year": "2022",
+   "label": "on",
+   "evidence": 0.3026,
+   "overlap": 0.25,
+   "coupling": 0.0526,
+   "citers": 0.0
+  },
+  {
+   "title": "Using deep learning to explore local physical similarity for global-scale bridging in thermal-hydraulic simulation",
+   "year": "2020",
+   "label": "on",
+   "evidence": 0.25,
+   "note": "ML aimed squarely at thermal-hydraulic simulation",
+   "overlap": 0.25,
+   "coupling": 0.0,
+   "citers": 0.0
+  },
+  {
+   "title": "Recent Trends in Nuclear Accident Events Prediction: A Review",
+   "year": "2025",
+   "label": "on",
+   "evidence": 0.25,
+   "overlap": 0.0,
+   "coupling": 0.0,
+   "citers": 0.25
+  },
+  {
+   "title": "A DEEP LEARNING-BASED APPROACH FOR PREDICTING THE STOCHASTIC PROCESS OF REACTOR ACCIDENTS",
+   "year": "2023",
+   "label": "on",
+   "evidence": 0.25,
+   "overlap": 0.0625,
+   "coupling": 0.0,
+   "citers": 0.1875
+  },
+  {
+   "title": "Prediction of Severe Accident Progression Using Machine Learning With Data‐Driven Surrogate Modeling as Operator Support Tool",
+   "year": "2026",
+   "label": "on",
+   "evidence": 0.25,
+   "overlap": 0.0,
+   "coupling": 0.0,
+   "citers": 0.25
+  },
+  {
+   "title": "Thermal displacement prediction model with a structural optimized transfer learning technique",
+   "year": "2023",
+   "label": "on",
+   "evidence": 0.1406,
+   "known_miss": true,
+   "note": "ML, but thermal displacement of machine tools rather than reactor cooling",
+   "overlap": 0.0625,
+   "coupling": 0.0,
+   "citers": 0.0781
+  },
+  {
+   "title": "A hybrid machine learning approach for improving fuel temperature prediction of research reactors under mix convection regime",
+   "year": "2022",
+   "label": "on",
+   "evidence": 0.1406,
+   "known_miss": true,
+   "note": "ML on a reactor coolant quantity",
+   "overlap": 0.0625,
+   "coupling": 0.0,
+   "citers": 0.0781
+  },
+  {
+   "title": "Physics-informed machine learning approach for augmenting turbulence models: A comprehensive framework",
+   "year": "2018",
+   "label": "off",
+   "evidence": 0.0,
+   "note": "ML for turbulence closures, nothing nuclear; scored 0 on the gate",
+   "overlap": 0.0,
+   "coupling": 0.0,
+   "citers": 0.0
+  },
+  {
+   "title": "Quantifying reactor safety margins part 1: An overview of the code scaling, applicability, and uncertainty evaluation methodology",
+   "year": "1990",
+   "label": "off",
+   "evidence": 0.0,
+   "note": "safety methodology, no learning",
+   "overlap": 0.0,
+   "coupling": 0.0,
+   "citers": 0.0
+  },
+  {
+   "title": "Effect of bubble deformation on the properties of bubbly flows",
+   "year": "2003",
+   "label": "off",
+   "evidence": 0.0,
+   "overlap": 0.0,
+   "coupling": 0.0,
+   "citers": 0.0
+  }
+ ]
+}

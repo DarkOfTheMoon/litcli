@@ -1,0 +1,218 @@
+{
+ "walk": "v7",
+ "question": "transient growth of viscoelastic instabilities in microfluidic flows",
+ "floor": 0.2,
+ "rows": [
+  {
+   "title": "Microchannels Analogues for the Study of Viscoelastic Fluid Flows Through Porous Media",
+   "year": "2011",
+   "label": "off",
+   "evidence": 0.5625,
+   "note": "high on the words, but the subject is porous media",
+   "overlap": 0.25,
+   "coupling": 0.0,
+   "citers": 0.3125,
+   "known_admit": true
+  },
+  {
+   "title": "Spatio-temporal instabilities in viscoelastic channel flows: The centre mode",
+   "year": "2023",
+   "label": "on",
+   "evidence": 0.4015,
+   "overlap": 0.25,
+   "coupling": 0.1515,
+   "citers": 0.0
+  },
+  {
+   "title": "Chebyshev and Fourier Spectral Methods",
+   "year": "2001",
+   "label": "off",
+   "evidence": 0.3333,
+   "note": "a numerical-methods book; the walk admitted it",
+   "overlap": 0.0,
+   "coupling": 0.0,
+   "citers": 0.3333,
+   "known_admit": true
+  },
+  {
+   "title": "Instabilities in viscoelastic flows",
+   "year": "1992",
+   "label": "on",
+   "evidence": 0.2631,
+   "note": "the field's own review",
+   "overlap": 0.25,
+   "coupling": 0.0131,
+   "citers": 0.0
+  },
+  {
+   "title": "Linear instabilities in viscoelastic plane Poiseuille flow",
+   "year": "2019",
+   "label": "on",
+   "evidence": 0.25,
+   "overlap": 0.25,
+   "coupling": 0.0,
+   "citers": 0.0
+  },
+  {
+   "title": "Nonmodal amplification of stochastic disturbances in strongly elastic channel flows",
+   "year": "2011",
+   "label": "on",
+   "evidence": 0.25,
+   "note": "nonmodal growth is transient growth",
+   "overlap": 0.25,
+   "coupling": 0.0,
+   "citers": 0.0
+  },
+  {
+   "title": "Investigating the stability of viscoelastic stagnation flows in T-shaped microchannels",
+   "year": "2009",
+   "label": "on",
+   "evidence": 0.25,
+   "overlap": 0.25,
+   "coupling": 0.0,
+   "citers": 0.0
+  },
+  {
+   "title": "A purely elastic instability in taylor-couette flow",
+   "year": "1990",
+   "label": "on",
+   "evidence": 0.25,
+   "note": "the founding elastic-instability case",
+   "overlap": 0.25,
+   "coupling": 0.0,
+   "citers": 0.0
+  },
+  {
+   "title": "Elastic instability in a family of rectilinear viscoelastic channel flows devoid of centerline symmetry",
+   "year": "2024",
+   "label": "on",
+   "evidence": 0.25,
+   "overlap": 0.25,
+   "coupling": 0.0,
+   "citers": 0.0
+  },
+  {
+   "title": "Viscoelastic pipe flow is linearly unstable",
+   "year": "2018",
+   "label": "on",
+   "evidence": 0.25,
+   "overlap": 0.25,
+   "coupling": 0.0,
+   "citers": 0.0
+  },
+  {
+   "title": "The Role of Structure in Polymer Rheology: Review",
+   "year": "2022",
+   "label": "off",
+   "evidence": 0.25,
+   "note": "rheology without instability",
+   "overlap": 0.0,
+   "coupling": 0.0,
+   "citers": 0.25,
+   "known_admit": true
+  },
+  {
+   "title": "Uncertainty in elastic turbulence",
+   "year": "2025",
+   "label": "off",
+   "evidence": 0.25,
+   "note": "elastic turbulence is a different regime from transient growth",
+   "overlap": 0.0,
+   "coupling": 0.0,
+   "citers": 0.25,
+   "known_admit": true
+  },
+  {
+   "title": "Announcement: PRFluids Publishes Invited Perspective on Viscoelastic flow instabilities and elastic turbulence",
+   "year": "2022",
+   "label": "off",
+   "evidence": 0.25,
+   "note": "an announcement",
+   "overlap": 0.25,
+   "coupling": 0.0,
+   "citers": 0.0,
+   "known_admit": true
+  },
+  {
+   "title": "Boger Fluids",
+   "year": "2008",
+   "label": "off",
+   "evidence": 0.25,
+   "note": "a fluid class",
+   "overlap": 0.0,
+   "coupling": 0.0,
+   "citers": 0.25,
+   "known_admit": true
+  },
+  {
+   "title": "Efficient microfluidic rectifiers for viscoelastic fluid flow",
+   "year": "2010",
+   "label": "off",
+   "evidence": 0.25,
+   "note": "an application, not an instability",
+   "overlap": 0.25,
+   "coupling": 0.0,
+   "citers": 0.0,
+   "known_admit": true
+  },
+  {
+   "title": "Nature of continuous spectra in wall-bounded shearing flows of FENE-P fluids",
+   "year": "2026",
+   "label": "on",
+   "evidence": 0.2072,
+   "note": "linear spectra of a viscoelastic wall-bounded flow",
+   "overlap": 0.0,
+   "coupling": 0.1447,
+   "citers": 0.0625
+  },
+  {
+   "title": "Turbulent drag reduction by polymer additives: Fundamentals and recent advances",
+   "year": "2019",
+   "label": "off",
+   "evidence": 0.1592,
+   "overlap": 0.0,
+   "coupling": 0.1592,
+   "citers": 0.0
+  },
+  {
+   "title": "Effect of viscoelasticity on the soft-wall transition and turbulence in a microchannel",
+   "year": "2017",
+   "label": "on",
+   "evidence": 0.0625,
+   "known_miss": true,
+   "note": "viscoelastic transition in a microchannel",
+   "overlap": 0.0,
+   "coupling": 0.0,
+   "citers": 0.0625
+  },
+  {
+   "title": "Laminar-turbulent transition for the flow of dilute polyacrylamide solutions through rectangular microchannel",
+   "year": "2025",
+   "label": "on",
+   "evidence": 0.0,
+   "known_miss": true,
+   "note": "a microchannel viscoelastic transition, scored 0",
+   "overlap": 0.0,
+   "coupling": 0.0,
+   "citers": 0.0
+  },
+  {
+   "title": "Spectral Methods in MATLAB",
+   "year": "2000",
+   "label": "off",
+   "evidence": 0.0,
+   "overlap": 0.0,
+   "coupling": 0.0,
+   "citers": 0.0
+  },
+  {
+   "title": "On the early experiments on drag reduction by polymers",
+   "year": "1977",
+   "label": "off",
+   "evidence": 0.0,
+   "overlap": 0.0,
+   "coupling": 0.0,
+   "citers": 0.0
+  }
+ ]
+}

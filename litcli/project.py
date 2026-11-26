@@ -53,6 +53,9 @@ class Project:
     effort: str = DEFAULT_EFFORT
     status: str = "running"
     created: str = ""
+    #: The key a project under the old, differently-scaled floor used (``threshold``), if any.
+    #: Not written back to the file: :meth:`save` only writes ``_FIELDS``, which carry ``floor``.
+    legacy_floor: str | None = None
 
     @property
     def seen_file(self) -> Path:
@@ -156,8 +159,12 @@ def load(root: Path) -> Project:
         if key in data:
             setattr(project, key, data[key])
     # Older projects stored a score floor under the old key, in units that no longer fit the
-    # 0..1 scale; the new key is what is read, and its absence means the new default.
+    # 0..1 scale; the new key is what is read, and its absence means the new default. The old
+    # value is not reused — 2.5 read as an evidence floor would admit everything — but the
+    # caller is told, because the walk silently changing its own rule is worse than either.
     project.floor = float(data.get("floor", DEFAULT_FLOOR))
+    if "floor" not in data and "threshold" in data:
+        project.legacy_floor = "threshold"
     _read_jsonl(project.seen_file)
     _read_jsonl(project.trace_file)
     return project

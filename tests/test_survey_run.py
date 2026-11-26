@@ -344,11 +344,11 @@ class SurveyRunTest(unittest.TestCase):
         except StopIteration:
             return False
 
-    def args(self):
+    def args(self, *extra):
         parser = argparse.ArgumentParser()
         sub = parser.add_subparsers(dest="survey_cmd")
         survey.add_run_parser(sub.add_parser("run"))
-        parsed = parser.parse_args(["run", str(self.project.root)])
+        parsed = parser.parse_args(["run", str(self.project.root), *extra])
         return parsed
 
     def seen_for(self, doi):
@@ -425,6 +425,46 @@ class SurveyRunTest(unittest.TestCase):
         self.assertEqual((ends[0]["errored"], ends[0]["expanded"]), (1, []))
         self.assertFalse([r for r in project.read_seen(self.project)
                           if r.get("identity") == "doi:10.1002/x"])
+
+    def make_legacy(self):
+        path = self.project.root / "project.toml"
+        path.write_text(path.read_text(encoding="utf-8").replace("floor = 0.0", "threshold = 2.5"),
+                        encoding="utf-8")
+
+    def test_an_old_threshold_project_says_the_rule_changed(self):
+        # 2.5 in score units read as an evidence floor would admit everything; the walk must
+        # not just quietly replace it.
+        self.make_legacy()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(survey.cmd_survey_run(self.cfg, self.args()), 0)
+        self.assertIn("threshold", err.getvalue())
+        self.assertIn("evidence floor", err.getvalue())
+        self.assertIn("floor = ", (self.project.root / "project.toml").read_text(encoding="utf-8"))
+
+    def test_a_run_that_does_not_get_the_lock_leaves_the_file_alone(self):
+        # The migration used to run before the lock was asked for, so a run that then refused
+        # (exit 2) had already warned and rewritten the file under the process that owns it.
+        self.make_legacy()
+        (self.project.root / "$.lock").write_text("1", encoding="utf-8")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(survey.cmd_survey_run(self.cfg, self.args()), 2)
+        text = (self.project.root / "project.toml").read_text(encoding="utf-8")
+        self.assertIn("threshold = 2.5", text)
+        self.assertNotIn("threshold", err.getvalue())
+        self.assertIn("already being walked", err.getvalue())
+
+    def test_the_migration_is_said_once(self):
+        self.make_legacy()
+        first = io.StringIO()
+        with contextlib.redirect_stderr(first), contextlib.redirect_stdout(io.StringIO()):
+            survey.cmd_survey_run(self.cfg, self.args())
+        self.assertIn("threshold", first.getvalue())
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            survey.cmd_survey_run(self.cfg, self.args())
+        self.assertNotIn("threshold", err.getvalue())
 
     def test_a_run_that_landed_a_copy_exits_0(self):
         with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
@@ -676,6 +716,9 @@ class SurveyRunTest(unittest.TestCase):
     def test_an_interrupted_hop_is_checkpointed_so_resume_does_not_redo_it(self):
         # Ctrl-C ends the hop at the next boundary, and the rows that hop already took are in
         # the checkpoint: the resumed run must neither re-expand nor re-download them.
+        # The signal is sent with `signal.raise_signal`, not `os.kill(getpid(), ...)`: on
+        # Windows the latter reaches `TerminateProcess` for SIGINT/SIGTERM and ends the
+        # interpreter on the spot, so the handler under test never runs.
         asked = []
         real = self.backend.references
 
@@ -683,7 +726,7 @@ class SurveyRunTest(unittest.TestCase):
             asked.append(key)
             out = real(key, limit)
             if len(asked) == 1:
-                os.kill(os.getpid(), signal.SIGINT)
+                signal.raise_signal(signal.SIGINT)
             return out
 
         self.backend.references = interrupt_once
@@ -790,26 +833,66 @@ class SurveyRunTest(unittest.TestCase):
         self.assertTrue([p for p in (self.project.root / "corpus").iterdir()
                          if p.suffix == ".json"])
 
-    def test_a_second_sigint_puts_the_default_handler_back(self):
+    def test_a_second_sigint_still_reaches_the_callers_handler_and_then_unwinds(self):
         # The first Ctrl-C must end the hop cleanly; the second must be able to abort a hung
-        # call, so one strike is not allowed to swallow every later one.
-        seen = []
+        # call, so one strike is not allowed to swallow every later one — and a handler the
+        # caller installed still gets its signal instead of being dropped.
+        seen, hits = [], []
 
         def sentinel(*_args):
-            pass
+            hits.append(1)
 
         before = signal.getsignal(signal.SIGINT)
         signal.signal(signal.SIGINT, sentinel)
         self.addCleanup(signal.signal, signal.SIGINT, before)
 
         def resolve(doi):
-            os.kill(os.getpid(), signal.SIGINT)
-            seen.append(signal.getsignal(signal.SIGINT) is sentinel)
+            signal.raise_signal(signal.SIGINT)
+            seen.append(signal.getsignal(signal.SIGINT) is not sentinel)
             return {"has_fulltext": False}
 
         self.deps.resolve = resolve
-        survey.run_loop(self.project, self.deps)
-        self.assertEqual(seen, [True, True])  # the seed's download and the candidate's
+        with self.assertRaises(SystemExit) as caught:
+            survey.run_loop(self.project, self.deps)
+        self.assertEqual(caught.exception.code, 130)
+        self.assertEqual(seen, [True])  # one strike ends the hop, the second unwinds
+        self.assertEqual(hits, [1])  # the caller's handler still ran before the unwind
+
+    def test_a_double_ctrl_c_settles_the_status_before_the_process_leaves(self):
+        # The raised strike skips the loop; the command has to settle the status on the way
+        # out, or the project keeps reading as one still being walked with the lock already
+        # gone — the exact state a reader would take for alive.
+        def resolve(doi):
+            signal.raise_signal(signal.SIGINT)
+            signal.raise_signal(signal.SIGINT)
+            return {"has_fulltext": False}
+
+        self.deps.resolve = resolve
+        with self.assertRaises(SystemExit) as caught, \
+                contextlib.redirect_stderr(io.StringIO()), \
+                contextlib.redirect_stdout(io.StringIO()):
+            survey.cmd_survey_run(self.cfg, self.args())
+        self.assertEqual(caught.exception.code, 130)
+        self.assertEqual(project.load(self.project.root).status, "stopped")
+        self.assertFalse((self.project.root / "$.lock").exists())
+
+    def test_an_interrupted_md_run_still_renders_the_trace(self):
+        # The render sits after the loop returns; a raised strike skipped it, so `--format md`
+        # printed nothing at all on the run it matters most for.
+        real = self.backend.references
+
+        def references(key, limit=5):
+            if key == "W1":  # the second hop: strike twice inside its expansion
+                signal.raise_signal(signal.SIGINT)
+                signal.raise_signal(signal.SIGINT)
+            return real(key, limit)
+
+        self.backend.references = references
+        out = io.StringIO()
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()), \
+                contextlib.redirect_stdout(out):
+            survey.cmd_survey_run(self.cfg, self.args("--format", "md"))
+        self.assertIn("| score |", out.getvalue())
 
     def test_a_sigterm_ends_the_hop_and_leaves_no_lock(self):
         # A job sent SIGTERM has no terminal to press Ctrl-C at: unhandled, its default action
@@ -820,7 +903,7 @@ class SurveyRunTest(unittest.TestCase):
         def resolve(doi):
             if not strikes:
                 strikes.append(True)
-                os.kill(os.getpid(), signal.SIGTERM)
+                signal.raise_signal(signal.SIGTERM)
             return {"has_fulltext": False}
 
         self.deps.resolve = resolve
@@ -830,13 +913,121 @@ class SurveyRunTest(unittest.TestCase):
         self.assertEqual(project.read_trace(self.project)[-1]["reason"], "interrupted")
         self.assertFalse((self.project.root / "$.lock").exists())
 
+    def test_a_config_without_a_graph_still_gives_its_own_reason(self):
+        # `deps` is bound inside the try; the finally closed it unconditionally, so this path
+        # turned the clear "[error] no graph" into an UnboundLocalError.
+        err = io.StringIO()
+        with mock.patch.object(survey, "deps_from_config",
+                               side_effect=BadInput("no graph source is configured")), \
+                contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            code = survey.cmd_survey_run(self.cfg, self.args())
+        self.assertEqual(code, 2)
+        self.assertIn("no graph source", err.getvalue())
+        self.assertNotIn("UnboundLocal", err.getvalue())
+
+    def test_a_second_strike_records_the_stuck_copy_and_ends_the_run(self):
+        # A wait the browser is sitting in cannot always be unwound before the second strike
+        # raises. The copy in flight must not be left unrecorded (a resume would pay for it
+        # again), and the run still has to end as `interrupted` with a stop in the trace.
+        def stuck(*_args, **_kw):
+            raise SystemExit(128 + signal.SIGTERM)
+
+        with mock.patch.object(survey, "_download_kept", stuck), \
+                self.assertRaises(SystemExit):
+            survey.run_loop(self.project, self.deps)
+        self.assertEqual(self.seen_for("10.1002/seed")["download"], "error:interrupted")
+        self.assertEqual(project.read_trace(self.project)[-1]["reason"], "interrupted")
+
+    def test_a_strike_inside_the_seed_bookkeeping_still_ends_the_run(self):
+        # The stuck wait is not the only place a second strike can land: the row is written
+        # (sidecar, checkpoint, event) right after it, on a disk that may be slow. Caught by
+        # nothing, that strike unwound mid-hop with no stop in the trace and no mark on the
+        # row, and a resume paid for the copy again.
+        with mock.patch.object(survey, "_write_meta", side_effect=SystemExit(130)), \
+                self.assertRaises(SystemExit):
+            survey.run_loop(self.project, self.deps)
+        # The checkpoint line goes first: the row keeps what really happened (the bytes landed;
+        # it is the sidecar that never got written) and the trace still says why the walk ended.
+        self.assertEqual(self.seen_for("10.1002/seed")["download"], "ok")
+        self.assertEqual(project.read_trace(self.project)[-1]["reason"], "interrupted")
+
+    def test_a_strike_inside_a_candidates_record_still_ends_the_run(self):
+        real = project.append_seen
+
+        def append(survey_project, row):
+            if not str(row.get("reason") or "").startswith("seed"):
+                raise SystemExit(130)
+            real(survey_project, row)
+
+        with mock.patch.object(project, "append_seen", append), self.assertRaises(SystemExit):
+            survey.run_loop(self.project, self.deps)
+        self.assertEqual(project.read_trace(self.project)[-1]["reason"], "interrupted")
+
+    def test_a_real_second_ctrl_c_ends_the_run_like_a_sigterm(self):
+        # After the first strike the installed handler used to be SIGINT's own default, so the
+        # second Ctrl-C raised KeyboardInterrupt — a type none of the checkpoint saves catch —
+        # and the project kept reading as running while the copy went unrecorded.
+        calls = []
+
+        def stuck(*_args, **_kw):
+            calls.append(1)
+            if len(calls) == 1:
+                signal.raise_signal(signal.SIGINT)  # first: ends the hop
+                signal.raise_signal(signal.SIGINT)  # second: must unwind
+            return "ok"
+
+        with mock.patch.object(survey, "_download_kept", stuck), \
+                self.assertRaises(SystemExit) as caught:
+            survey.run_loop(self.project, self.deps)
+        self.assertEqual(caught.exception.code, 130)
+        self.assertEqual(self.seen_for("10.1002/seed")["download"], "error:interrupted")
+        self.assertEqual(project.read_trace(self.project)[-1]["reason"], "interrupted")
+
+    def test_a_second_strike_mid_expansion_returns_the_row_to_the_frontier(self):
+        # A raise inside the expansion is the row not being read, not the row failing: it goes
+        # back on the frontier so the resume expands it rather than skipping it as done.
+        def struck(*_args, **_kw):
+            raise SystemExit(128 + signal.SIGTERM)
+
+        with mock.patch.object(survey.expansion, "expand", struck), \
+                self.assertRaises(SystemExit):
+            survey.run_loop(self.project, self.deps)
+        self.assertEqual(project.read_trace(self.project)[-1]["reason"], "interrupted")
+        survey.run_loop(self.project, self.deps)
+        expanded = [work for e in project.read_trace(self.project)
+                    if e["event"] == "hop_end" for work in e["expanded"]]
+        self.assertIn("doi:10.1002/seed", expanded)
+
+    def test_rows_after_a_struck_copy_are_admitted_without_another_wait(self):
+        # The strike raised out of one copy; the hop's remaining admitted rows are not tried,
+        # or each would sit in another browser wait before the process could leave. They are
+        # recorded with no status, which is what the pre-expansion pass lands on a resume.
+        self.backend = RankedDiscovery()
+        self.deps.backend = self.backend
+        calls = []
+
+        def download(item, *_args):
+            calls.append(item.key)
+            if len(calls) == 2:
+                raise SystemExit(128 + signal.SIGTERM)
+            return "ok"
+
+        with mock.patch.object(survey, "_download_kept", download), \
+                self.assertRaises(SystemExit):
+            survey.run_loop(self.project, self.deps)
+        self.assertEqual(len(calls), 2, "a row was tried after the strike")
+        rows = [r for r in project.read_seen(self.project)
+                if r.get("admit") and r.get("reason") != "seed"]
+        self.assertEqual(sorted(r.get("download", "-") for r in rows),
+                         ["", "error:interrupted"])
+
     def test_a_second_sigterm_can_still_raise(self):
         # Restoring SIG_DFL after the first strike would make the second one kill the process
         # exactly as the first would have, so the stack could never be unwound.
         seen = []
 
         def resolve(doi):
-            os.kill(os.getpid(), signal.SIGTERM)
+            signal.raise_signal(signal.SIGTERM)
             seen.append(signal.getsignal(signal.SIGTERM))
             return {"has_fulltext": False}
 
@@ -849,6 +1040,9 @@ class SurveyRunTest(unittest.TestCase):
         self.assertTrue(seen)
         self.assertNotEqual(seen[0], signal.SIG_DFL)
         self.assertFalse((self.project.root / "$.lock").exists())
+        # A raised strike skips the code after the walk, so the status has to be settled on
+        # the way out: left as it was, the project reads as still being walked.
+        self.assertEqual(project.load(self.project.root).status, "stopped")
 
     def _graph(self, *sources):
         self.deps.graph = list(sources)

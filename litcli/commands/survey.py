@@ -39,7 +39,7 @@ from ..pdf import download as download_bytes
 from ..provenance import stamp
 from ..transport import HttpError
 from .keys import graph_sources
-from .search import relevance
+from .search import overlap, relevance
 
 #: Candidates the opening search may supply when the user named no seeds.
 OPENING_SEEDS = 3
@@ -51,8 +51,9 @@ STOP_NAME = "$.stop"
 def add_new_parser(p: argparse.ArgumentParser) -> None:
     """Register the arguments of ``survey new`` (also used by its tests)."""
     p.add_argument("question", nargs="+", help="the survey question (quote it or not)")
-    p.add_argument("--seed", action="append", default=[], metavar="DOI",
-                   help="a work to start from, repeatable (default: one opening search)")
+    p.add_argument("--seed", action="append", default=[], metavar="DOI|TITLE",
+                   help="a work to start from, repeatable (a DOI, an id, or a title; "
+                        "default: one opening search)")
     p.add_argument("--year", default="", help="year window A-B (A- and -B also accepted)")
     p.add_argument("--type", action="append", default=[],
                    help="prefer this OpenAlex article type, repeatable (weight 2.0)")
@@ -135,7 +136,7 @@ def _graph_id(item, backend) -> str:
 def _unprefixed(key: str) -> str:
     """A typed seed without its ``source:`` prefix or ``https://doi.org/`` wrapper."""
     key = key.strip()
-    for prefix in ("openalex:", "doi:", "https://doi.org/"):
+    for prefix in ("openalex:", "doi:", "https://doi.org/", "title:"):
         if key.startswith(prefix):
             key = key[len(prefix):]
     return key
@@ -163,9 +164,30 @@ def _seed_row(typed: str, backend) -> dict:
     stays what the user typed.
     """
     key = _unprefixed(typed)
+    #: A title is a spelling only a search can place: as typed it has no work id and no DOI,
+    #: so the walk could never expand it and the audit would read it as off the question
+    #: whatever it says. A space is what tells one from an id (an arXiv id has none).
+    title_seed = " " in key
     row = {"identity": _seed_identity(typed), "admit": True, "reason": "seed", "seed": "flag",
-           "key": key, "doi": key if key.startswith("10.") else "", "title": "",
+           "key": key, "doi": key if key.startswith("10.") else "",
+           "title": key if title_seed else "",
            "score": 0.0, "parts": {}, "download": ""}
+    if title_seed:
+        found = None
+        if backend is not None:
+            try:
+                hits = backend.search(key, limit=1, filters={"title": key.replace('"', "")})
+            except Exception as e:  # a lookup is an improvement, never a requirement
+                print(f"[skipped] {key}: {e}", file=sys.stderr)
+                hits = []
+            found = hits[0] if hits else None
+        if found is None:
+            print(f"[skipped] {key}: no work found under this title; it stays as typed",
+                  file=sys.stderr)
+        else:
+            row.update(key=_bare_id(str(found.extra.get("openalex_id") or found.key or key)),
+                       doi=found.doi, title=found.title)
+        return row
     getter = getattr(backend, "get", None)
     if getter is not None and (key.startswith("W") or key.startswith("10.")):
         found, error = None, None
@@ -260,6 +282,7 @@ def cmd_survey_new(cfg, args) -> int:
         # to be spelled the same way for the seed-citer bonus to ever match.
         seeds = [_graph_id(item, backend) for item in found]
 
+    _warn_weak_seeds(found, [row["title"] for row in flags], question)
     created = project.create(Path(args.root).expanduser() if args.root else paths.project_root(),
                              question, seeds=seeds, **fields)
     for item in found:
@@ -272,6 +295,29 @@ def cmd_survey_new(cfg, args) -> int:
         project.append_seen(created, row)
     print(created.root.name)
     return 0
+
+
+def _warn_weak_seeds(found: list[AcademicItem], typed_titles: list[str],
+                     question: str) -> None:
+    """Say so when no seed carries the question at all.
+
+    Seeds are the one class that skips both the year filter and the evidence floor, and the
+    whole walk grows out of their references — three seeds off the question send every later
+    hop into a neighbouring field, and nothing on the way says anything. Not an error: a
+    question may legitimately start from a broad classic.
+    """
+    judged = [overlap(item, question) for item in found]
+    judged += [overlap(AcademicItem(source="", key="", title=title), question)
+               for title in typed_titles if title]
+    if not judged or max(judged) >= project.DEFAULT_FLOOR:
+        return
+    titles = [str(item.title or item.key) for item in found] + [t for t in typed_titles if t]
+    print("[warn] no seed carries two parts of the question — the walk will probably stay in "
+          "a neighbouring field; pass --seed or sharpen the question", file=sys.stderr)
+    for title in titles[:OPENING_SEEDS]:
+        print(f"[warn]   seed: {title}", file=sys.stderr)
+    if len(titles) > OPENING_SEEDS:  # the list stops at three; say what it left out
+        print(f"[warn]   … and {len(titles) - OPENING_SEEDS} more", file=sys.stderr)
 
 
 @dataclass
@@ -513,6 +559,23 @@ def _raiser(signum: int) -> Callable:
     return raised
 
 
+def _second_strike(previous) -> Callable:
+    """The handler left behind after a first strike: still the caller's, then always unwinds.
+
+    The caller's own handler keeps getting its signal, but the unwind has to be ours so one
+    type carries both signals: SIGTERM's default kills the process without the `finally` that
+    removes the lock, and SIGINT's raises KeyboardInterrupt, which none of the checkpoint
+    saves around the walk catch.
+    """
+    def handler(signum, frame) -> None:
+        if callable(previous) and previous is not signal.default_int_handler:
+            with contextlib.suppress(BaseException):
+                previous(signum, frame)
+        _raiser(signum)(signum, frame)
+
+    return handler
+
+
 def _askable(item, sources) -> bool:
     """Whether some source declares an axis and has a spelling for ``item`` at all.
 
@@ -619,19 +682,18 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
             print(survey_events.line(event, **fields), file=deps.stream)
 
     def on_signal(signum, _frame) -> None:
-        # The first strike only ends the hop (the state stays resumable). The handler is put
-        # back after it, because a stuck network call cannot be waited out and the second
-        # strike has to raise. SIGTERM gets a raiser when it has no handler of its own: its
-        # default action kills the process without the `finally` that removes the lock.
+        # The first strike only ends the hop (the state stays resumable). The second has to
+        # unwind a stuck call, so the handler left behind is ours (see `_second_strike`).
         interrupted.append(signum)
         with contextlib.suppress(ValueError):
-            signal.signal(signum, previous.get(signum) or _raiser(signum))
+            signal.signal(signum, _second_strike(previous.get(signum)))
 
     previous: dict[int, Any] = {}
     for signum in (signal.SIGINT, signal.SIGTERM):
         with contextlib.suppress(ValueError):  # not the main thread: no handler to install
             previous[signum] = signal.signal(signum, on_signal)
     stop = ""
+    struck = False  # the second strike raised: the run ends and the process exits 143
     emit("start", hop=hop, question=survey_project.question, effort=survey_project.effort)
     try:
         while not stop:
@@ -664,12 +726,31 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
                     continue
                 counters["publisher"] -= 1
                 item = _row_item(row)
-                status = _download_kept(item, deps, survey_project, session_was_alive)
-                landed[identity_now] = status
-                landed_total += status in ("ok", "cookie")
-                _write_meta(survey_project, item, status)
-                project.append_seen(survey_project, {**row, "download": status})
-                emit("download", hop=hop, identity=identity_now, key=item.key, status=status)
+                try:
+                    try:
+                        status = _download_kept(item, deps, survey_project, session_was_alive)
+                    except SystemExit:
+                        # The second strike: the copy in flight cannot be finished, and a stuck
+                        # wait must not cost the walk its checkpoint — the row records it, so
+                        # the resume reads it back and skips the second try.
+                        status = "error:interrupted"
+                        struck, stop = True, "interrupted"
+                    landed[identity_now] = status
+                    landed_total += status in ("ok", "cookie")
+                    # The checkpoint line before the sidecar: a strike between the two still
+                    # leaves the row saying it was not landed.
+                    project.append_seen(survey_project, {**row, "download": status})
+                    _write_meta(survey_project, item, status)
+                    emit("download", hop=hop, identity=identity_now, key=item.key, status=status)
+                except SystemExit:
+                    # The strike landed after the wait, in the record itself (a slow disk, a
+                    # blocked stream). The bookkeeping may be short one line, but the walk
+                    # still ends as interrupted instead of unwinding mid-hop without a stop.
+                    struck, stop = True, "interrupted"
+                if stop:
+                    break
+            if stop:
+                break
             cache.reset_stats()
             batch, frontier = frontier[: int(envelope["frontier"])], frontier[int(envelope["frontier"]):]
             fresh = errored = 0
@@ -702,6 +783,12 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
                     for pair in expansion.expand(item, deps.sources(), envelope, counters,
                                                  attempts):
                         pairs.append(pair)
+                except SystemExit:
+                    # The second strike, mid-read: the row is left out of `expanded`, so the
+                    # resume expands it again. The pairs already handed back this hop are
+                    # still judged and recorded below.
+                    struck, stop = True, "interrupted"
+                    break
                 except (LitcliError, KeyError, ValueError, TypeError) as e:
                     # KeyError is a 200 with no body, ValueError a 200 that is not JSON at all;
                     # both are how the backends report one unreadable answer.
@@ -766,34 +853,46 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
             for row in pending:
                 item = row.pop("item")
                 status = ""
-                if row["admit"]:
-                    fresh += 1
-                    admitted_total += 1
-                    # Admitted here, expanded by a later hop of THIS run; a kill before that
-                    # hop leaves it unexpanded in `seen`, which resume picks up.
-                    frontier.append({"identity": row["identity"], "key": row["key"],
-                                     "doi": row["doi"], "source": row["source"],
-                                     "title": row["title"], "year": row["year"]})
-                    collected.update(str(w) for w in row["referenced_works"])
-                    cited.update(scoring.bare(w) for w in row["referenced_works"])
-                    best = max(best, float(row["score"]))
-                    if counters["publisher"] > 0:
-                        counters["publisher"] -= 1
-                        status = _download_kept(item, deps, survey_project, session_was_alive)
-                    else:
-                        status = "unavailable"
-                    landed_total += status in ("ok", "cookie")
-                    landed[row["identity"]] = status
-                    _write_meta(survey_project, item, status)
-                project.append_seen(survey_project, {**row, "download": status})
-                emit("candidate", hop=hop, key=row["key"], doi=row["doi"],
-                     title=row["title"], year=row["year"], source=row["source"],
-                     score=row["score"], admit=row["admit"], reason=row["reason"])
-                if row["admit"]:
-                    emit("admit", hop=hop, identity=row["identity"], key=row["key"],
-                         score=row["score"])
-                    emit("download", hop=hop, identity=row["identity"],
-                         key=row["key"], status=status)
+                try:
+                    if row["admit"]:
+                        fresh += 1
+                        admitted_total += 1
+                        # Admitted here, expanded by a later hop of THIS run; a kill before
+                        # that hop leaves it unexpanded in `seen`, which resume picks up.
+                        frontier.append({"identity": row["identity"], "key": row["key"],
+                                         "doi": row["doi"], "source": row["source"],
+                                         "title": row["title"], "year": row["year"]})
+                        collected.update(str(w) for w in row["referenced_works"])
+                        cited.update(scoring.bare(w) for w in row["referenced_works"])
+                        best = max(best, float(row["score"]))
+                        if stop:
+                            status = ""  # admitted, copy not tried: the resume lands it
+                        elif counters["publisher"] > 0:
+                            counters["publisher"] -= 1
+                            try:
+                                status = _download_kept(item, deps, survey_project,
+                                                        session_was_alive)
+                            except SystemExit:
+                                status = "error:interrupted"
+                                struck, stop = True, "interrupted"
+                        else:
+                            status = "unavailable"
+                        landed_total += status in ("ok", "cookie")
+                        landed[row["identity"]] = status
+                        _write_meta(survey_project, item, status)
+                    project.append_seen(survey_project, {**row, "download": status})
+                    emit("candidate", hop=hop, key=row["key"], doi=row["doi"],
+                         title=row["title"], year=row["year"], source=row["source"],
+                         score=row["score"], admit=row["admit"], reason=row["reason"])
+                    if row["admit"]:
+                        emit("admit", hop=hop, identity=row["identity"], key=row["key"],
+                             score=row["score"])
+                        emit("download", hop=hop, identity=row["identity"],
+                             key=row["key"], status=status)
+                except SystemExit:
+                    # Same as on the seed path: a strike can land in the record, after the
+                    # wait. The walk ends as interrupted rather than unwinding mid-hop.
+                    struck, stop = True, "interrupted"
             hits_by = cache.stats()["by"]
             # A cached answer costs no request, so it refunds its charge — never more than the
             # site was actually charged, or the quota would drift above its cap on a hot cache.
@@ -816,6 +915,10 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
                             **{key: counters[key] for key in ("arxiv", "publisher")}})
             project.save(survey_project)
         emit("stop", reason=stop, admitted=admitted_total)
+        if struck:
+            # Re-raised, not swallowed: a killed job is exit 143 to its scheduler, and the
+            # `finally` below still puts the signal handlers back.
+            raise SystemExit(128 + (interrupted[-1] if interrupted else signal.SIGTERM))
         return {"stop": stop, "admitted": admitted_total, "landed": landed_total}
     finally:
         for signum, handler in previous.items():
@@ -859,6 +962,17 @@ def cmd_survey_run(cfg, args) -> int:
         print(f"[error] {survey_project.root} is already being walked "
               f"(remove {LOCK_NAME} if it is not)", file=sys.stderr)
         return 2
+    if survey_project.legacy_floor:
+        # After the lock, not before: a run that then refuses would otherwise have warned and
+        # rewritten the file under the process that owns it. Written here rather than in
+        # `load`, which status and stop call too: only a walk owns the file. One save and the
+        # warning is gone, so it is said exactly once.
+        print(f"[warn] this project stored its floor as `{survey_project.legacy_floor} = ...` in "
+              f"score units; it now runs on an evidence floor of {survey_project.floor:g} "
+              "and the file is rewritten to say so", file=sys.stderr)
+        survey_project.legacy_floor = None
+        project.save(survey_project)
+    deps = None
     try:
         with os.fdopen(handle, "w") as f:
             f.write(str(os.getpid()))
@@ -868,7 +982,18 @@ def cmd_survey_run(cfg, args) -> int:
             print(f"[error] {e}", file=sys.stderr)
             return 2
         deps.stream = sys.stdout if args.format == "jsonl" else None
-        result = run_loop(survey_project, deps)
+        try:
+            result = run_loop(survey_project, deps)
+        except SystemExit:
+            # A raised strike skips everything below the walk; the status is settled on the way
+            # out, or the project keeps reading as one still being walked — and an md caller
+            # still gets the hops that did happen.
+            survey_project.status = "stopped"
+            project.save(survey_project)
+            if args.format == "md":
+                sys.stdout.write(survey_events.render_md(project.read_trace(survey_project)))
+            print("stop=interrupted", file=sys.stderr)
+            raise
         if args.format == "md":
             sys.stdout.write(survey_events.render_md(project.read_trace(survey_project)))
         survey_project.status = "done" if result["stop"] == "saturated" else "stopped"
@@ -877,7 +1002,8 @@ def cmd_survey_run(cfg, args) -> int:
     finally:
         with contextlib.suppress(OSError):
             lock.unlink()
-        deps.close()  # the engine is per run; a detached browser stays up behind it
+        if deps is not None:
+            deps.close()  # the engine is per run; a detached browser stays up behind it
     # `landed`, not "corpus/ is non-empty": every admitted candidate writes a metadata sidecar
     # there before its download is tried, so the directory says nothing about copies.
     return 0 if result["landed"] else 1
@@ -887,6 +1013,9 @@ def add_status_parser(p: argparse.ArgumentParser) -> None:
     """Register the arguments of ``survey status`` (also used by its tests)."""
     p.add_argument("project", help="project directory, or a name under the project root")
     p.add_argument("--root", default=None, help="project root (default: the user data dir)")
+    p.add_argument("--why", action="store_true",
+                   help="print the seeds and the last hop's candidates with their evidence, "
+                        "as text instead of JSON")
 
 
 def add_stop_parser(p: argparse.ArgumentParser) -> None:
@@ -921,7 +1050,12 @@ def cmd_survey_status(cfg, args) -> int:
             break
     last_stop = next((str(e.get("reason") or "") for e in reversed(trace)
                       if e.get("event") == "stop"), "")
+    seeds = _seed_report(survey_project, seen)
     report = {"question": survey_project.question, "status": survey_project.status,
+              "floor": survey_project.floor,
+              # Where the floor came from when the file still says `threshold`: the number is
+              # the migration's, not the author's.
+              "floor_legacy": survey_project.legacy_floor, "seeds": seeds,
               "effort": survey_project.effort,
               "hops": sum(1 for e in trace if e.get("event") == "hop_end"),
               "admitted": sum(1 for row in seen if row.get("admit")),
@@ -929,8 +1063,76 @@ def cmd_survey_status(cfg, args) -> int:
               "corpus": len(list((survey_project.root / "corpus").glob("*")))
               if (survey_project.root / "corpus").is_dir() else 0,
               "running": (survey_project.root / LOCK_NAME).exists()}
-    print(json.dumps(report, ensure_ascii=False))
+    if getattr(args, "why", False):
+        _print_why(survey_project, seen, seeds, trace)
+    else:
+        print(json.dumps(report, ensure_ascii=False))
     return 0
+
+
+#: Rows ``status --why`` shows of the last hop, best evidence first.
+WHY_ROWS = 20
+
+
+def _seed_report(survey_project: project.Project, seen: list[dict]) -> list[dict]:
+    """Every seed with how much of the question it carries.
+
+    Seeds skip the year filter and the floor and the whole walk grows from their references,
+    so "are the seeds on the question" is the first thing a reader auditing a run needs.
+    """
+    # The project stores the id the walk uses and the row's `key` is that same value, so they
+    # are compared as they stand: `scoring.bare` keeps only the last path segment, and two
+    # DOIs that share their tail would read each other's title and coverage.
+    by_key = {str(row.get("key") or ""): row for row in seen if row.get("reason") == "seed"}
+    out = []
+    for seed in survey_project.seeds:
+        row = by_key.get(str(seed), {})
+        title = str(row.get("title") or "")
+        # The row's identity, not the walk id: that is what `seen.jsonl` carries, so a consumer
+        # can join the two. With no title there is nothing to score and 0.00 would read as "off
+        # the question" when the truth is that nothing is known.
+        cover = (overlap(AcademicItem(source="", key=str(seed), title=title),
+                         survey_project.question) if title else None)
+        out.append({"identity": str(row.get("identity") or seed), "key": str(seed),
+                    "title": title, "cover": None if cover is None else round(cover, 3),
+                    "weak": cover is not None and cover < survey_project.floor})
+    return out
+
+
+def _print_why(survey_project: project.Project, seen: list[dict], seeds: list[dict],
+               trace: list[dict]) -> None:
+    """The audit view: what the seeds are, and what the last hop judged, best first."""
+    print(f"question: {survey_project.question}")
+    migrated = (f"   (migrated from `{survey_project.legacy_floor}`, a score floor — not this "
+                "scale)" if survey_project.legacy_floor else "")
+    print(f"floor: {survey_project.floor:g}{migrated}   effort: {survey_project.effort}")
+    print(f"seeds: {len(seeds)} (weak: {sum(1 for row in seeds if row['weak'])})")
+    for seed in seeds:
+        if seed["cover"] is None:  # no title to judge (a lookup that failed): unknown, not weak
+            mark, cover = "?   ", "   ?"
+        else:
+            mark, cover = ("weak" if seed["weak"] else "ok  "), f"{seed['cover']:.2f}"
+        print(f"  {mark} {cover}  {seed['identity']}  {seed['title']}")
+    # The last hop is the trace's: a barren hop judges nothing, so the highest hop among the
+    # rows is not the last one. A row can carry the newest hop number when an interrupted hop
+    # never reached its `hop_end`, hence the comparison with both sides.
+    hop = max([int(event.get("hop") or 0) for event in trace if event.get("event") == "hop_end"]
+              + [int(row.get("hop") or 0) for row in seen] + [0])
+    if hop == 0:  # only the seeds so far, and a seed is never scored
+        print("hop 0: the seeds only, nothing has been judged yet")
+        return
+    rows = [row for row in seen if int(row.get("hop") or 0) == hop]
+    if not rows:
+        print(f"hop {hop}: no candidate was judged")
+        return
+    rows.sort(key=lambda row: -float(row.get("evidence") or 0.0))
+    print(f"hop {hop}: {len(rows)} judged, {sum(1 for row in rows if row.get('admit'))} admitted")
+    for row in rows[:WHY_ROWS]:
+        mark = "admit " if row.get("admit") else "refuse"
+        print(f"  {mark} {float(row.get('evidence') or 0.0):.2f}  {row.get('reason')}")
+        print(f"         {row.get('title') or row.get('identity')}")
+    if len(rows) > WHY_ROWS:
+        print(f"  … {len(rows) - WHY_ROWS} more not shown (all of them are in seen.jsonl)")
 
 
 def cmd_survey_stop(cfg, args) -> int:

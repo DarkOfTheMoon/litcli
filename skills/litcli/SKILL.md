@@ -44,7 +44,7 @@ description: 用 litcli 与用户的学术资料互操作——检索、读取�
 | 列后端 | `litcli backends list`（能力）· `litcli backends status`（授权/可达） | 只读 |
 | 课题调查 | `litcli survey new "课题" [--seed DOI …] [--year A-B] [--type T] [--container 刊名] [--effort 档]` 建项目并打印项目名；种子与约束落 `project.toml`，不给 `--seed` 则先检索取前 3 条 | **建项目** |
 | 课题续跑 | `litcli survey run <项目> [--effort 档] [--format jsonl\|md]` 沿引文图谱一跳一跳收网，每跳落检查点；stdout 是 JSONL 事件（`--format md` 换成按跳的表格），加到目标即续跑同一条命令 | 写 corpus |
-| 课题状态 | `litcli survey status <项目>` 一行 JSON：课题/状态/跳数/准入数/最后停因/剩余额度 | 只读 |
+| 课题状态 | `litcli survey status <项目>` 一行 JSON：课题/状态/地板/种子及其题目覆盖/跳数/准入数/最后停因/剩余额度；`--why` 换成文本审计视图（种子逐颗标 weak、最后一跳的候选按证据从高到低带理由） | 只读 |
 | 课题停止 | `litcli survey stop <项目>` 写 `$.stop`，循环在下一个跳边界收尾；已停再停退 0 | 只读 |
 | 订阅会话 | `litcli browser login <站点>` 在弹出的窗口里机构登录一次（浏览器独立运行、跨命令复用，之后无需搬 cookie；关窗口即结束）；`litcli browser status` 看各站是 signed in / signed out / gated / no answer（`gated` 是等挑战页自己过完、再导航一次后的结论，报出来就是真过不去） | 只读 |
 | 失败明细 | `litcli --verbose <命令>`：检索里哪个来源、什么原因失败（默认静默，只写 stderr） | 只读 |
@@ -62,12 +62,13 @@ description: 用 litcli 与用户的学术资料互操作——检索、读取�
 一个课题是一个目录：`project.toml`（课题、种子、约束、证据地板、档位）+ `seen.jsonl`（每条候选的分数分量与收/不收的理由）+ `trace.jsonl`（每步：扩展了谁、花了多少、余额、停因）+ `corpus/`（收下的文件与元数据）。全部追加式，可 grep、可 diff。
 
 - **档位决定走多宽，不决定收多少条**：热的题自己走到额度或饱和，冷的题几跳没动静就自己停。`--effort low|medium|high|max`（默认 medium）：前沿/跳 4/8/16/24、准入/跳 2/5/8/12、邻居/条 10/20/30/50 等三个方向、连续无新高 2/3/4/6 跳即停、最长 6/20/50/120 跳。额度按请求计，命中缓存不扣、重试照扣。
-- **停止是正常收尾**：`stop` 事件分别报 `saturated`（饱和）/ `budget`（发现来源额度用尽）/ `max_hops` / `stopped` / `interrupted`（SIGINT，状态可续）。续跑就是再跑一次 `run`：已展开过的条目不再展开。中断按两下算：第一下（Ctrl-C 与 SIGTERM 同等）结束当前跳、留下可续跑的检查点，第二下才真正中止。
+- **停止是正常收尾**：`stop` 事件分别报 `saturated`（饱和）/ `budget`（发现来源额度用尽）/ `max_hops` / `stopped` / `interrupted`（SIGINT，状态可续）。续跑就是再跑一次 `run`：已展开过的条目不再展开。中断按两下算：第一下（Ctrl-C 与 SIGTERM 同等）结束当前跳、留下可续跑的检查点，第二下才真正中止：在手的副本记 `error:interrupted`（续跑不再为它重复付费）、未展开的行留在前沿、状态落成 `stopped`，进程按 128+信号值退出（Ctrl-C 130、SIGTERM 143）。
 - **出错的一跳不算空跳**：扩展报错（429 突发、返回的不是 JSON）时该条目不记作已展开、下一跳重试，也不消耗饱和计数的干步；限速/不可达的条目一直重试（受 `[backends.arxiv]`/`[backends.openalex]` 的 `retries` 与最高跳数约束），图里查不到的条目（404）重试一次后记入 `abandoned` 不再花跳。
 - **一个项目同时只允许一个 `run`**（存在 `$.lock` 即退 2，先 `survey stop` 或确认进程已死再删锁）。
+- **开局种子偏题会先说一句**：种子跳过年份与地板、整轮走查从它们的参考文献长出来，一颗偏题的种子能把后面几跳全带走；`survey new` 在看到最强种子连问句的两腿都带不上（覆盖低于地板）时打 `[warn]` 并列出种子，`survey status` 里每颗种子也带覆盖与 `weak` 标记。
 - **种子先归一**：开局的种子一律先化成 OpenAlex 认的键（图谱只按它展开），查不到的丢掉并说明；某一行当真展不开时也只记一条 `error` 事件跳过，不拖垮整轮——所以首跳 404 不再是白跑。
 - **拒绝也写理由**：`seen.jsonl` 每行带 `reason`（如 `score 3.21 >= 2.50`、`seen`、`year … outside …`）。下载失败只标 `unavailable`，候选与元数据都留着。
-- `run` 的退出码：`0` 至少落下一份正文副本、`1` 一份都没落下（只剩元数据旁车也算没落下）、`2` 出错或项目已在跑。
+- `run` 的退出码：`0` 至少落下一份正文副本、`1` 一份都没落下（只剩元数据旁车也算没落下）、`2` 出错或项目已在跑、`130`/`143` 被 Ctrl-C/SIGTERM 的第二下中止（此时状态已落 `stopped`，同一条命令可续跑）。`--format md` 被打断也照常输出已经走过的那几跳。
 
 ## 环境事实
 
@@ -94,7 +95,7 @@ description: 用 litcli 与用户的学术资料互操作——检索、读取�
   六家都必须成对配 `cookie` + `user_agent`，未配会话时报的就是这道门。清关 cookie 是 HttpOnly（`cf_clearance` /
   `aws-waf-token` / `TS*`），**手抄 Cookie 头很容易漏掉**：更稳的是用浏览器扩展/`curl` 导出 Netscape `cookies.txt` 原样指给
   `cookie_file`，导出里的 `#HttpOnly_` 行 litcli 会读。
-- **不想搬 cookie 就用共享浏览器会话**（`[browser].enabled = true`，默认关闭）：装好 Chrome，`litcli browser login <站点>` 在弹出的窗口里机构登录一次，浏览器保持运行；此后 `fetch` 对这些出版社在页内取页与 PDF，凭据不出浏览器、过期自续，`litcli browser status` 逐站报 `signed in` / `signed out` / `gated` / `no answer`——托管挑战本来就该自己换页过去，所以判定前会先等它过完（等不到再导航一次），`gated` 是真过不去，不必当场复探。关着时逐字走 cookie 路径，配了 cookie 照样能工作；浏览器自动沿用 `[network].proxy`（清关绑出口 IP，两边须同一出口）。PDF 也按页面判、不按时钟判：还在挑战页就等（上限五分钟），一变成文档（内联查看器 / 送回 `/abs/` 的无权页 / 登录页）就当场停，没权限会很快以「无权」报出来，不必等满；页面若被重定向到文件本身（URL 变成 `.pdf`）就是拿到了，字节从落地地址取。粘一条已经指向文件的链接（`.pdf` 结尾）当目标时，直接下它，不再猜它出自哪一页。这只浏览器同样是免 key 的 OA 主机的兜底（有的站如 MDPI 对无 JS 客户端整站 403），朴素下载失败才走它、它扑空仍报朴素那次的错；命令结束一律把页面归到 `about:blank` 并关会话，不在那儿留死页面。
+- **不想搬 cookie 就用共享浏览器会话**（`[browser].enabled = true`，默认关闭）：装好 Chrome，`litcli browser login <站点>` 在弹出的窗口里机构登录一次，浏览器保持运行；此后 `fetch` 对这些出版社在页内取页与 PDF，凭据不出浏览器、过期自续，`litcli browser status` 逐站报 `signed in` / `signed out` / `gated` / `no answer`——托管挑战本来就该自己换页过去，所以判定前会先等它过完（等不到再导航一次），`gated` 是真过不去，不必当场复探。关着时逐字走 cookie 路径，配了 cookie 照样能工作；浏览器自动沿用 `[network].proxy`（清关绑出口 IP，两边须同一出口）。PDF 也按页面判、不按时钟判：还在挑战页就等（导航、等待与回退请求共用一条五分钟的时钟，导航封顶一分钟），一变成文档（内联查看器 / 送回 `/abs/` 的无权页 / 登录页）就当场停，没权限会很快以「无权」报出来，不必等满；页面若被重定向到文件本身（URL 变成 `.pdf`）就是拿到了，字节从落地地址取。粘一条已经指向文件的链接（`.pdf` 结尾）当目标时，直接下它，不再猜它出自哪一页。这只浏览器同样是免 key 的 OA 主机的兜底（有的站如 MDPI 对无 JS 客户端整站 403），朴素下载失败才走它、它扑空仍报朴素那次的错；命令结束一律把页面归到 `about:blank` 并关会话，不在那儿留死页面。
 - **Sci-Hub 是可选兜底、默认不介入**：`fetch` 仍先走本地库/Unpaywall/OpenAlex，只有加 `--scihub`（或配置启用）才试公开副本；输出标 `source=scihub` 且注明非 OA 授权。镜像用 ALTCHA 验人，litcli 用本地 `hashlib` 解同一道题（不绕过），每次单 DOI、低频。
 - **Z-Library 给的是公开副本（非 OA 授权）**：`fetch --book` 用来找 Sci-Hub 没有的图书（Sci-Hub 只按 DOI 解析论文）。无需 Playwright，但用前要过站点“Checking your browser”工作量证明——litcli 用本地 `hashlib` 解同一道题（不绕过）。**匿名每日下载有配额**，超限会明确提示，可在 `[backends.zlibrary]` 配 `email`/`password` 登录放宽。只取公开书目元数据与公开 PDF 直链。
 - **豆瓣只取公开书目元数据、不绕过反爬**：豆瓣无公开 API；`search --backend douban` 也需 `install.sh --with-douban` 装 Playwright + Chromium，但**默认无头**——搜索页 SSR 直接给书卡 JSON，无需登录/滑块。仅当被风控时手动在可见浏览器处理，脚本不程序化绕过。图书以 ISBN 为身份键（无 DOI），`search --all` 聚合时与期刊/论文的 DOI 身份键并行。

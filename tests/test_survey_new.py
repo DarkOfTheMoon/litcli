@@ -74,6 +74,12 @@ class SurveyNewTest(unittest.TestCase):
             code = survey.cmd_survey_new(self.cfg, self.args(*argv))
         return code, out.getvalue()
 
+    def run_cmd_err(self, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = survey.cmd_survey_new(self.cfg, self.args(*argv))
+        return code, out.getvalue(), err.getvalue()
+
     def only_project(self):
         dirs = [d for d in self.root.iterdir() if d.is_dir()]
         self.assertEqual(len(dirs), 1)
@@ -123,6 +129,41 @@ class SurveyNewTest(unittest.TestCase):
         self.assertEqual(len(p.seeds), 3)
         self.assertEqual(len(project.read_seen(p)), 3)
         self.assertTrue(all(r["seed"] == "search" for r in project.read_seen(p)))
+
+    def test_seeds_that_share_nothing_with_the_question_are_flagged(self):
+        # The seeds decide the whole walk and bypass the year and evidence filters; three
+        # unrelated ones send it into a neighbouring field without a word of warning.
+        code, _out, err = self.run_cmd_err()
+        self.assertEqual(code, 0)
+        self.assertIn("neighbouring", err)
+        self.assertIn("hit 0", err)
+
+    def test_the_weak_warning_says_how_many_seeds_it_did_not_list(self):
+        # The list stops at three; without the count the reader cannot tell a fourth seed
+        # from none.
+        self.backend.work_ids = {doi: "W" + doi[-1] for doi in ("10.9/a", "10.9/b",
+                                                                "10.9/c", "10.9/d")}
+        _code, _out, err = self.run_cmd_err("--seed", "10.9/a", "--seed", "10.9/b",
+                                            "--seed", "10.9/c", "--seed", "10.9/d")
+        self.assertIn("and 1 more", err)
+
+    def test_seeds_on_the_question_are_not_flagged(self):
+        self.backend.hits = [AcademicItem(source="openalex", key=f"W{i}",
+                                          title=f"hit {i} of wick boiling", doi=f"10.1/{i}")
+                             for i in range(3)]
+        _code, _out, err = self.run_cmd_err()
+        self.assertNotIn("neighbouring", err)
+
+    def test_a_typed_seed_is_judged_against_the_given_floor(self):
+        # The audit view flags `weak` by the project's floor; the new-time warning used to
+        # compare against the default 0.2 whatever --floor said, so the two could disagree.
+        def get(_key):
+            return AcademicItem(source="openalex", key="W7", doi="10.7/z", title="wick x",
+                                extra={"openalex_id": "https://openalex.org/W7"})
+
+        self.backend.get = get
+        _code, _out, err = self.run_cmd_err("--seed", "W7", "--floor", "0.3")
+        self.assertIn("neighbouring", err)
 
     def test_the_opening_asks_every_source_and_takes_the_closest_titles(self):
         # The opening used to stop at the first source that returned three hits and keep them
@@ -193,6 +234,28 @@ class SurveyNewTest(unittest.TestCase):
         self.backend.work_ids = {}
         self.run_cmd("--seed", "10.1002/xhoff")
         self.assertEqual(project.load(self.only_project()).seeds, ["10.1002/xhoff"])
+
+    def test_a_title_seed_is_looked_up_and_stored_as_the_work_it_names(self):
+        # A title is a spelling only a search can place. Left as typed it has no DOI and no
+        # work id, so the walk can never expand it and the audit reads its coverage as 0
+        # whatever the title says.
+        self.backend.resolved = [AcademicItem(source="openalex", key="10.1/77",
+                                              doi="10.1/77", title="Saturated pool boiling",
+                                              year="2007",
+                                              extra={"openalex_id": "https://openalex.org/W77"})]
+        code, _out = self.run_cmd("--seed", "Saturated pool boiling")
+        self.assertEqual(code, 0)
+        row = project.read_seen(project.load(self.only_project()))[0]
+        self.assertEqual((row["key"], row["title"], row["doi"]),
+                         ("W77", "Saturated pool boiling", "10.1/77"))
+        self.assertEqual(row["identity"], "title:Saturated pool boiling")  # what was typed
+
+    def test_a_title_seed_nothing_is_found_under_keeps_its_title(self):
+        # The row still has to say what the seed is: an empty title reads as off the question.
+        _code, _out, err = self.run_cmd_err("--seed", "Some unmapped paper")
+        row = project.read_seen(project.load(self.only_project()))[0]
+        self.assertEqual((row["key"], row["title"]), ("Some unmapped paper", "Some unmapped paper"))
+        self.assertIn("Some unmapped paper", err)
 
     def test_a_prefix_typed_seed_loses_its_prefix(self):
         # `doi:` is not expandable as typed (`/works/doi:doi:10.x`), and the prefix would end

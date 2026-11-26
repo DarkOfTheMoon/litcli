@@ -7,8 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- 开局种子的题目覆盖提醒：种子跳过年份与地板，整轮走查从它们的参考文献长出来，偏题的种子此前无声无息。`survey new`
+  现在按题目的腿算每颗种子的覆盖，最强的一颗连两腿都带不上（低于证据地板）时打一行 `[warn]` 并列出种子；种子
+  与覆盖同时进了 `survey status` 的 JSON，每颗带 `cover` 与 `weak`。
+- `survey status --why`：同一份数据的文本审计视图——课题、地板、逐颗种子的覆盖（`weak` 标出），以及最后一跳的
+  候选按证据从高到低、收/不收与理由（最多 20 条）。JSON 是给程序读的，这个是给人看的。
+- 落库 0.2 之前的旧项目（`project.toml` 里还是 `threshold`）在第一次 `run` 时说一次，并把文件改写成 `floor`：
+  旧项目的 2.5 是分数单位，不说明就会被当成 0.2 的证据地板静默沿用。
+- `--seed` 收题名：题名是只有检索能落地的写法，原样存着既没有 DOI 也没有 work id，整轮永远展不开、审计还把它读成 0 覆盖。
+  现在先按题名查一次并改存查到的 work id／题名；查不到的保留题名原样并说明。`status` 里题名未知的种子报 `?`（不是 0.00）、种子身份改用 `seen.jsonl` 行上的那个，可以对着 join。
+- `tests/fixtures/ranking/` 与 `tests/test_ranking_snapshot.py`：三次实测走查里的人工判读快照（三次走查、47 行，
+  带 `known_miss`/`known_admit` 标记当前缺口），重放题目侧判定。它是某一刻的快照，只防回归，不证明更好。
+
 ### Fixed
 
+- 第二次 Ctrl-C 抬的是 `KeyboardInterrupt` 而不是 `SystemExit`：第一下之后装回的是信号原来的处理器，SIGINT 的默认处理器会抛
+  `KeyboardInterrupt`，而走查四周的检查点保存只认 `SystemExit`——双击之后在手的副本不记 `error:interrupted`、不写 `stop`
+  事件、项目状态停在 `running`（锁却已删）。现在第二下装的是自己的处理器：先把信号交给调用方原来的处理器（若有），
+  再按 128+信号值抬 `SystemExit`；补了真发两次 SIGINT 的用例与命令级的状态落定用例。
+- `status` 的种子表按 `scoring.bare` 找行，DOI 只剩最后一段，`10.1002/abc` 与 `10.1016/abc` 会互相串标题与覆盖
+  （JSON 面同样错值）；改按行上原样的 `key` 对项目里的同一个值。
+- 弱种子提醒拿默认 0.2 当判据而不是 `--floor`，与 `status` 按项目地板的 `weak` 标记可以相反（`--floor 0.3` 时提醒哑、
+  `--floor 0.05` 时假警）；改收实效地板。
+- `status --why` 把「最后一个判过东西的跳」当成最后一跳：干跳不判候选，第 7 跳空着时仍打 `hop 2`；只有种子的新项目会打
+  `hop 0: 1 judged`（种子并不是判过的候选）。改取 trace 里的真实最后一跳，无候选时明说 `no candidate was judged`。
+- 第二下信号落在记录里（`_write_meta`／`append_seen`／`emit`，慢盘、管道阻塞）时没人接：在手副本不记、`stop` 事件不写，进程带着异常穿出去。现在记录段也在捕获之内，行走查照样以 `interrupted` 收尾；检查点行改写在校验旁车之前，真拿到了字节就照实记 `ok`。
+- `survey run` 的旧地板迁移在拿锁之前跑：随后因已在走查退 2 的那次也把文件改了、还打了提醒。改到拿锁之后。`status` 对旧项目原本只报迁移后的 0.2，现在 JSON 带 `floor_legacy`、`--why` 明说是从 `threshold` 迁来的分数地板。
+- `status --why` 超过 20 条时静默截断，读者分不出是截了还是没有；现在末尾报还差多少条。
+- `survey run --format md` 被打断时什么都不输出（渲染在循环返回之后）；现在照样渲染已经走过的那几跳。
+- `cmd_survey_run` 的 `finally` 无条件 `deps.close()`，而 `deps` 在 `try` 里才绑定：配置给不出图谱时 `[error] no graph`
+  被顶成 `UnboundLocalError`（原因丢失，退出码仍是 2）。
+- 快照重放用例在目录被移走时一次循环都不跑还报绿，fixture 的 `floor` 也没有与 `DEFAULT_FLOOR` 绑定。
+- `test_why_names_the_seed_as_weak` 的 `assertIn("weak")` 被恒在的汇总行满足，逐颗的 `weak` 标记可删；`survey new` 里那条
+  `hit 0` 用例与拒绝对例重复，删去。
 - `refs`/`citing`/`related` 三个图谱命令 漏掉整类答复错误：`KeyError`（200 而正文空）、`ValueError`/`TypeError`（200 而结构不同）、
   `AttributeError`（正文是列表而不是对象）此前穿过分类捕获把整条命令掀掉，现在与 404 一样只损这一源并换下一个；
   坏掉的 `--backend` 或 `源/` 前缀转成 `BadInput`（退出码 2）而不是「意外错误」。
@@ -44,6 +77,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `search` 全量扇出说法互相打架（这两段写出来就会进，内置免 key 语料并不含它们）；`SKILL.md` 的 `refs`
   备选少了 europepmc；`AGENTS.md` 的后端层没有图谱契约（`GraphSource`/`GRAPH_AXES`/`missing_axes`）。
 
+- 浏览器下载把整条时钟烧在挑战循环里之后，回退请求只剩 `max(1.0, 剩余)`，即一秒（改动前恒有 300 秒）；现在保底给导航自己那一分钟，只在时钟真被耗完时才落到这个底。
+- 浏览器下载的导航、挑战等待与回退请求原来各带一份五分钟上限，一个死链能把一轮走查按住一刻钟：现在共用一条时钟，
+  导航封顶一分钟，回退请求只拿结余（最低一秒）。
+- 第二次 SIGTERM 在浏览器等待里抬手时整轮没有记录：在手的副本现在记 `error:interrupted`（续跑不再重复付费）、
+  同跳其余已准入的行只记准入不下载、未展开的行不记 `expanded`，状态落 `stopped` 后按 143 退出；此前进程带走
+  异常，项目一直停在「正在走查」的样子、trace 里也没有停因。
 - 调查开局的种子取法：原来按注册表顺序逐个源问，某个源先凑够三篇就停止，三篇原样收下、不排序也不去重
   ——整轮走查跟着那个源的排序走（实测「reduced-order models for turbulent combustion」被 arXiv 带回的一篇
   lattice-Boltzmann 论文带偏，OpenAlex 等其余源一次都没问）。现在问遍所有源，按 `search` 用的同一套相关度

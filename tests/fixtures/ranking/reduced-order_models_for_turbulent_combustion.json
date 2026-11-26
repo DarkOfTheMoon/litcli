@@ -1,0 +1,159 @@
+{
+ "walk": "v7",
+ "question": "reduced-order models for turbulent combustion",
+ "floor": 0.2,
+ "rows": [
+  {
+   "title": "Application of reduced order modeling for simulation of turbulent combustion",
+   "year": "2020",
+   "label": "on",
+   "evidence": 1.0,
+   "note": "the question verbatim",
+   "overlap": 1.0,
+   "coupling": 0.0,
+   "citers": 0.0
+  },
+  {
+   "title": "Reduced-Order Manifold Models for Non-Adiabatic Turbulent Combustion",
+   "year": "2019",
+   "label": "on",
+   "evidence": 1.0,
+   "overlap": 1.0,
+   "coupling": 0.0,
+   "citers": 0.0
+  },
+  {
+   "title": "Reduced Order Modeling of Transversal and Non-Compact Combustion Dynamics",
+   "year": "2015",
+   "label": "on",
+   "evidence": 0.25,
+   "overlap": 0.25,
+   "coupling": 0.0,
+   "citers": 0.0
+  },
+  {
+   "title": "Reduced Order Modeling of Combustion Instability in a Gas Turbine Model Combustor",
+   "year": "2017",
+   "label": "on",
+   "evidence": 0.25,
+   "overlap": 0.25,
+   "coupling": 0.0,
+   "citers": 0.0
+  },
+  {
+   "title": "Multi-Domain Reduced-Order Modeling with Sparse Acceleration of Combustion Instability",
+   "year": "2018",
+   "label": "on",
+   "evidence": 0.25,
+   "overlap": 0.25,
+   "coupling": 0.0,
+   "citers": 0.0
+  },
+  {
+   "title": "Reduced Order Modeling for Turbulent Premixed Flames with Dynamic Mode Decomposition",
+   "year": "2019",
+   "label": "on",
+   "evidence": 0.25,
+   "overlap": 0.25,
+   "coupling": 0.0,
+   "citers": 0.0
+  },
+  {
+   "title": "Dynamical Properties of Combustion Instability in a Laboratory-Scale Gas-Turbine Model Combustor",
+   "year": "2016",
+   "label": "off",
+   "evidence": 0.25,
+   "note": "instability dynamics, no reduced model; the walk admitted it",
+   "overlap": 0.1111,
+   "coupling": 0.0,
+   "citers": 0.1389,
+   "known_admit": true
+  },
+  {
+   "title": "Combustion modeling using principal component analysis",
+   "year": "2008",
+   "label": "on",
+   "evidence": 0.1111,
+   "known_miss": true,
+   "note": "PCA of a combustion model is reduced-order, but the title never says so",
+   "overlap": 0.1111,
+   "coupling": 0.0,
+   "citers": 0.0
+  },
+  {
+   "title": "Large Eddy Simulation of a turbulent lifted flame using multi-modal manifold-based models: Feasibility and interpretability",
+   "year": "2020",
+   "label": "on",
+   "evidence": 0.1111,
+   "known_miss": true,
+   "note": "manifold-based models are reduced-order surrogates",
+   "overlap": 0.1111,
+   "coupling": 0.0,
+   "citers": 0.0
+  },
+  {
+   "title": "Low-Order Modeling of Nonlinear High-Frequency Transversal Thermoacoustic Oscillations in Gas Turbine Combustors",
+   "year": "2017",
+   "label": "on",
+   "evidence": 0.0625,
+   "known_miss": true,
+   "note": "low-order is the same thing in another spelling",
+   "overlap": 0.0,
+   "coupling": 0.0,
+   "citers": 0.0625
+  },
+  {
+   "title": "A latent variable framework for handling detailed chemistry in reacting flows",
+   "year": "2025",
+   "label": "on",
+   "evidence": 0.0625,
+   "known_miss": true,
+   "note": "a latent (reduced) chemical state",
+   "overlap": 0.0,
+   "coupling": 0.0,
+   "citers": 0.0625
+  },
+  {
+   "title": "Manifold-informed state vector subset for reduced-order modeling",
+   "year": "2022",
+   "label": "on",
+   "evidence": 0.0,
+   "known_miss": true,
+   "note": "the title says reduced-order modeling and it still scored 0",
+   "overlap": 0.0,
+   "coupling": 0.0,
+   "citers": 0.0
+  },
+  {
+   "title": "In-Situ Adaptive Manifolds: Enabling computationally efficient simulations of complex turbulent reacting flows",
+   "year": "2020",
+   "label": "on",
+   "evidence": 0.0,
+   "known_miss": true,
+   "note": "manifold tabulation is a reduced chemistry model",
+   "overlap": 0.0,
+   "coupling": 0.0,
+   "citers": 0.0
+  },
+  {
+   "title": "SUNDIALS: Suite of nonlinear and differential/algebraic equation solvers",
+   "year": "2005",
+   "label": "off",
+   "evidence": 0.0,
+   "note": "a solver suite",
+   "overlap": 0.0,
+   "coupling": 0.0,
+   "citers": 0.0
+  },
+  {
+   "title": "Cost function for low-dimensional manifold topology assessment",
+   "year": "2022",
+   "label": "off",
+   "evidence": 0.0,
+   "note": "manifold bookkeeping, not a combustion model",
+   "overlap": 0.0,
+   "coupling": 0.0,
+   "citers": 0.0
+  }
+ ]
+}

@@ -23,6 +23,17 @@ import litcli.paths as paths
 from litcli.browser import Session
 from tests.fake_browser import FakeDownload, FakeLauncher
 
+
+class FakeClock:
+    """A monotonic clock a test moves by hand: nothing here waits in real time."""
+
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 #: A child process that starts the shared session and then exits, like `browser login` does.
 CHILD = """
@@ -212,6 +223,65 @@ class SessionTest(unittest.TestCase):
         # both off and sent the request context at the interstitial instead of the file.
         self.assertEqual(browser._DOWNLOAD_WAIT, 300.0)
 
+    def test_the_navigation_and_the_transfer_share_one_clock(self):
+        # Without a bound each of navigation, challenge wait and fallback request carried its
+        # own full five minutes, so one dead item held the run for a quarter of an hour. The
+        # navigation is now capped short of the whole, and the request gets only the rest.
+        self.s.start()
+        page = mock.MagicMock()
+        page.url = "https://x/a.pdf"
+        page.content.return_value = "<html>Just a moment...</html>"
+        seen = {}
+        clock = FakeClock()
+
+        def goto(url, **kw):
+            seen["goto"] = kw.get("timeout")
+            clock.now += browser._NAV_WAIT  # the navigation spent its whole share
+            return mock.Mock(status=200, headers={}, url=url)
+
+        page.goto.side_effect = goto
+        with mock.patch.object(self.s, "_page", return_value=page), \
+                mock.patch.object(browser.time, "monotonic", clock), \
+                mock.patch.object(browser, "_CHALLENGE_POLL", 0):
+            self.s.download("https://x/a.pdf")
+        (_url, kw), = self.s._runtime.context.request.calls
+        self.assertEqual(seen["goto"], browser._NAV_WAIT * 1000)
+        self.assertEqual(kw["timeout"], (browser._DOWNLOAD_WAIT - browser._NAV_WAIT) * 1000,
+                         "what the navigation spent is gone from the transfer's budget")
+
+    def test_a_challenge_that_never_resolves_is_cut_at_the_deadline(self):
+        # The loop used to poll only until its own five minutes, on top of the navigation's:
+        # a host that never solves had the run sit there. One deadline ends it, and the
+        # fallback request still gets its minimum rather than a zero timeout.
+        self.s.start()
+        page = mock.MagicMock()
+        page.url = "https://x/am/pii/S1"
+        page.content.return_value = "<html>Just a moment...</html>"
+        clock = FakeClock()
+
+        def goto(url, **_kw):
+            clock.now += 3.5  # the navigation took almost all of the four seconds
+            return mock.Mock(status=403, headers={}, url=url)
+
+        page.goto.side_effect = goto
+        polls = []
+
+        def wait(ms):
+            polls.append(ms)
+            clock.now += ms / 1000.0
+
+        page.wait_for_timeout.side_effect = wait
+        with mock.patch.object(self.s, "_page", return_value=page), \
+                mock.patch.object(browser.time, "monotonic", clock), \
+                mock.patch.object(browser, "_DOWNLOAD_WAIT", 4.0), \
+                mock.patch.object(browser, "_CHALLENGE_POLL", 0.5):
+            self.assertEqual(self.s.download("https://x/am/pii/S1"), b"%PDF inline")
+        self.assertLessEqual(len(polls), 2, "the loop spent more than the navigation left")
+        (_url, kw), = self.s._runtime.context.request.calls
+        # The clock being spent must not cut the last-resort request to the leftover second:
+        # it still gets the navigation's own budget.
+        self.assertEqual(kw["timeout"], browser._FALLBACK_WAIT * 1000)
+
     def test_a_navigation_that_never_answers_does_not_reuse_the_last_file(self):
         # The tab is shared by every item of a run: when the navigation dies without a word,
         # ``page.url`` still shows the previous paper's PDF. Trusting it broke the wait at once
@@ -274,7 +344,7 @@ class SessionTest(unittest.TestCase):
         # The fallback keeps the patience of the download it stands in for, and the session's
         # other waits get their default back.
         (_url, kw), = self.s._runtime.context.request.calls
-        self.assertEqual(kw["timeout"], browser._DOWNLOAD_WAIT * 1000)
+        self.assertAlmostEqual(kw["timeout"], browser._DOWNLOAD_WAIT * 1000, delta=1000)
         self.assertIsNone(self.s._runtime.context.timeout)  # None == the library default
 
     def test_a_file_reached_by_redirect_is_read_from_where_it_landed(self):
