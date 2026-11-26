@@ -98,8 +98,10 @@ class DoajBackend(HttpBackend):
 
     headers: ClassVar[dict] = {"Accept": "application/json"}
 
-    def __init__(self, name: str = "doaj", base: str = _API, timeout: int = 25, delay: float = 1.0):
-        super().__init__(name=name, timeout=timeout, min_interval=delay)
+    def __init__(self, name: str = "doaj", base: str = _API, timeout: int = 25, delay: float = 1.0,
+                 retries: int | None = None, retry_after_cap: float | None = None):
+        super().__init__(name=name, timeout=timeout, min_interval=delay,
+                         retries=retries, retry_after_cap=retry_after_cap)
         self._base = base.rstrip("/") + "/"
 
     @property

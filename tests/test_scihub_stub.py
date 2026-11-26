@@ -210,13 +210,15 @@ class ScihubChainTest(unittest.TestCase):
     def test_no_scihub_backend_is_noop(self):
         self.assertIsNone(ft._from_scihub("10.1/x", None))
 
-    def test_from_scihub_swallows_lookup_errors(self):
-        # A typed failure and a stray RuntimeError from a third party both mean "move on".
+    def test_from_scihub_lets_lookup_errors_through(self):
+        # The chain records the reason as `scihub: <reason>` and moves on itself, so a typed
+        # failure and a stray RuntimeError from a third party both have to reach it.
         for exc in (Unavailable("down"), RuntimeError("down")):
             class Broken:
                 def get(self, doi, _exc=exc):
                     raise _exc
-            self.assertIsNone(ft._from_scihub("10.1/x", Broken()))
+            with self.assertRaises(type(exc)):
+                ft._from_scihub("10.1/x", Broken())
 
     def test_oa_still_beats_scihub(self):
         out = ft.resolve_fulltext("10.1/x", scihub_backend=object(), resolvers=[

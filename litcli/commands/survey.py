@@ -32,7 +32,7 @@ from ..backends.base import GraphSource
 from ..backends.http import RETRY_CODES
 from ..browser import PlaywrightTimeoutError, session_from_config
 from ..config import get_all_backends
-from ..errors import BadInput, LitcliError, Unavailable
+from ..errors import BadInput, BotWall, LitcliError, Unavailable
 from ..models import AcademicItem
 from ..pdf import download as download_bytes
 from ..provenance import stamp
@@ -168,34 +168,46 @@ def _seed_row(typed: str, backend) -> dict:
     return row
 
 
-def _resolvable_seeds(found: list[AcademicItem], cfg: dict) -> list[AcademicItem]:
-    """The same seeds as OpenAlex sees them, dropping the ones it cannot place.
+def _addressable(item: AcademicItem, sources) -> bool:
+    """Whether some graph source can be asked about ``item`` in the spelling it has."""
+    return any(expansion.target_for(source, item) for source in sources)
 
-    An opening search fans out over every source, but the walk expands ``/works/<id>`` only, so
-    a seed straight from arXiv keeps an arXiv id and 404s the first hop. A title lookup converts
-    it; a seed that cannot be placed costs a note here, not a dead project later.
+
+def _resolvable_seeds(found: list[AcademicItem], cfg: dict) -> list[AcademicItem]:
+    """The seeds the walk can actually place, dropping the ones no source can address.
+
+    An opening search fans out over every source, and the walk asks each source in its own
+    spelling — an OpenAlex W id, a DOI, an S2 paperId, a PMID. A seed spelled for any of them
+    walks as it stands. One spelled for none of them (an arXiv id) is converted through a title
+    lookup, which also brings the work id the seed-citer bonus needs; where that fails, only
+    the sources that can still address the row keep it. A seed that stays unplaceable costs a
+    note here, not a dead project later.
     """
     backend = get_all_backends(cfg).get("openalex")
     if backend is None:
         return found
+    sources = graph_sources(cfg)
     kept: list[AcademicItem] = []
     for item in found:
-        if _expandable(str(item.key)):
+        if _expandable(str(item.key)):  # already a work id or a DOI: nothing to convert
             kept.append(item)
             continue
-        if not item.title:  # a title lookup needs a title
-            print(f"[skipped] {item.key}: no title to look it up by", file=sys.stderr)
-            continue
-        try:
-            hits = backend.search(item.title, limit=1,
-                                  filters={"title": str(item.title).replace('"', "")})
-        except Exception as e:  # one unplaceable seed must not sink the opening
-            print(f"[skipped] {item.key}: {e}", file=sys.stderr)
-            hits = []
+        hits = []
+        if item.title:
+            try:
+                hits = backend.search(item.title, limit=1,
+                                      filters={"title": str(item.title).replace('"', "")})
+            except Exception as e:  # one unplaceable seed must not sink the opening
+                print(f"[skipped] {item.key}: {e}", file=sys.stderr)
         if hits:
             kept.append(stamp([hits[0]], backend)[0])
+        elif _addressable(item, sources):
+            kept.append(item)
+        elif not item.title:  # a title lookup needs a title
+            print(f"[skipped] {item.key}: no title to look it up by", file=sys.stderr)
         else:
-            print(f"[skipped] {item.key}: not in openalex under its title", file=sys.stderr)
+            print(f"[skipped] {item.key}: not in openalex under its title, and no source can "
+                  "address it", file=sys.stderr)
     return kept
 
 
@@ -278,8 +290,10 @@ class Deps:
 def deps_from_config(cfg: dict, survey_project: project.Project) -> Deps:
     """The real dependencies: configured backends, the fulltext chain, the live session."""
     backends = get_all_backends(cfg)
-    backend = backends.get("openalex")
     graph = graph_sources(cfg, backends)
+    # An unconfigured openalex is still added by `keys` as a keyless fallback; the OA lookup
+    # and the fulltext chain hang off this, so it must be that instance rather than nothing.
+    backend = backends.get("openalex") or next((s for s in graph if s.name == "openalex"), None)
     if not graph:
         raise BadInput("a survey walks the citation graph and no source supplies one; enable "
                        "[backends.openalex], [backends.semanticscholar], [backends.opencitations],"
@@ -481,6 +495,20 @@ def _raiser(signum: int) -> Callable:
     return raised
 
 
+def _askable(item, sources) -> bool:
+    """Whether some source declares an axis and has a spelling for ``item`` at all.
+
+    A row no source can address (a Crossref reference that kept its text as the key) can never
+    be expanded; putting it back on the frontier every hop would only churn.
+    """
+    for source in sources:
+        if not getattr(source, "capabilities", frozenset()) & set(expansion.AXES):
+            continue
+        if expansion.target_for(source, item):
+            return True
+    return False
+
+
 def _again_later(exc: BaseException) -> bool:
     """Whether the failure says "not now" rather than "not this one".
 
@@ -492,7 +520,8 @@ def _again_later(exc: BaseException) -> bool:
     """
     if isinstance(exc, HttpError):
         return exc.status in RETRY_CODES
-    return isinstance(exc, Unavailable)
+    # A bot wall is a challenge page: the most retryable failure there is, not the row's.
+    return isinstance(exc, (Unavailable, BotWall))
 
 
 def _consumed(trace: list[dict]) -> set[str]:
@@ -545,9 +574,12 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
     collected = {str(work) for row in seen_rows if row.get("admit")
                  for work in row.get("referenced_works") or []}
     envelope = effort.resolve(survey_project.effort)
+    #: Every graph source is its own site with its own allowance: a fallback answering for a
+    #: throttled first source must not be paid for out of that first source's budget.
+    sites = list(dict.fromkeys(expansion._site(source) for source in deps.sources()))
     counters = {key: int(envelope[key]) for key in ("refs", "citing", "related")}
-    counters.update({key: int(envelope[f"{key}_cap"])
-                     for key in ("openalex", "arxiv", "publisher")})
+    counters.update({key: int(envelope[f"{key}_cap"]) for key in ("arxiv", "publisher")})
+    counters.update({site: int(envelope["graph_cap"]) for site in sites})
     caps = {"admit": int(envelope["admit"])}
     hop = sum(1 for event in trace if event.get("event") == "hop_end")
     best = max((float(row.get("score") or 0.0) for row in seen_rows if row.get("admit")),
@@ -589,7 +621,7 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
                 stop = "interrupted"
             elif hop >= int(envelope["max_hops"]):
                 stop = "max_hops"
-            elif counters["openalex"] <= 0:
+            elif all(counters.get(site, 0) <= 0 for site in sites):
                 stop = "budget"
             elif not frontier or streak >= int(envelope["streak"]):
                 stop = "saturated"
@@ -620,24 +652,23 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
             fresh = errored = 0
             expanded_now = []
             abandoned_now = []
+            #: What the whole hop charged, per site, for the refund below: a warm cache over a
+            #: batch refunds every row that hit it, not only the last one.
+            charged_by: dict[str, int] = {}
             for row in batch:
                 item = _row_item(row)
                 # The axis cells are edges read from EACH work, so a row starts with its full
                 # allowance every time; only the per-site caps are carried across the run.
                 for axis in expansion.AXES:
                     counters[axis] = int(envelope[axis])
-                attempted = 0
-                for axis in expansion.AXES:
-                    if counters[axis] > 0 and counters["openalex"] > 0:
-                        counters["openalex"] -= 1
-                        charged += 1
-                        attempted += 1
+                attempts: dict[str, int] = {}
                 pairs = []
-                spent_before = cache.stats()["misses"]
+                spent_before = cache.stats()["by"]
                 try:
                     # Pulled eagerly: a failing axis must keep the candidates already handed
                     # back, and one unexpandable row must not take the rest of the hop with it.
-                    for pair in expansion.expand(item, deps.sources(), envelope, counters):
+                    for pair in expansion.expand(item, deps.sources(), envelope, counters,
+                                                 attempts):
                         pairs.append(pair)
                 except (LitcliError, KeyError, ValueError, TypeError) as e:
                     # KeyError is a 200 with no body, ValueError a 200 that is not JSON at all;
@@ -657,12 +688,27 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
                         abandoned_now.append(identity_now)
                     emit("error", hop=hop, identity=identity_now, reason=str(e))
                 else:
-                    expanded_now.append(str(row.get("identity")))
-                # One `references` call is several requests behind a batch, so the axis charge
-                # above is only the floor: the site budget pays for what was really spent.
-                overspend = max(0, cache.stats()["misses"] - spent_before - attempted)
-                counters["openalex"] -= overspend
-                charged += overspend
+                    # Nobody looked (every site was spent before this row's turn) is not the
+                    # same as nothing found: the row stays unexpanded, or a resume skips it.
+                    if pairs or attempts or not _askable(item, deps.sources()):
+                        expanded_now.append(str(row.get("identity")))
+                # One `references` call is several requests behind a batch, so the attempt
+                # charge is only the floor: the site pays for what was really spent, on the
+                # site the requests went to.
+                row_charge = 0
+                for site, made in attempts.items():
+                    charged_by[site] = charged_by.get(site, 0) + made
+                    row_charge += made
+                spent_after = cache.stats()["by"]
+                for site in sites:
+                    over = max(0, int((spent_after.get(site) or {}).get("misses", 0))
+                               - int((spent_before.get(site) or {}).get("misses", 0))
+                               - attempts.get(site, 0))
+                    if over:
+                        counters[site] = int(counters.get(site, 0)) - over
+                        charged_by[site] = charged_by.get(site, 0) + over
+                        row_charge += over
+                charged += row_charge
                 for candidate, axis in pairs:
                     stamp([candidate], deps.by_name.get(candidate.source) or deps.sources()[0])
                     total, parts = scoring.score(candidate, survey_project, collected, trace)
@@ -705,11 +751,15 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
                              score=total)
                         emit("download", hop=hop, identity=verdict["identity"],
                              key=candidate.key, status=status)
-            hits = cache.stats()["hits"]
+            hits_by = cache.stats()["by"]
             # A cached answer costs no request, so it refunds its charge — never more than the
-            # hop actually charged, or the quota would drift above its cap on a hot cache.
-            refund = min(hits, charged)
-            counters["openalex"] += refund
+            # site was actually charged, or the quota would drift above its cap on a hot cache.
+            refund = hits = 0
+            for site, spent in charged_by.items():
+                back = min(int((hits_by.get(site) or {}).get("hits", 0)), spent)
+                hits += int((hits_by.get(site) or {}).get("hits", 0))
+                counters[site] = int(counters.get(site, 0)) + back
+                refund += back
             # A hop whose expansions errored (a 429 burst, an unreadable answer) found nothing
             # because it could not look, not because there was nothing: it must not spend the
             # saturation streak, or two rate-limited hops end a run that never got started.
@@ -719,7 +769,8 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
                 streak += 1
             emit("hop_end", hop=hop, new=fresh, expanded=expanded_now, abandoned=abandoned_now,
                  hits=hits, charged=charged, refund=refund, errored=errored,
-                 remaining={key: counters[key] for key in ("openalex", "arxiv", "publisher")})
+                 remaining={**{site: counters.get(site, 0) for site in sites},
+                            **{key: counters[key] for key in ("arxiv", "publisher")}})
             project.save(survey_project)
         emit("stop", reason=stop, admitted=admitted_total)
         return {"stop": stop, "admitted": admitted_total, "landed": landed_total}
@@ -818,7 +869,9 @@ def cmd_survey_status(cfg, args) -> int:
     trace = project.read_trace(survey_project)
     seen = project.read_seen(survey_project)
     envelope = effort.resolve(survey_project.effort)
-    remaining = {key: int(envelope[f"{key}_cap"]) for key in ("openalex", "arxiv", "publisher")}
+    remaining = {key: int(envelope[f"{key}_cap"]) for key in ("arxiv", "publisher")}
+    remaining.update({expansion._site(source): int(envelope["graph_cap"])
+                      for source in graph_sources(cfg)})
     for event in reversed(trace):
         if event.get("event") == "hop_end" and isinstance(event.get("remaining"), dict):
             remaining.update({k: int(v) for k, v in event["remaining"].items()})

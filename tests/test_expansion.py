@@ -208,6 +208,30 @@ class TargetTest(unittest.TestCase):
         epmc = type("B", (), {"name": "europepmc"})()
         self.assertEqual(expansion.target_for(epmc, no_doi), "PMC7654321")
 
+    def test_s2_is_asked_about_its_own_paper_id_when_the_record_has_no_doi(self):
+        # A DOI-less S2 row keeps its 40-hex paper id, which is a spelling S2 itself accepts;
+        # requiring a DOI would leave the row expandable by nobody.
+        pid = "b04a3f1b2c9d4e5f60718293a4b5c6d7e8f90123"
+        no_doi = AcademicItem(source="semanticscholar", key=pid, title="T")
+        s2 = type("B", (), {"name": "semanticscholar"})()
+        self.assertEqual(expansion.target_for(s2, no_doi), pid)
+
+    def test_a_title_that_starts_with_digits_is_not_taken_for_a_pmid(self):
+        # PMIDs and PMC ids are short all-digit keys; a title merely *beginning* with a year
+        # ("2020 survey of …") is not one, and EPMC would answer it with an empty 404.
+        for text in ("2020 survey of pool boiling", "A book, 1999"):
+            with self.subTest(text):
+                titled = AcademicItem(source="crossref", key=text, title=text)
+                epmc = type("B", (), {"name": "europepmc"})()
+                self.assertIsNone(expansion.target_for(epmc, titled))
+
+    def test_a_title_only_row_is_not_asked_of_a_doi_source(self):
+        # Crossref reference rows without a DOI keep the unstructured text as the key; handing
+        # it to a DOI-only source is a request that can only come back empty.
+        titled = AcademicItem(source="crossref", key="A book, 1999", title="A book, 1999")
+        epmc = type("B", (), {"name": "europepmc"})()
+        self.assertIsNone(expansion.target_for(epmc, titled))
+
 
 class FallbackTest(unittest.TestCase):
     """One spent source costs its own answer, never the axis or the hop."""
@@ -242,11 +266,16 @@ class FallbackTest(unittest.TestCase):
         self.assertIn("429", str(caught.exception))
 
     def test_a_wall_does_not_hide_the_axes_the_next_source_answers(self):
+        # The walled source owns `refs`/`citing` for this row (the other one declares
+        # `related` only), so the row is read *and* reported as short: what the one source
+        # answered still comes back before the retry.
         walled, good = Walled(), SourceSpy(axes=("related",))
         good.counts = {"refs": 0, "citing": 0, "related": 1}
-        out = list(expansion.expand(item("seed", 0), [walled, good], CAPS, dict(CAPS)))
-        self.assertEqual([axis for _i, axis in out], ["related"])
-    """A link service: DOIs, no metadata (OpenCitations is this shape)."""
+        got = []
+        with self.assertRaises(Unavailable):
+            for pair in expansion.expand(item("seed", 0), [walled, good], CAPS, dict(CAPS)):
+                got.append(pair)
+        self.assertEqual([axis for _i, axis in got], ["related"])
 
     name = "opencitations"
 
@@ -312,6 +341,19 @@ class RoomShareTest(unittest.TestCase):
         self.assertEqual(self._asks(first), [("refs", 2)])
         self.assertEqual(self._asks(second), [("refs", 2)])
         self.assertEqual(len(out), 4)
+
+    def test_a_spent_site_is_skipped_and_its_share_goes_to_the_ones_left(self):
+        # Each source has its own site budget: an exhausted one must be dropped from the ask
+        # and from the divisor, or the walk would keep spending a site that has nothing left.
+        first, second = FakeBackend(), OwnKeys()
+        counters = {**self.CAPS4, first.name: 0, second.name: 5}
+        attempts = {}
+        list(expansion.expand(item("seed", 0), [first, second], self.CAPS4,
+                              counters, attempts))
+        self.assertEqual(self._asks(first), [])
+        self.assertEqual(self._asks(second), [("refs", 4)])
+        self.assertEqual(counters[second.name], 4)
+        self.assertEqual(attempts, {second.name: 1})
 
     def test_a_short_answer_hands_its_share_on(self):
         first, second = FakeBackend(), OwnKeys()

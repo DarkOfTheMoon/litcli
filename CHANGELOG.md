@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `refs`/`citing`/`related` 三个图谱命令 漏掉整类答复错误：`KeyError`（200 而正文空）、`ValueError`/`TypeError`（200 而结构不同）、
+  `AttributeError`（正文是列表而不是对象）此前穿过分类捕获把整条命令掀掉，现在与 404 一样只损这一源并换下一个；
+  坏掉的 `--backend` 或 `源/` 前缀转成 `BadInput`（退出码 2）而不是「意外错误」。
+- `related --limit 0` 的关键词兜底拿到上限 0，恒返回空表。
+- 图谱不再向对该键没有拼写的源发请求：W-id 发给只认 DOI 的对服务、`openalex/W…` 发给 crossref 之类，
+  每次只是一个必然 404 加一行 `[skipped]`。
+- 准入不再因一个声明轴缺方法就丢整源（消费者按轴问，缺的是那一轴而不是这个源）。
+- 调查的额度退还只对最后一行生效（`charged_by` 每行重建），批内某行把额度耗尽的其它行仍记为已展开；
+  没有能寻址的源的行（如只有题名、又没有可搜的后端）改为留在候选而非记 `expanded`，不再为它反复翻动。
+- 调查在 OpenAlex 未配置时 `deps.backend` 为 `None`，整条 OA 补题录链丢掉：现在回落到图谱源里的同名实例。
+- `BotWall` 被当成「不是本行的问题」而不重试，撞墙的行直接作废。
+- 逐源展开按轴判失败：某轴全源失败但仍被送去下一跳时不再静默；`NotSupportedError` 也扣一次尝试，现改为退还。
+- 水合补题录不看站点是否已用尽，补完还对着耗尽的源发请求。
+- Semantic Scholar 的键归一：接受 `https://doi.org/` 前缀，自排除时用解码后的 DOI 比较（编码值与原值永远不等）。
+- crossref 的键带 `doi:`/`DOI:`/`https://doi.org/`/`crossref:` 前缀时不剥直接拼 URL。
+- Europe PMC 的 PMC 号正则未锚尾（`PMC123abc` 也当成 PMC 号），且 `target_for` 没有 europepmc 分支。
+- `_probe_fulltext` 在「没有可用全文」时返回整数 `2`，被当成功。
+- 无 DOI 的页面（PDF 落地页）被 `_gated` 的题名门判掉，整条链少一个合法来源。
+- `fetch` 对出版社宿主机一律不走朴素下载，哪怕命中的就是直连 URL（如预签名的资源地址）。
+- 会话标签页复用上一个条目的地址：导航无声死掉时 `page.url` 仍是上一篇的 PDF，`download` 当场把它当成答复、
+  把上一篇的字节存成本篇；`page` 也把上一篇的地址当成答复地址。现在只有导航真的答过（有响应，或地址已变）
+  才认标签页里的地址。
+- `--scihub` 在拿到落地页后从不执行：链尾 `unpaywall_landing` 排在 scihub 之前，而链一命中即停，
+  再问一遍落地页必然得到同一个 HTML。`--scihub` 的典型用途（bronze 记录的落点就是出版社落地页）因此全程
+  拿不到副本。`tail` 现在在「已有落地页」的续链里把 scihub 放到最前。
+- `_from_scihub` 把失败的全部原因静默吞掉，未命中／被墙／403 与「压根没跑」在输出上同形；现在原因照常上抛，
+  落成 `[skipped] scihub: <原因>`。
+- 出版社后端的 `retries` / `retry_after_cap`：crossref 与 Europe PMC 的构造函数完全不收，配了这两个键就整源
+  建不起来；订阅出版社收下却接不到传输层，配置对它们静默失效。现在两者都显式转给基类。
+- 文档：`README.md`/`README.en.md`/`config.example.toml` 对 Semantic Scholar 与 OpenCitations 是否进
+  `search` 全量扇出说法互相打架（这两段写出来就会进，内置免 key 语料并不含它们）；`SKILL.md` 的 `refs`
+  备选少了 europepmc；`AGENTS.md` 的后端层没有图谱契约（`GraphSource`/`GRAPH_AXES`/`missing_axes`）。
+
+### Known gaps
+
+- 调查的状态面保留了 `arxiv` 一份额度，但没有代码扣它：arXiv 后端不参与展开，入口只作全文来源。
+  它出现在 `remaining` 里却从不减少，接上要改整条全文链的记账面。
+
 ### Changed
 
 - 引文图谱的 `refs`/`related` 改为多源合并：首个答上的源定表序，其余能答的源接着补、按身份去重后补到

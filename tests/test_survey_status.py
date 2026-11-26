@@ -47,7 +47,7 @@ class StatusStopTest(unittest.TestCase):
         self.assertEqual(code, 0)
         report = json.loads(out)
         self.assertEqual(report["remaining"]["openalex"],
-                         effort.resolve(self.project.effort)["openalex_cap"])
+                         effort.resolve(self.project.effort)["graph_cap"])
         self.assertEqual(report["question"], "wick boiling")
         self.assertEqual(report["status"], "running")
         self.assertEqual(report["hops"], 0)

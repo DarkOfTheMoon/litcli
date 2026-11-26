@@ -78,6 +78,16 @@ class RelatedTest(Base):
         http_stub.stub(self.b, (200, {"recommendedPapers": [PAPER]}))
         self.assertEqual(self.b.related("DOI:10.1/citing"), [])
 
+    def test_the_seed_is_dropped_even_when_its_doi_needs_quoting(self):
+        # The request quotes the DOI for the path segment; the API answers the raw spelling.
+        # Comparing the quoted form against ``externalIds.DOI`` never matches for the old
+        # Wiley DOIs (``<``, ``>``, ``;`` inside), so the seed kept a slot of its own list.
+        raw = "10.1002/(SICI)1097-4636(199706)35:4<473::AID-JBM9>3.0.CO;2-4"
+        seed = {**PAPER, "externalIds": {"DOI": raw}}
+        other = {**PAPER, "paperId": "e" * 40, "externalIds": {"DOI": "10.1/other"}}
+        http_stub.stub(self.b, (200, {"recommendedPapers": [seed, other]}))
+        self.assertEqual([i.doi for i in self.b.related(raw, limit=1)], ["10.1/other"])
+
     def test_dropping_the_seed_does_not_cut_the_page_short(self):
         # One extra row is asked for, so a seed in the lead still yields a full ``limit``.
         other = {**PAPER, "paperId": "d" * 40, "externalIds": {"DOI": "10.1/other"}}
@@ -102,6 +112,13 @@ class GetTest(Base):
         stub = http_stub.stub(self.b, (200, PAPER))
         self.b.get(pid)
         self.assertIn(f"/paper/{pid}", stub.urls[0])
+
+    def test_a_doi_org_url_is_the_doi(self):
+        # Every other source takes this form (it is what the table prints); S2 used to quote
+        # the whole URL into the path segment, so the lookup could only 404.
+        stub = http_stub.stub(self.b, (200, PAPER))
+        self.b.get("https://doi.org/10.1/citing")
+        self.assertIn("/paper/DOI:10.1/citing", stub.urls[0])
 
     def test_a_missing_paper_is_not_found(self):
         http_stub.stub(self.b, (404, {"error": "not found"}))

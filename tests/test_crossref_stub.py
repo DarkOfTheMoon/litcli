@@ -138,6 +138,15 @@ class CrossrefReferencesTest(unittest.TestCase):
         stub(self.be, (200, REF_MSG))
         self.assertEqual(len(self.be.references("10.1/seed", limit=1)), 1)
 
+    def test_a_typed_doi_prefix_is_not_quoted_into_the_path(self):
+        # ``refs doi:10.1/seed`` is a legal key form (COCI and Europe PMC strip the same
+        # prefixes); quoting it whole asks for a DOI literally called "doi:10.1/seed".
+        for key in ("doi:10.1/seed", "https://doi.org/10.1/seed"):
+            with self.subTest(key):
+                stubr = stub(self.be, (200, REF_MSG))
+                self.be.references(key, limit=1)
+                self.assertTrue(stubr.urls[0].endswith("/works/10.1%2Fseed"), stubr.urls[0])
+
     def test_a_deposit_without_references_answers_empty(self):
         stub(self.be, (200, {"message": {"DOI": "10.1/seed"}}))
         self.assertEqual(self.be.references("10.1/seed"), [])

@@ -50,8 +50,10 @@ class OpenLibraryBackend(HttpBackend):
     headers: ClassVar[dict] = {"Accept": "application/json"}
     timeout = 20.0
 
-    def __init__(self, name: str = "openlibrary", base: str = _SEARCH, max_results: int = 10):
-        super().__init__(name=name, rate=5, min_interval=0.2)
+    def __init__(self, name: str = "openlibrary", base: str = _SEARCH, max_results: int = 10,
+                 retries: int | None = None, retry_after_cap: float | None = None):
+        super().__init__(name=name, rate=5, min_interval=0.2,
+                         retries=retries, retry_after_cap=retry_after_cap)
         self._base = base.rstrip("/")
         self._max = max_results
 

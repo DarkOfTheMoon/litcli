@@ -219,8 +219,10 @@ class DoabBackend(HttpBackend):
 
     access = "oa"
 
-    def __init__(self, name: str = "doab", base: str = _SEARCH, timeout: int = 30, delay: float = 1.0):
-        super().__init__(name=name, timeout=timeout, rate=1, min_interval=delay)
+    def __init__(self, name: str = "doab", base: str = _SEARCH, timeout: int = 30, delay: float = 1.0,
+                 retries: int | None = None, retry_after_cap: float | None = None):
+        super().__init__(name=name, timeout=timeout, rate=1, min_interval=delay,
+                         retries=retries, retry_after_cap=retry_after_cap)
         self._base = base
         parsed = urllib.parse.urlsplit(base)
         # Page/challenge URLs hang off the host, so a ``base`` override must move them too.

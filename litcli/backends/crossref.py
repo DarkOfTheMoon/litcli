@@ -38,6 +38,19 @@ def _strip_xml(s: str) -> str:
     return _XML_RE.sub(" ", s or "").strip()
 
 
+def _doi(key: str) -> str:
+    """The bare DOI of a typed key: Crossref addresses works by DOI and nothing else.
+
+    ``doi:`` / ``https://doi.org/`` prefixes are legal key forms (the CLI and the other graph
+    sources accept them); quoted whole they name a DOI spelled "doi:10.…", which 404s.
+    """
+    k = (key or "").strip()
+    for prefix in ("doi:", "DOI:", "https://doi.org/", "crossref:"):
+        if k.startswith(prefix):
+            return k[len(prefix):]
+    return k
+
+
 def _authors(data: dict) -> list[dict]:
     out = []
     for a in data.get("author") or []:
@@ -87,8 +100,10 @@ class CrossrefBackend(HttpBackend):
     http2 = True
 
     def __init__(self, name: str = "crossref", mailto: str = "",
-                 base: str = _API, max_results: int = 10):
-        super().__init__(name=name, rate=10, min_interval=0.1)
+                 base: str = _API, max_results: int = 10,
+                 retries: int | None = None, retry_after_cap: float | None = None):
+        super().__init__(name=name, rate=10, min_interval=0.1,
+                         retries=retries, retry_after_cap=retry_after_cap)
         self._base = base.rstrip("/")
         self._mailto = mailto
         self._max = max_results
@@ -122,7 +137,7 @@ class CrossrefBackend(HttpBackend):
         ``DOI`` when the publisher stored one; the rest keep their unstructured text as the
         title, which is still enough to score and to show.
         """
-        doi = urllib.parse.quote(key, safe="")
+        doi = urllib.parse.quote(_doi(key), safe="")
         data = self.fetch_json(f"{self._base}/{doi}")
         refs = (data.get("message") or {}).get("reference") or []
         out = []
@@ -146,7 +161,7 @@ class CrossrefBackend(HttpBackend):
         return out
 
     def get(self, key: str) -> AcademicItem:
-        doi = urllib.parse.quote(key, safe="")
+        doi = urllib.parse.quote(_doi(key), safe="")
         data = self.fetch_json(f"{self._base}/{doi}")
         msg = data.get("message")
         if not msg:

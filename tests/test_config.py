@@ -187,11 +187,17 @@ class TestConfig(unittest.TestCase):
         backends = config.discover_backends({"backends": {"a": {"type": "arxiv", "max_results": 5}}})
         self.assertEqual(backends["a"].name, "a")
 
-    def test_the_retry_keys_reach_the_rate_limited_sources(self):
+    def test_every_http_backend_takes_the_retry_keys(self):
         # A section is passed to the constructor verbatim, so a key the constructor does not
-        # take is a TypeError from `backends list`. These two are the sources a long run gets
-        # 429'd by, and the retry budget is exactly what a run has to raise there.
-        for kind in ("openalex", "arxiv"):
+        # take is a TypeError from `backends list`. Every HTTP backend is a source a long run
+        # can get 429'd by, so the rule is not "these two": all of them accept the keys and
+        # hand them to the transport (a subclass that swallows them into `**_unused` builds
+        # fine and silently ignores the config, which is the failure mode this pins).
+        from litcli.backends.http import HttpBackend
+
+        for kind, cls in sorted(config._registry().items()):
+            if not (isinstance(cls, type) and issubclass(cls, HttpBackend)):
+                continue
             with self.subTest(kind=kind):
                 be = config.get_backend(kind, config={"backends": {kind: {
                     "type": kind, "retries": 5, "retry_after_cap": 60.0}}})

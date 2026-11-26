@@ -189,15 +189,30 @@ class StatsTest(_TmpCache):
     def test_a_miss_and_a_put_both_count_as_misses(self):
         cache.get("absent")
         cache.put("k", "body")
-        self.assertEqual(cache.stats(), {"hits": 0, "misses": 2})
+        self.assertEqual(cache.stats()["misses"], 2)
 
     def test_a_hit_counts_as_a_hit(self):
         cache.put("k", "body")
         cache.reset_stats()
         cache.get("k")
-        self.assertEqual(cache.stats(), {"hits": 1, "misses": 0})
+        self.assertEqual(cache.stats()["hits"], 1)
 
     def test_reset_clears_both(self):
         cache.put("k", "body")
         cache.reset_stats()
-        self.assertEqual(cache.stats(), {"hits": 0, "misses": 0})
+        self.assertEqual(cache.stats()["misses"], 0)
+
+    def test_the_spend_is_attributable_to_one_source(self):
+        # The site quota is per source, so a hop has to know which site a request went to.
+        cache.note("openalex", False)
+        cache.note("openalex", False)
+        cache.note("semanticscholar", True)
+        by = cache.stats()["by"]
+        self.assertEqual(by["openalex"]["misses"], 2)
+        self.assertEqual(by["semanticscholar"]["hits"], 1)
+        self.assertEqual(cache.stats()["misses"], 0)  # totals stay lookups, `by` is requests
+
+    def test_reset_clears_the_per_source_block(self):
+        cache.note("openalex", False)
+        cache.reset_stats()
+        self.assertEqual(cache.stats()["by"], {})

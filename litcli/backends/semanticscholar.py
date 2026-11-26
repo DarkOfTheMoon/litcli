@@ -36,7 +36,7 @@ def _identifier(key: str) -> str:
     m = _ID_RE.match(k)
     if m:
         return m.group(1)
-    for prefix in ("doi:", "DOI:", "s2:", "semanticscholar:"):
+    for prefix in ("doi:", "DOI:", "https://doi.org/", "s2:", "semanticscholar:"):
         if k.startswith(prefix):
             k = k[len(prefix):]
             break
@@ -140,7 +140,10 @@ class SemanticScholarBackend(HttpBackend):
         data = self.fetch_json(
             f"{_REC}/papers/forpaper/{_identifier(key)}?{self._params(limit + 1)}")
         mine = _identifier(key)
-        mine_doi = mine[len("DOI:"):] if mine.startswith("DOI:") else ""
+        # The path segment is percent-quoted; the API answers the raw spelling, so the seed's
+        # DOI is unquoted before it is compared or every quoted DOI (``<``, ``>``, ``;``…)
+        # stays in its own recommendation list.
+        mine_doi = urllib.parse.unquote(mine[len("DOI:"):]) if mine.startswith("DOI:") else ""
         out = []
         for rec in data.get("recommendedPapers") or []:
             if not rec or str(rec.get("paperId")) == mine:

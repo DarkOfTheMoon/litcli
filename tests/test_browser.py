@@ -182,6 +182,20 @@ class SessionTest(unittest.TestCase):
             answer = self.s.page("https://doi.org/10.1063/1.870872")
         self.assertEqual((answer.status, "AIP" in answer.text), (200, True))
 
+    def test_a_page_navigation_that_never_answers_reports_the_requested_address(self):
+        # Same shared tab as in ``download``: a navigation that dies silently leaves the
+        # previous item's address in the tab, and reporting it makes the caller believe the
+        # document in hand came from somewhere else.
+        self.s.start()
+        page = mock.MagicMock()
+        page.url = "https://x/previous"
+        page.goto.side_effect = browser.PlaywrightTimeoutError("Page.goto: Timeout")
+        page.content.return_value = "<html><title>Previous</title></html>"
+        with mock.patch.object(self.s, "_page", return_value=page), \
+                mock.patch.object(browser, "_CHALLENGE_WAIT", 0):
+            answer = self.s.page("https://x/current.pdf")
+        self.assertEqual(answer.url, "https://x/current.pdf")
+
     def test_a_gate_page_is_returned_not_raised(self):
         self.s.start()
         self.launcher.queue.append((403, "<html>__cf_chl</html>"))
@@ -197,6 +211,24 @@ class SessionTest(unittest.TestCase):
         # The wait covers the challenge being solved and a slow link alike; four seconds cut
         # both off and sent the request context at the interstitial instead of the file.
         self.assertEqual(browser._DOWNLOAD_WAIT, 300.0)
+
+    def test_a_navigation_that_never_answers_does_not_reuse_the_last_file(self):
+        # The tab is shared by every item of a run: when the navigation dies without a word,
+        # ``page.url`` still shows the previous paper's PDF. Trusting it broke the wait at once
+        # and re-requested the previous address, so the previous bytes were saved under the
+        # current DOI.
+        self.s.start()
+        page = mock.MagicMock()
+        page.url = "https://x/previous.pdf"
+        page.goto.side_effect = browser.PlaywrightTimeoutError("Page.goto: Timeout")
+        page.content.return_value = "%PDF-1.4 previous"
+        with mock.patch.object(self.s, "_page", return_value=page), \
+                mock.patch.object(browser, "_REDIRECT_GRACE", 0), \
+                mock.patch.object(browser, "_CHALLENGE_POLL", 0):
+            data = self.s.download("https://x/current.pdf")
+        self.assertTrue(data.startswith(b"%PDF"))
+        (url, _kw), = self.s._runtime.context.request.calls
+        self.assertEqual(url, "https://x/current.pdf")
 
     def test_a_download_that_starts_late_is_still_taken(self):
         # A gated host serves the interstitial and only becomes the file once it is solved.

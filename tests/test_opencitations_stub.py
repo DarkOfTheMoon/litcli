@@ -25,8 +25,13 @@ class Base(unittest.TestCase):
 
 class CapabilityTest(Base):
     def test_both_directions_are_declared_and_related_is_not(self):
-        self.assertTrue({"read", "refs", "citing"} <= self.b.capabilities)
+        self.assertTrue({"refs", "citing"} <= self.b.capabilities)
         self.assertNotIn("related", self.b.capabilities)
+
+    def test_read_is_not_declared_because_there_is_no_metadata_to_read(self):
+        # `read` is what the hydration pool keys off; `get` here answers the DOI and nothing
+        # else, so declaring it would spend a call that cannot fill a title.
+        self.assertNotIn("read", self.b.capabilities)
 
 
 class DirectionTest(Base):
@@ -63,6 +68,15 @@ class SearchTest(Base):
         # COCI is a link index: a keyword search would only 404.
         self.assertEqual(self.b.search("sodium batteries"), [])
         self.assertEqual([i.doi for i in self.b.search("10.1/x")], ["10.1/x"])
+
+    def test_the_doi_form_is_looked_up_once(self):
+        # `get` costs nothing here today, but the shape (call it, then call it again to test
+        # the result) is the kind of thing that stops being free the moment it gains a lookup.
+        calls = []
+        real = self.b.get
+        self.b.get = lambda key: (calls.append(key), real(key))[1]
+        self.b.search("10.1/x")
+        self.assertEqual(calls, ["10.1/x"])
 
 
 class ToleranceTest(Base):

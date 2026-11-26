@@ -33,7 +33,9 @@ class OpenCitationsBackend(HttpBackend):
 
     @property
     def capabilities(self) -> set[str]:
-        return {"read", "refs", "citing"}
+        #: No ``read``: ``get`` answers the DOI itself, it has no metadata to fill a bare row
+        #: with. The two link directions are the whole service.
+        return {"refs", "citing"}
 
     def _edge(self, key: str, edge: str, column: str, limit: int) -> list[AcademicItem]:
         doi = (key or "").strip()
@@ -54,9 +56,10 @@ class OpenCitationsBackend(HttpBackend):
     def search(self, query: str, limit: int = 10, filters: dict | None = None) -> list[AcademicItem]:
         """COCI is a link service: only a DOI-shaped query can be answered."""
         q = (query or "").strip()
-        if q.startswith("10."):
-            return [self.get(q)] if self.get(q).doi else []
-        return []
+        if not q.startswith("10."):
+            return []
+        item = self.get(q)
+        return [item] if item.doi else []
 
     def get(self, key: str) -> AcademicItem:
         doi = (key or "").strip()

@@ -55,6 +55,30 @@ class KeywordTest(unittest.TestCase):
     def test_stopwords_are_dropped_and_long_words_come_first(self):
         self.assertEqual(_keywords("The graph of neural networks")[:2], ["networks", "neural"])
 
+    def test_a_limit_of_zero_does_not_empty_the_fallback(self):
+        # `--limit 0` means "no cap" here as everywhere else; the fallback was handed the raw
+        # 0 and sliced its own matches away.
+        backend = _Backend(related=[], hits=[AcademicItem(key="10.1/n", doi="10.1/n",
+                                                          title="Neighbour")])
+        err = io.StringIO()
+        seen = []
+        with mock.patch.object(graph, "resolve_backend", return_value=(backend, "10.1/seed")), \
+                mock.patch.object(graph, "print_items",
+                                  side_effect=lambda its, *a: seen.extend(its)), \
+                contextlib.redirect_stderr(err):
+            graph.cmd_edge({}, _args(limit=0), "related")
+        self.assertEqual([i.key for i in seen], ["10.1/n"])
+
+    def test_an_unknown_pinned_backend_is_bad_input(self):
+        # `resolve_backend` raises a bare KeyError / RuntimeError; uncaught it read as an
+        # "unexpected" traceback rather than the user's own typo in `--backend`.
+        from litcli.errors import BadInput
+
+        with mock.patch.object(graph, "resolve_backend", side_effect=KeyError("nope")), \
+                mock.patch.object(graph, "print_items"), self.assertRaises(BadInput) as caught:
+            graph.cmd_edge({}, _args(backend="nope"), "references")
+        self.assertIn("nope", str(caught.exception))
+
 
 class RelatedFallbackTest(unittest.TestCase):
     def test_an_empty_graph_falls_back_to_the_title(self):
@@ -127,9 +151,11 @@ class _LinkSource:
 
     def __init__(self, dois):
         self.dois = dois
-        self.capabilities = {"read", "refs"}
+        self.capabilities = {"refs"}  # like COCI: no metadata to read
+        self.asked = None
 
     def references(self, key, limit=5, sort_cited=True):
+        self.asked = key
         return [AcademicItem(source=self.name, key=d, doi=d) for d in self.dois][:limit]
 
 
@@ -148,7 +174,7 @@ class _MetadataSource:
     def get(self, key):
         self.asked.append(key)
         return AcademicItem(source=self.name, key=key, doi=key, title="A real title",
-                            year="2019")
+                            year="2019", cited_by_count=500)
 
 
 class PinnedHydrationTest(unittest.TestCase):
@@ -166,6 +192,51 @@ class PinnedHydrationTest(unittest.TestCase):
             graph.cmd_edge({}, _args(backend="opencitations"), "references")
         self.assertEqual([(i.key, i.title) for i in seen], [("10.1/x", "A real title")])
         self.assertEqual(meta.asked, ["10.1/x"])
+
+
+class _BareSource:
+    """A link service that *also* has a ``get``: the shape a hydration pool is built for."""
+
+    capabilities = frozenset({"read", "refs"})
+
+    def __init__(self, name="opencitations", dois=("10.1/x",)):
+        self.name = name
+        self.dois = list(dois)
+        self.asked = []
+
+    def references(self, key, limit=5, sort_cited=True):
+        return [AcademicItem(source=self.name, key=d, doi=d) for d in self.dois][:limit]
+
+    title = "A real title"
+
+    def get(self, key):
+        self.asked.append(key)
+        return AcademicItem(source=self.name, key=key, doi=key, title=self.title,
+                            cited_by_count=50)
+
+
+class HydrationPoolTest(unittest.TestCase):
+    """The pool may name the same source twice; it must be asked once."""
+
+    def _run(self, pinned, pool):
+        seen = []
+        with mock.patch.object(graph, "graph_sources", return_value=pool), \
+                mock.patch.object(graph, "resolve_backend", return_value=(pinned, "10.1/seed")), \
+                mock.patch.object(graph, "print_items",
+                                  side_effect=lambda its, *a: seen.extend(its) or 0), \
+                contextlib.redirect_stderr(io.StringIO()):
+            graph.cmd_edge({}, _args(backend="opencitations"), "references")
+        return seen
+
+    def test_a_source_named_twice_in_the_pool_is_asked_once(self):
+        # graph_sources builds fresh instances, so the pinned one never compares equal by
+        # identity to its own twin: the pool has to be deduped by name. Both twins are the
+        # same service, so the twin adds no answer — only a second round trip.
+        pinned = _BareSource()
+        pinned.title = ""  # this instance cannot fill the row, or the first success hides it
+        twin = _BareSource()
+        self._run(pinned, [twin])
+        self.assertEqual(pinned.asked + twin.asked, ["10.1/x"])
 
 
 class GraphFallbackTest(unittest.TestCase):
@@ -188,9 +259,37 @@ class GraphFallbackTest(unittest.TestCase):
                                           title="A neighbour")])
         rc, seen, err = self._run([_Raising(Unavailable("[openalex] HTTP 429")), good])
         self.assertEqual([i.key for i in seen], ["10.1/x"])
-        self.assertEqual(good.asked, "10.1/seed")
+        self.assertEqual(good.asked, "DOI:10.1/seed")
         self.assertIn("[skipped] openalex", err)  # never silent
         self.assertEqual(rc, 0)
+
+    def test_an_unreadable_answer_does_not_kill_the_command(self):
+        # A 200 with a JSON list (``data.get`` on a list) and a 200 with an empty body (a bare
+        # KeyError) are how the backends report one unreadable answer; both used to escape the
+        # per-source handler and end the command on a traceback instead of falling through.
+        good = _GraphSource([AcademicItem(key="10.1/x", doi="10.1/x")])
+        for exc in (AttributeError("'list' object has no attribute 'get'"), KeyError("W1")):
+            with self.subTest(type(exc).__name__):
+                rc, seen, err = self._run([_Raising(exc), good])
+                self.assertEqual([i.key for i in seen], ["10.1/x"])
+                self.assertIn("[skipped] openalex", err)
+                self.assertEqual(rc, 0)
+
+    def test_a_source_without_a_spelling_for_the_key_is_not_asked(self):
+        # A W-id is an OpenAlex spelling; COCI and Crossref address works by DOI only, so
+        # asking them can only 404 — a wasted request and a spurious "[skipped]" line.
+        first = _GraphSource([AcademicItem(key="10.1/a", doi="10.1/a", title="A")])
+        first.name = "openalex"
+        link = _LinkSource(["10.1/b"])
+        seen, err = [], io.StringIO()
+        with mock.patch.object(graph, "graph_sources", return_value=[first, link]), \
+                mock.patch.object(graph, "print_items",
+                                  side_effect=lambda its, *a: seen.extend(its) or 0), \
+                contextlib.redirect_stderr(err):
+            graph.cmd_edge({}, _args(backend=None, key="W123"), "references")
+        self.assertIsNone(link.asked)
+        self.assertEqual([i.key for i in seen], ["10.1/a"])
+        self.assertNotIn("skipped", err.getvalue())
 
     def test_an_empty_answer_still_lets_the_next_source_speak(self):
         empty, good = _GraphSource([]), _GraphSource([AcademicItem(key="10.1/x", doi="10.1/x")])
@@ -253,7 +352,7 @@ class GraphUnionTest(unittest.TestCase):
         second = _Counting([("10.1/b", 3), ("10.1/c", 1)])
         _rc, seen, _err = self._run([first, second])
         self.assertEqual([i.key for i in seen], ["10.1/a", "10.1/b", "10.1/c"])
-        self.assertEqual(second.asked, "10.1/seed")
+        self.assertEqual(second.asked, "DOI:10.1/seed")
 
     def test_citing_keeps_the_first_answer(self):
         first = _GraphSource([AcademicItem(key="10.1/a", doi="10.1/a", title="A")])
@@ -261,6 +360,20 @@ class GraphUnionTest(unittest.TestCase):
         _rc, seen, _err = self._run([first, second], method="citing")
         self.assertEqual([i.key for i in seen], ["10.1/a"])
         self.assertIsNone(second.asked)
+
+    def test_a_source_missing_one_declared_axis_still_answers_the_others(self):
+        # Declaring two axes and implementing one is a half-done source, not a broken one:
+        # both callers ask axis by axis and fall through, so the working axis must stay usable.
+        from litcli.commands import keys
+
+        partial = _GraphSource([])
+        partial.capabilities = {"refs", "citing", "related"}
+        partial.citing = None  # declared, but nothing behind it
+        with mock.patch("litcli.commands.keys.get_all_backends",
+                        lambda cfg: {"semanticscholar": partial}), \
+                mock.patch("litcli.commands.keys.optional_backend", lambda name, cfg: None):
+            out = keys.graph_sources({})
+        self.assertIn(partial, out)
 
     def test_a_pinned_backend_does_not_pull_in_the_others(self):
         first = _GraphSource([AcademicItem(key="10.1/a", doi="10.1/a", title="A")])
@@ -301,6 +414,41 @@ class GraphUnionTest(unittest.TestCase):
         second = _Counting([("10.1/b", 3), ("10.1/c", 1)])
         _rc, seen, _err = self._run([first, second], limit=2)
         self.assertEqual([i.key for i in seen], ["10.1/a", "10.1/b"])
+
+    def test_cited_sort_ranks_hydrated_rows_by_their_real_count(self):
+        # Hydration fills `cited_by_count`, so a sort taken before it ranks a whole link-source
+        # block as zero and buries it — the number the reader asked to sort by exists only
+        # after the fill.
+        base = _Counting([("10.1/t", 1)], name="openalex")
+        link = _LinkSource(["10.1/y"])
+        meta = _MetadataSource()
+        _rc, seen, _err = self._run([base, link, meta], sort="cited")
+        self.assertEqual([i.key for i in seen], ["10.1/y", "10.1/t"])
+
+    def test_a_zero_limit_is_no_cap_like_everywhere_else(self):
+        # `search --limit 0` means "no cap"; the union path used to break on `0 >= 0` before
+        # asking anyone and print an empty table.
+        first = _GraphSource([AcademicItem(key="10.1/a", doi="10.1/a", title="A")])
+        second = _Counting([("10.1/b", 3)])
+        _rc, seen, _err = self._run([first, second], limit=0)
+        self.assertTrue(seen)
+
+    def test_a_source_that_overshoots_the_limit_is_truncated(self):
+        rows = [AcademicItem(key=f"10.1/{i}", doi=f"10.1/{i}", title="T") for i in range(9)]
+        _rc, seen, _err = self._run([_GraphSource(rows)], limit=4)
+        self.assertEqual(len(seen), 4)
+
+    def test_a_pinned_source_with_cited_sort_comes_out_sorted(self):
+        # Pinned runs have no union merge to sort them, and the backends that ignore
+        # `sort_cited` would otherwise hand back their natural order.
+        rows = _Counting([("10.1/low", 1), ("10.1/high", 40)])
+        seen = []
+        with mock.patch.object(graph, "resolve_backend", return_value=(rows, "10.1/seed")), \
+                mock.patch.object(graph, "print_items",
+                                  side_effect=lambda its, *a: seen.extend(its) or 0), \
+                contextlib.redirect_stderr(io.StringIO()):
+            graph.cmd_edge({}, _args(backend="semanticscholar", sort="cited"), "references")
+        self.assertEqual([i.key for i in seen], ["10.1/high", "10.1/low"])
 
     def test_a_wall_on_an_extra_source_keeps_the_base_rows(self):
         from litcli.errors import Unavailable

@@ -115,12 +115,15 @@ def graph_sources(cfg: dict, backends: dict | None = None,
             continue
         caps = getattr(source, "capabilities", None)
         # A source that declares no capability set at all is let through (test doubles do).
-        if isinstance(caps, (set, frozenset)) and not caps & set(AXES):
-            continue
-        # A source that claims an axis it never implemented would fail as an AttributeError
-        # mid-hop; dropping it here costs that source instead of the run.
-        if missing_axes(source):
-            continue
+        if isinstance(caps, (set, frozenset)):
+            declared = caps & set(AXES)
+            if not declared:
+                continue
+            # A declared axis with no method behind it is only one axis lost, not the source:
+            # both callers ask axis by axis and fall through on the AttributeError. A source
+            # that has no working axis at all is dropped here instead.
+            if declared <= missing_axes(source):
+                continue
         out.append(source)
     return out
 

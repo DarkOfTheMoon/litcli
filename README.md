@@ -178,7 +178,7 @@ CNKI / 豆瓣另需浏览器依赖。
 | `zotero` | 读 / 写 / 附件 | 你的本机库 | 本地 API，写库一次授权 |
 | `arxiv` · `crossref` · `openalex` | 读（arxiv 另给 PDF 直链） | 开放，免 key | 元数据；arxiv / openalex 按 IP 限速并已退避 |
 | `doaj` · `europepmc` · `doab` · `zenodo` | 读 | 开放获取（OA），免 key | 公开 OA 记录；europepmc 给 JATS XML、zenodo 给开放文件，并答引文图谱的两个方向 |
-| `semanticscholar` · `opencitations` | 读 | 开放，免 key | 引文图谱：S2 答三方向（含推荐即语义邻居，配 `api_key` 提速率）、COCI 只答引用/被引的 DOI 对（CC0）；两者都**不进** `--all` 扇出，用 `--backend` 或在图谱命令里作为兜底 |
+| `semanticscholar` · `opencitations` | 读 | 开放，免 key | 引文图谱：S2 答三方向（含推荐即语义邻居，配 `api_key` 提速率）、COCI 只答引用/被引的 DOI 对（CC0）；图谱命令不必配置就会把它们当兜底，而 `search` 的全量扇出只在 `config.toml` 写了对应段时才带上它们（内置的免 key 语料只有 doaj/europepmc/doab/zenodo） |
 | `openlibrary` · `uspto` | 读 | 开放（uspto 需免费 key） | 图书题录 / 专利全文；默认不内置 |
 | `cnki` | 读 | 知网网页 | 公开**题录**，不抓付费墙全文；需可见浏览器、人工过滑块 |
 | `douban` | 读 | 豆瓣网页 | 公开**书目**（书名/作者/ISBN/版次/页数），默认无头 |

@@ -202,7 +202,7 @@ without any config. The keyless OA corpora (`doaj`/`europepmc`/`doab`/`zenodo`) 
 | `zotero` | read / write / attachment — your local library | local API, one write authorization |
 | `arxiv` · `crossref` · `openalex` | free, no key | metadata (arxiv also PDF links); rate-limited and backed off |
 | `doaj` · `europepmc` · `doab` · `zenodo` | open access, no key | public OA records (JATS XML / open files); europepmc also answers both graph directions |
-| `semanticscholar` · `opencitations` | free, no key | citation graph: S2 answers all three axes (recommendations are the neighbour axis; an `api_key` raises the rate), COCI answers citing/cited DOI pairs only (CC0); neither joins the `--all` fan-out — name them with `--backend` or let the graph commands fall back to them |
+| `semanticscholar` · `opencitations` | free, no key | citation graph: S2 answers all three axes (recommendations are the neighbour axis; an `api_key` raises the rate), COCI answers citing/cited DOI pairs only (CC0); the graph commands fall back to them without any config, while the `search` fan-out only carries them when their section exists in `config.toml` (the built-in keyless corpora are doaj/europepmc/doab/zenodo only) |
 | `openlibrary` · `uspto` | free (uspto needs a free key) | book records / patents |
 | `cnki` | CNKI web index | public metadata only, never paywalled full text; visible browser + manual slider |
 | `douban` | Douban web | public bibliographic data; headless |

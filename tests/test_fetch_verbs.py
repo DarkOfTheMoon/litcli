@@ -3,6 +3,8 @@
 ``fetch fulltext <doi>`` / ``fetch book <title>`` / ``--download`` used to be the only forms;
 letting them fail with a bare argparse usage costs the reader the whole command.
 """
+import contextlib
+import io
 import os
 import sys
 import tempfile
@@ -81,6 +83,20 @@ class PastedPdfUrlTest(unittest.TestCase):
             self.assertEqual(fetch._emit_fulltext(self._args(), self._probe(info)), 0)
         self.assertEqual(dl.call_args.args[0], URL)
         self.assertEqual(len(os.listdir(self.tmp.name)), 1)
+
+    def test_a_publisher_host_does_not_swallow_a_pasted_link(self):
+        # The signed CDN asset lives on `pdf.sciencedirectassets.com`, which is ScienceDirect's
+        # own host — but a sessionless `get_attachment` cannot fetch it, and the direct path
+        # exists exactly so that a handed-over link is taken as given.
+        info = {"has_fulltext": True, "direct": True, "format": "pdf", "url": URL, "kind": "url"}
+        pub = mock.Mock()
+        pub.matches_url.return_value = True
+        pub.get_attachment.side_effect = RuntimeError("[sciencedirect] needs a session")
+        probe = self._probe(info)._replace(publishers={"sciencedirect": pub})
+        with mock.patch.object(fetch.pdfutil, "download", return_value=b"%PDF-1.4 x") as dl, \
+                mock.patch("sys.stdout"):
+            self.assertEqual(fetch._emit_fulltext(self._args(), probe), 0)
+        self.assertEqual(dl.call_args.args[0], URL)
 
     def test_a_link_that_answers_no_file_still_falls_through_the_chain(self):
         info = {"has_fulltext": True, "direct": True, "format": "pdf", "url": URL, "kind": "url"}
@@ -170,3 +186,16 @@ class PastedPdfUrlTest(unittest.TestCase):
         probe = fetch._probe_fulltext({}, self._args(), URL)
         self.assertTrue(probe.info["direct"])
         self.assertEqual(probe.info["url"], URL)
+
+
+class MalformedTargetTest(unittest.TestCase):
+    def test_a_publisher_shaped_target_that_does_not_normalize_exits_2(self):
+        # `_probe_fulltext` used to hand back the bare int 2 where the caller expected a
+        # probe: `probe.browser` in the `finally` then replaced the real error with an
+        # AttributeError, so the user got a traceback instead of the reason.
+        err = io.StringIO()
+        with mock.patch.object(fetch, "session_from_config", lambda cfg: None), \
+                contextlib.redirect_stderr(err):
+            self.assertEqual(fetch._fetch_fulltext({}, mock.Mock(), "sciencedirect:bogus"), 2)
+        self.assertIn("error", err.getvalue())
+        self.assertNotIn("AttributeError", err.getvalue())

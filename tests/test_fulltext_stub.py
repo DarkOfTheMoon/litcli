@@ -407,7 +407,40 @@ class CorpusResolverTest(unittest.TestCase):
 
     def test_tail_only_skips_everything_already_answered(self):
         self.assertEqual([self._target(r) for r in ft._default_resolvers("a@b.c", tail_only=True)],
-                         ["_from_unpaywall_landing", "_from_scihub"])
+                         ["_from_scihub", "_from_unpaywall_landing"])
+
+    def test_the_tail_asks_scihub_before_the_page_it_already_reported(self):
+        # The tail runs when a landing page is already in hand: asking the page again first
+        # answers the same HTML and the copy -- the whole reason `--scihub` was passed -- is
+        # never reached.
+        class Sci:
+            name = "scihub"
+
+            def get(self, key):
+                return type("I", (), {"title": "T", "attachments": ["https://sci/x.pdf"]})
+
+        with mock.patch.object(ft.unpaywall, "resolve_oa",
+                               return_value={"best_pdf": "", "best_landing": "https://legal/page"}):
+            out = ft.resolve_fulltext("10.1/x", scihub_backend=Sci(), tail_only=True)
+        self.assertEqual((out["kind"], out["url"]), ("scihub", "https://sci/x.pdf"))
+
+    def test_a_scihub_failure_names_its_reason(self):
+        # A swallowed failure leaves the report saying "no fulltext" with nothing about the
+        # source the user explicitly asked for.
+        class Sci:
+            name = "scihub"
+
+            def get(self, key):
+                raise KeyError("[scihub] 10.1/x is not in the library")
+
+        with mock.patch.object(ft.unpaywall, "resolve_oa",
+                               return_value={"best_pdf": "", "best_landing": ""}):
+            out = ft.resolve_fulltext("10.1/x", scihub_backend=Sci(), tail_only=True)
+        self.assertFalse(out["has_fulltext"])
+        self.assertTrue(out["errors"])
+        reason = out["errors"][0]
+        self.assertTrue(reason.startswith("scihub: "), reason)
+        self.assertIn("[scihub] 10.1/x is not in the library", reason)
 
     def test_entitled_pdf_beats_the_landing_page(self):
         with mock.patch.object(ft.unpaywall, "resolve_oa",

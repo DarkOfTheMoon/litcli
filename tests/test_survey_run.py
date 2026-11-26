@@ -20,7 +20,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from litcli import project, survey_events
+from litcli import effort, project, survey_events
 from litcli.commands import survey
 from litcli.errors import BadInput, BotWall, NotFound, Unavailable
 from litcli.models import AcademicItem
@@ -40,8 +40,9 @@ class FakeDiscovery:
     name = "openalex"
     capabilities: ClassVar[set[str]] = {"read", "refs", "citing", "related"}
 
-    def __init__(self, name="openalex"):
-        self.name = name
+    def __init__(self, name=None):
+        # Default to the class's own name, or a subclass's `name = "..."` would be clobbered.
+        self.name = name or type(self).name
         self.references_calls = 0
         self.citing_calls = 0
         self.related_calls = 0
@@ -71,6 +72,18 @@ class WalledDiscovery(FakeDiscovery):
         raise Unavailable("[openalex] HTTP 429: Too Many Requests")
 
     citing = related = references
+
+
+class NeighbourOnly(FakeDiscovery):
+    """A source that answers the neighbour axis alone: one charge per row, not three."""
+
+    name = "neighbour"
+    capabilities: ClassVar[set[str]] = {"read", "related"}
+
+    def references(self, key, limit=5):
+        raise survey.NotSupportedError("references", self)
+
+    citing = references
 
 
 class FakePublisher:
@@ -171,6 +184,23 @@ class DepsFromConfigTest(unittest.TestCase):
                 mock.patch.object(survey, "session_from_config", lambda cfg: None):
             deps = self.build({}, {"openalex": FakeDiscovery(), "semanticscholar": Broken()})
         self.assertEqual([b.name for b in deps.sources()], ["openalex"])
+
+    def test_an_openalex_only_the_fallback_built_is_still_the_deps_backend(self):
+        # `keys` adds an unconfigured openalex as a keyless fallback; the OA-location lookup
+        # and the fulltext chain hang off `deps.backend`, which stayed None here — so the
+        # walk's own OA links silently vanished although the instance was right there.
+        oa = mock.Mock()
+        oa.name = "openalex"
+
+        def optional(name, cfg):
+            return oa if name == "openalex" else None
+
+        cross = mock.Mock()
+        cross.name = "crossref"
+        with mock.patch("litcli.commands.keys.optional_backend", optional), \
+                mock.patch.object(survey, "session_from_config", lambda cfg: None):
+            deps = self.build({}, {"crossref": cross})
+        self.assertIs(deps.backend, oa)
 
     def test_a_keyless_graph_source_participates_unconfigured(self):
         # Nothing configured but crossref: S2 and OpenCitations are keyless, so the walk still
@@ -316,7 +346,9 @@ class SurveyRunTest(unittest.TestCase):
         row = self.seen_for("10.1002/x")
         self.assertEqual(row["source"], "semanticscholar")
         ends = [e for e in project.read_trace(self.project) if e.get("event") == "hop_end"]
-        self.assertEqual(ends[0]["errored"], 0)
+        # `citing`/`related` came back empty from the stand-in, so the wall did cost the row
+        # two directions; it is retried rather than written down as a whole expansion.
+        self.assertEqual(ends[0]["errored"], 1)
 
     def test_a_row_where_every_source_walled_keeps_its_place(self):
         self.deps.graph = [WalledDiscovery()]
@@ -750,11 +782,56 @@ class SurveyRunTest(unittest.TestCase):
         self.assertNotEqual(seen[0], signal.SIG_DFL)
         self.assertFalse((self.project.root / "$.lock").exists())
 
+    def _graph(self, *sources):
+        self.deps.graph = list(sources)
+        self.deps.by_name = {b.name: b for b in sources}
+
+    def _hop_ends(self):
+        return [e for e in project.read_trace(self.project) if e["event"] == "hop_end"]
+
+    def _small_graph_budget(self, cap=2):
+        """Shrink the per-source allowance so a test can spend it inside one hop."""
+        real = effort.resolve
+
+        def resolve(level, overrides=None):
+            row = real(level, overrides)
+            row["graph_cap"] = cap
+            return row
+
+        patcher = mock.patch.object(survey.effort, "resolve", resolve)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_the_site_budget_is_per_source_so_one_spent_site_does_not_end_the_run(self):
+        # Every graph source is its own site with its own allowance. A source that answers one
+        # axis and is spent must not stop a walk whose other source still has room.
+        self._small_graph_budget()
+        self._graph(NeighbourOnly(), FakeDiscovery("semanticscholar"))
+        survey.run_loop(self.project, self.deps)
+        hops = self._hop_ends()
+        self.assertGreaterEqual(len(hops), 2)
+        # Three axes, cap 2: the third is skipped rather than overdrawing the site.
+        self.assertEqual(hops[0]["remaining"]["semanticscholar"], 0)
+        self.assertEqual(hops[0]["remaining"]["neighbour"], 1)
+
+    def test_the_run_stops_on_budget_only_when_every_source_is_spent(self):
+        self._small_graph_budget()
+        self._graph(NeighbourOnly(), FakeDiscovery("semanticscholar"))
+        survey.run_loop(self.project, self.deps)
+        stop = next(e for e in project.read_trace(self.project) if e["event"] == "stop")
+        last = self._hop_ends()[-1]
+        self.assertEqual(stop["reason"], "budget")
+        # Every graph site is spent; the unrelated arxiv/publisher allowances are still whole.
+        self.assertLessEqual(last["remaining"]["semanticscholar"], 0)
+        self.assertLessEqual(last["remaining"]["neighbour"], 0)
+        self.assertGreater(last["remaining"]["arxiv"], 0)
+
     def test_a_cached_answer_refunds_its_charge_and_never_more(self):
         # A cache hit costs the site no request, so it must hand its charge back; capping the
         # refund at `charged` keeps the counter from drifting above the cap on a hot cache.
         from litcli import cache as cache_mod
-        with mock.patch.object(cache_mod, "stats", return_value={"hits": 99, "misses": 0}):
+        stats = {"hits": 99, "misses": 0, "by": {"openalex": {"hits": 99, "misses": 0}}}
+        with mock.patch.object(cache_mod, "stats", return_value=stats):
             survey.run_loop(self.project, self.deps)
         hop_end = [e for e in project.read_trace(self.project) if e["event"] == "hop_end"]
         self.assertTrue(hop_end)
@@ -770,6 +847,51 @@ class SurveyRunTest(unittest.TestCase):
         self.assertEqual(first["refund"], 0)
         self.assertEqual(first["remaining"]["openalex"], 40 - first["charged"])
 
+    def test_a_cache_hit_refunds_every_charged_row_of_the_hop(self):
+        # The refund used to be settled from the *last* row's charges only: a warm cache over a
+        # multi-row hop refunded one row and drained the site budget on answers that cost no
+        # request at all, ending the run on `budget`.
+        project.append_seen(self.project, {"identity": "doi:10.1002/seed2", "admit": True,
+                                           "reason": "seed", "key": "10.1002/seed2",
+                                           "score": 0.0, "parts": {}, "download": "ok"})
+        from litcli import cache as cache_mod
+        stats = {"hits": 999, "misses": 0, "by": {"openalex": {"hits": 999, "misses": 0}}}
+        with mock.patch.object(cache_mod, "stats", return_value=stats):
+            survey.run_loop(self.project, self.deps)
+        first = self._hop_ends()[0]
+        self.assertEqual(first["charged"], 6)  # two rows, three axes each
+        self.assertEqual(first["refund"], 6)
+        self.assertEqual(first["remaining"]["openalex"], 40)
+
+    def test_a_row_past_a_mid_batch_budget_stays_unexpanded(self):
+        # The budget stop is only read between hops, so the tail of the batch that spent the
+        # last unit used to be written down as expanded with nothing asked: a resume skipped it.
+        self._small_graph_budget(cap=2)  # the first row's three axes spend both units
+        project.append_seen(self.project, {"identity": "doi:10.1002/seed2", "admit": True,
+                                           "reason": "seed", "key": "10.1002/seed2",
+                                           "score": 0.0, "parts": {}, "download": "ok"})
+        survey.run_loop(self.project, self.deps)
+        self.assertEqual(self._hop_ends()[0]["expanded"], ["doi:10.1002/seed"])
+
+    def test_a_row_no_source_can_address_is_not_retried_forever(self):
+        # A Crossref reference without a DOI keeps its text as the key; no source takes that
+        # spelling, so the row can never be expanded and must not be put back every hop.
+        project.append_seen(self.project, {"identity": "title:A book, 1999", "admit": True,
+                                           "reason": "seed", "key": "A book, 1999",
+                                           "score": 0.0, "parts": {}, "download": "ok"})
+        survey.run_loop(self.project, self.deps)
+        first = self._hop_ends()[0]
+        self.assertIn("title:A book, 1999", first["expanded"])
+
+    def test_a_bot_wall_is_retried_like_a_throttle(self):
+        # A challenge page is the failure most likely to clear on its own; it used to be
+        # treated as "not this row" and written off after one retry.
+        from litcli.errors import BotWall
+
+        self.backend.references = raising(BotWall("[openalex] challenge page"))
+        survey.run_loop(self.project, self.deps)
+        self.assertEqual([e["abandoned"] for e in self._hop_ends()], [[] for _ in self._hop_ends()])
+
     def test_the_row_is_charged_what_the_expansion_actually_spent(self):
         # One `references` call is a handful of batch requests, not one: charging per axis
         # alone would let a 40-request level walk a hundred works.
@@ -782,8 +904,10 @@ class SurveyRunTest(unittest.TestCase):
             return real(key, limit)
 
         self.backend.references = references
-        with mock.patch.object(cache_mod, "stats",
-                               lambda: {"hits": 0, "misses": spent["misses"]}):
+        with mock.patch.object(
+                cache_mod, "stats",
+                lambda: {"hits": 0, "misses": spent["misses"],
+                         "by": {"openalex": {"hits": 0, "misses": spent["misses"]}}}):
             survey.run_loop(self.project, self.deps)
         first = next(e for e in project.read_trace(self.project) if e["event"] == "hop_end")
         self.assertGreaterEqual(first["charged"], 12)

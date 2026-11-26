@@ -136,8 +136,10 @@ class EuropePmcBackend(HttpBackend):
     headers: ClassVar[dict] = {"Accept": "application/json"}
 
     def __init__(self, name: str = "europepmc", base: str = _SEARCH,
-                 timeout: int = 30, delay: float = 0.4):
-        super().__init__(name=name, timeout=timeout, rate=3, min_interval=delay)
+                 timeout: int = 30, delay: float = 0.4,
+                 retries: int | None = None, retry_after_cap: float | None = None):
+        super().__init__(name=name, timeout=timeout, rate=3, min_interval=delay,
+                         retries=retries, retry_after_cap=retry_after_cap)
         self._base = base
 
     @property

@@ -16,13 +16,13 @@ from litcli.errors import BadInput
 #: level -> the whole row, in the interface's key order.
 TABLE = {
     "low": dict(frontier=4, admit=2, refs=10, citing=10, related=5, streak=2,
-                openalex_cap=40, arxiv_cap=10, publisher_cap=2, max_hops=6),
+                graph_cap=40, arxiv_cap=10, publisher_cap=2, max_hops=6),
     "medium": dict(frontier=8, admit=5, refs=20, citing=20, related=10, streak=3,
-                   openalex_cap=200, arxiv_cap=40, publisher_cap=6, max_hops=20),
+                   graph_cap=200, arxiv_cap=40, publisher_cap=6, max_hops=20),
     "high": dict(frontier=16, admit=8, refs=30, citing=30, related=15, streak=4,
-                 openalex_cap=600, arxiv_cap=100, publisher_cap=15, max_hops=50),
+                 graph_cap=600, arxiv_cap=100, publisher_cap=15, max_hops=50),
     "max": dict(frontier=24, admit=12, refs=50, citing=50, related=25, streak=6,
-                openalex_cap=1500, arxiv_cap=200, publisher_cap=30, max_hops=120),
+                graph_cap=1500, arxiv_cap=200, publisher_cap=30, max_hops=120),
 }
 
 

@@ -408,9 +408,11 @@ class ScienceDirectBackend(GatedBackend):
 
     def __init__(self, name: str = "sciencedirect", timeout: float = 30.0,
                  cookie: str = "", cookie_file: str = "", user_agent: str = "",
-                 session=None, **_unused):
-        super().__init__(name=name, timeout=timeout, cookie=cookie,
-                         cookie_file=cookie_file, user_agent=user_agent, session=session)
+                 session=None, retries: int | None = None, retry_after_cap: float | None = None,
+                 **_unused):
+        super().__init__(name=name, timeout=timeout, cookie=cookie, cookie_file=cookie_file,
+                         user_agent=user_agent, session=session, retries=retries,
+                         retry_after_cap=retry_after_cap)
 
     def normalize_key(self, key: str) -> str:
         """Replaces the inherited constant-driven hook: the key is a PII (or a DOI awaiting a
@@ -470,7 +472,8 @@ class ScienceDirectBackend(GatedBackend):
         item = page_to_item(body, f"pii:{pii}")
         # A DOI key has already been resolved to this PII, so the identity holds without a
         # title; and the page records no OA signal of its own (the pdfUrl is the only one).
-        return self._finish_item(item, body, f"pii:{pii}", mark_oa=False, require_title=False)
+        return self._finish_item(item, body, f"pii:{pii}", mark_oa=False, require_title=False,
+                                 identified=bool(item.doi))
 
     def _pdf_link(self, body: str, item: AcademicItem, landed: str) -> str:
         try:

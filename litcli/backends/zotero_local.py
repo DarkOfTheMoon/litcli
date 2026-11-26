@@ -122,8 +122,9 @@ class ZoteroLocalBackend(HttpBackend):
                               hint=_START_HINT) from e
 
     def __init__(self, name: str = "zotero", base: str = "http://localhost:23119/api",
-                 library: str = "0", api_key: str | None = None, app_name: str = "litcli"):
-        super().__init__(name=name)
+                 library: str = "0", api_key: str | None = None, app_name: str = "litcli",
+                 retries: int | None = None, retry_after_cap: float | None = None):
+        super().__init__(name=name, retries=retries, retry_after_cap=retry_after_cap)
         self._base = base.rstrip("/")
         self._users = f"users/{library or '0'}"
         self._api_key = api_key

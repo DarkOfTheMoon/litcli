@@ -28,7 +28,7 @@ description: 用 litcli 与用户的学术资料互操作——检索、读取�
 | 任务 | 命令 | 读写 |
 |---|---|---|
 | 检索候选 | `litcli search "关键词" [--all] [--limit N] [--type article] [--title ..] [--author ..] [--year ..] [--container ..] [--sort cited]` | 只读 |
-| 参考文献(回溯) | `litcli refs <key> [--limit N] [--backend openalex\|semanticscholar\|opencitations\|crossref]` 该文所引文献,按被引降序(奠基在前);按 openalex → semanticscholar → opencitations → crossref → europepmc 逐个问,其余源会接着补到 `--limit`(去重);被限流就 `[skipped]` 换下一个;`--backend` 钉死一个源、不再补 | 只读 |
+| 参考文献(回溯) | `litcli refs <key> [--limit N] [--backend openalex\|semanticscholar\|opencitations\|crossref\|europepmc]` 该文所引文献,按被引降序(奠基在前);按 openalex → semanticscholar → opencitations → crossref → europepmc 逐个问,其余源会接着补到 `--limit`(去重);被限流就 `[skipped]` 换下一个;`--backend` 钉死一个源、不再补 | 只读 |
 | 引用该文(前向) | `litcli citing <key> [--limit N] [--backend openalex\|semanticscholar\|opencitations\|europepmc]` 引用该文的文献,按被引降序(跟进在前);顺序同上,crossref 只存参考文献、不答前向;只取第一个答上的源(引文索引重叠太高) | 只读 |
 | 语义相关 | `litcli related <key> [--limit N] [--backend openalex\|semanticscholar]` OpenAlex `related_works` / S2 推荐的邻居;该文无邻居列表时退回标题实词检索(`extra["related_via"]=keyword`);不支持的只读后端 `[skipped]` 退出码 2 | 只读 |
 | 单条全字段 | `litcli data get <key> [--format table\|json\|csl]`（默认 `table`） | 只读 |

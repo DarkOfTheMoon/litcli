@@ -200,13 +200,15 @@ def _from_publisher(doi: str, backend, kind: str) -> dict | None:
 
 
 def _from_scihub(doi: str, backend) -> dict | None:
-    """Sci-Hub fallback via an injected backend (last in the chain; opt-in)."""
+    """Sci-Hub fallback via an injected backend (opt-in).
+
+    A failure is let through rather than swallowed: the chain records it as ``scihub: <reason>``,
+    and on an explicit ``--scihub`` that line is the only account of why the copy the reader
+    asked for did not come.
+    """
     if backend is None:
         return None
-    try:
-        item: AcademicItem = backend.get(doi)
-    except (LitcliError, RuntimeError, OSError, KeyError):
-        return None
+    item: AcademicItem = backend.get(doi)
     if not item.attachments:
         return None
     return {"kind": "scihub", "url": item.attachments[0], "title": item.title,
@@ -237,12 +239,13 @@ def _default_resolvers(email: str, backends: dict | None = None,
         return cache[doi]
 
     # The legal landing page outranks the shadow-library copy, which stays last. ``tail_only``
-    # is for a publisher hit whose download then failed: that answer is already in hand, so the
-    # chain resumes at the tail instead of re-asking every source.
-    tail = [
-        _step("unpaywall_landing", lambda d: _from_unpaywall_landing(d, email, _oa)),
-        _step("scihub", lambda d: _from_scihub(d, scihub_backend)),
-    ]
+    # is for a hit already in hand whose download then failed: that answer is the page itself
+    # most of the time, so the chain resumes at the tail instead of re-asking every source --
+    # and there the copy goes first, because asking the page again answers the same HTML and
+    # the copy would never be reached.
+    landing = _step("unpaywall_landing", lambda d: _from_unpaywall_landing(d, email, _oa))
+    copy = _step("scihub", lambda d: _from_scihub(d, scihub_backend))
+    tail = [copy, landing] if tail_only else [landing, copy]
     if tail_only:
         return tail
     return [

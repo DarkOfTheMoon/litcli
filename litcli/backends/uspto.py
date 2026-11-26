@@ -70,8 +70,10 @@ class UsptoBackend(HttpBackend):
     UA = "litcli/0.1 (uspto)"
 
     def __init__(self, name: str = "uspto", api_key: str = "",
-                 base: str = _API, max_results: int = 10):
-        super().__init__(name=name, rate=2, min_interval=0.5)
+                 base: str = _API, max_results: int = 10,
+                 retries: int | None = None, retry_after_cap: float | None = None):
+        super().__init__(name=name, rate=2, min_interval=0.5,
+                         retries=retries, retry_after_cap=retry_after_cap)
         self._api_key = api_key
         self._base = base.rstrip("/")
         self._max = max_results

@@ -309,14 +309,16 @@ class GatedBackend(EntitledBackend):
 
     def __init__(self, name: str = "", timeout: float | None = None,
                  delay: float | None = None, cookie: str = "", cookie_file: str = "",
-                 user_agent: str = "", session=None, **_unused):
+                 user_agent: str = "", session=None,
+                 retries: int | None = None, retry_after_cap: float | None = None, **_unused):
         name = name or self.DEFAULT_NAME
         self.GATE_NAME = self.GATE_NAME or _GATE_NAMES.get(self.GATE_KIND, "") \
             or "the session cookie"
         if not self.BLOCK_MSG:
             self.BLOCK_MSG = self._gate_message(name)
         super().__init__(name=name, timeout=timeout, delay=delay, cookie=cookie,
-                         cookie_file=cookie_file, user_agent=user_agent, session=session)
+                         cookie_file=cookie_file, user_agent=user_agent, session=session,
+                         retries=retries, retry_after_cap=retry_after_cap)
 
     def _gate_message(self, name: str) -> str:
         if self.GATE_KIND == "waf":
@@ -358,14 +360,17 @@ class GatedBackend(EntitledBackend):
             return ""
 
     def _finish_item(self, item: AcademicItem, body: str, landed: str, *,
-                     mark_oa: bool = True, require_title: bool = True) -> AcademicItem:
+                     mark_oa: bool = True, require_title: bool = True,
+                     identified: bool = True) -> AcademicItem:
         """Guard a sign-in wall, attach the PDF link and, when the page says so, mark the item OA.
 
         The one tail every ``get`` shares. ``mark_oa`` is off for a site that records no
         open-access signal, ``require_title`` for one whose identity can be complete without a
         title (ScienceDirect resolves a DOI to its PII, so an untitled page still has one).
+        ``identified`` says whether anything identifies the item at all: a page that had to be
+        keyed by its own URL and carries no DOI is still identified by that key.
         """
-        if not item.title and (require_title or not item.doi):
+        if not item.title and (require_title or not identified):
             raise RuntimeError(f"[{self.name}] could not parse the item page: {landed}")
         self._guard_sign_in(body, landed, item.title)
         pdf_url = self._pdf_link(body, item, landed)
@@ -435,7 +440,8 @@ class GatedBackend(EntitledBackend):
             # becomes the memo key so the PDF download reuses this page.
             item.key = f"doi:{item.doi}"
             self._memo[f"doi:{item.doi}"] = (body, landed)
-        return self._finish_item(item, body, landed, require_title=not pdf_landing)
+        return self._finish_item(item, body, landed, require_title=not pdf_landing,
+                                 identified=bool(item.doi) or pdf_landing)
 
     def get_attachment(self, key: str) -> bytes:
         """Download the item PDF (only a session the site lets through serves it)."""

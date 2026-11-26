@@ -217,7 +217,7 @@ def _probe_fulltext(cfg, args, target: str) -> _Probe | None:
         except LitcliError as e:
             if own:
                 note(f"[error] {e}")
-                return 2
+                return None  # reported; the caller only skips to exit 2 on `None`
             continue
         if normalized:  # an empty answer means this publisher does not own the shape
             key = normalized[len("url:"):] if normalized.startswith("url:") else normalized[4:]
@@ -457,7 +457,7 @@ def _emit_fulltext(args, probe: _Probe) -> int:
         except (LitcliError, RuntimeError) as e:
             note(f"  [skipped] {e}")
             raw = None
-    if raw is None and publisher is None:
+    if raw is None and (publisher is None or info.get("direct")):
         # No session-carrying backend for this host: plain bytes, then the browser if the site
         # walls plain clients off. A failure here is not yet the answer — the tail still runs.
         try:

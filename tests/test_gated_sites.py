@@ -151,6 +151,16 @@ class PageParseTest(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     s.module.extract_pdf_url(page)
 
+    def test_a_pdf_landing_without_a_doi_is_an_item(self):
+        # The route served the file, so there is no page to parse a title off; when the URL
+        # also carries no DOI, the URL itself is the identity and the item must still parse.
+        url = "https://dl.acm.org/asset/12345.pdf"
+        be = acm.AcmBackend()
+        speed_up(be)
+        stub(be, (200, "%PDF-1.4 body"))
+        item = be.get(url)
+        self.assertEqual((item.key, item.doi, item.title), (f"url:{url}", "", ""))
+
     def test_a_page_without_a_link_has_no_pdf(self):
         for s in SITES:
             with self.subTest(s.name):

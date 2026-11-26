@@ -571,6 +571,7 @@ class Session:
         one more navigation: the clearance the exchange sets belongs to the next load.
         """
         page = self._page()
+        before = page.url  # a shared tab: an address that does not move is the last item's
         response = self._goto(page, url)
         text = self._settle(page)
         if is_challenge_page(text):
@@ -580,7 +581,12 @@ class Session:
             except PlaywrightError:
                 pass  # keep the gated answer already in hand
         # The redirect target, not the address asked for: the route may have become the file.
+        # A navigation that never answered leaves the tab on the previous item's address --
+        # that address is where the text in hand came from, so the caller's own url is the
+        # honest answer once the tab has not moved.
         landed = page.url or (response.url if response is not None else url)
+        if response is None and page.url == before:
+            landed = url
         status = response.status if response is not None else 403
         if looks_like_pdf(landed) or (text and not is_challenge_page(text)):
             # The solved document where the interstitial answered, or the file itself: both are
@@ -636,6 +642,10 @@ class Session:
         viewer's HTML; the caller sorts the PDF from the refusal.
         """
         page = self._page()
+        # The tab is shared by every item of a run, so an address that has not moved is the
+        # *previous* item's document: a navigation that died without a word leaves it up, and
+        # reading it as the answer hands the previous file back for this one.
+        before = page.url
         caught: list = []
 
         def collect(download):  # a plain function: Playwright tags handlers with an attribute
@@ -656,14 +666,18 @@ class Session:
                 # is the one case that keeps waiting without looking at the page.
                 if response is not _DOWNLOAD_STARTED:
                     landed = page.url
-                    if looks_like_pdf(landed):
+                    # An answered navigation -- a response, whatever it says -- put this
+                    # item's document in the tab even when the address string is the same as
+                    # it was. Only a navigation that never answered leaves the previous one.
+                    fresh = landed != before or response is not None
+                    if looks_like_pdf(landed) and fresh:
                         break  # the file itself is up, where it was sent to
                     # A route can answer with the shell of its own viewer and redirect to the
                     # file a moment later (`/am/pii/…` → a signed CDN address). Told apart by
                     # the address having moved: a shell still under the route is a wait, a
                     # document at another address is the answer (`/abs/`, a sign-in page).
                     coming = _still_coming(page)
-                    if landed != url and not coming:
+                    if landed != url and fresh and not coming:
                         break
                     if not coming and time.monotonic() >= settled:
                         break  # the route kept its shell: take it, it is not going to move
@@ -675,7 +689,9 @@ class Session:
                 return Path(saved() if callable(saved) else saved).read_bytes()
             # The bytes come from the address the navigation landed on: the route it started at
             # answers a bare request with its bot check, the file's own address does not.
-            target = page.url if looks_like_pdf(page.url) else url
+            landed = page.url
+            fresh = landed != before or response is not None
+            target = landed if fresh and looks_like_pdf(landed) else url
             # The request context keeps its own 30 s regardless of the setting above.
             answer = context.request.get(target, headers={"Accept": "application/pdf"},
                                          timeout=_DOWNLOAD_WAIT * 1000)

@@ -29,22 +29,32 @@ _DISABLED = os.environ.get("LITCLI_NO_CACHE", "").lower() in {"1", "true", "yes"
 
 #: Hit/miss counters since the last :func:`reset_stats`. A survey hop resets them at its start
 #: and refunds its hits in full — a cached answer cost no request, so it must cost no quota.
-_STATS = {"hits": 0, "misses": 0}
+#: ``by`` counts the same split per source, and counts *requests* rather than lookups: the site
+#: quota is per source, so the spend has to be attributable to one (and ``note`` is called on
+#: the network path too, where a disabled cache never reaches :func:`get`).
+_STATS: dict = {"hits": 0, "misses": 0, "by": {}}
 
 
 def enabled() -> bool:
     return not _DISABLED
 
 
-def stats() -> dict[str, int]:
-    """The hit/miss counters since the last reset (a copy)."""
-    return dict(_STATS)
+def stats() -> dict:
+    """The counters since the last reset (a copy, per-source block included)."""
+    return {**_STATS, "by": {name: dict(slot) for name, slot in _STATS["by"].items()}}
 
 
 def reset_stats() -> None:
-    """Zero both counters."""
+    """Zero every counter."""
     _STATS["hits"] = 0
     _STATS["misses"] = 0
+    _STATS["by"] = {}
+
+
+def note(name: str, hit: bool) -> None:
+    """Count one request outcome for ``name`` (a cache hit cost the site nothing)."""
+    slot = _STATS["by"].setdefault(name, {"hits": 0, "misses": 0})
+    slot["hits" if hit else "misses"] += 1
 
 
 def disable() -> None:

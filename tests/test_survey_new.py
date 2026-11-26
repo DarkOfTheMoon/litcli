@@ -130,6 +130,26 @@ class SurveyNewTest(unittest.TestCase):
         self.run_cmd()
         self.assertEqual(project.load(self.only_project()).seeds, ["W0", "W1", "W2"])
 
+    def test_a_seed_only_another_source_can_address_is_kept(self):
+        # The opening search fans out over every source, and the walk asks each source in its
+        # own spelling. A Semantic Scholar paperId with no title to look up by is walkable as
+        # it stands; dropping it with a "no title" note loses a seed for no reason.
+        s2_id = "a" * 40
+        self.backend.hits = [AcademicItem(source="semanticscholar", key=s2_id, title="")]
+        code, _out = self.run_cmd()
+        self.assertEqual(code, 0)
+        self.assertEqual(project.load(self.only_project()).seeds, [s2_id])
+
+    def test_a_seed_no_source_can_address_is_still_dropped(self):
+        # The other half: an arXiv id the walk has no spelling for and no title to look up by
+        # cannot be expanded by anything, so it stays a note rather than a seed that 404s.
+        self.backend.hits = [AcademicItem(source="arxiv", key="hep-th/9901001", title="")]
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code, _out = self.run_cmd()
+        self.assertEqual(code, 2)
+        self.assertIn("no title", err.getvalue())
+
     def test_a_resolved_seed_is_stored_under_its_work_id(self):
         # Resolution hands back an openalex item whose key is its DOI (`doi or oid`), but the
         # seed-citer bonus compares against bare W-ids: storing the DOI keeps the bonus dead.
@@ -192,7 +212,8 @@ class SurveyNewTest(unittest.TestCase):
         self.assertEqual([r["key"] for r in project.read_seen(p)], ["W77"])
 
     def test_a_seed_that_cannot_be_resolved_is_dropped_with_a_note(self):
-        self.backend.hits = [AcademicItem(source="arxiv", key="0702012", title="gone",
+        # An arXiv id is a spelling no graph source takes, and the lookup finds nothing.
+        self.backend.hits = [AcademicItem(source="arxiv", key="hep-th/9901001", title="gone",
                                           year="2007"),
                              AcademicItem(source="openalex", key="W5", doi="10.1/5",
                                           title="kept", year="2020")]
@@ -200,7 +221,7 @@ class SurveyNewTest(unittest.TestCase):
         with contextlib.redirect_stderr(err):
             self.run_cmd()
         self.assertEqual(project.load(self.only_project()).seeds, ["W5"])
-        self.assertIn("0702012", err.getvalue())
+        self.assertIn("hep-th/9901001", err.getvalue())
 
     def test_a_doi_seed_from_another_source_is_kept_without_a_lookup(self):
         # ``/works/doi:…`` is as expandable as a W-id, so a DOI seed needs no conversion.
@@ -243,7 +264,8 @@ class SurveyNewTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.run_cmd("--seed", "10.1002/x", "--effort", "insane")
     def test_a_seed_without_a_title_or_expandable_key_is_dropped(self):
-        self.backend.hits = [AcademicItem(source="arxiv", key="0702012", title="", year="2007"),
+        self.backend.hits = [AcademicItem(source="arxiv", key="hep-th/9901001", title="",
+                                          year="2007"),
                              AcademicItem(source="openalex", key="W5", title="kept", year="2020")]
         err = io.StringIO()
         with contextlib.redirect_stderr(err):

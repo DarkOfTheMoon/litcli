@@ -210,11 +210,13 @@ class HttpBackend(Session, Backend):
             if hit is not None:
                 try:
                     data = json.loads(hit)
+                    cache.note(self.name, True)
                     log(f"cache hit {self.name}: {debug.mask(url)}")
                     return data
                 except ValueError:
                     pass  # stale/garbled entry: take the network path
         body = self.fetch(url, **kw).text
+        cache.note(self.name, False)
         data = json.loads(body)
         if key is not None:
             cache.put(key, body)
@@ -232,9 +234,11 @@ class HttpBackend(Session, Backend):
         if key is not None and cache_read:
             hit = cache.get(key)
             if hit is not None:
+                cache.note(self.name, True)
                 log(f"cache hit {self.name}: {debug.mask(url)}")
                 return hit
         body = self.fetch(url, **kw).text
+        cache.note(self.name, False)
         if key is not None:
             cache.put(key, body)
         return body
