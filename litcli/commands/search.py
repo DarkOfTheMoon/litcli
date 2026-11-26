@@ -80,6 +80,22 @@ def matches(item: AcademicItem, filters: dict) -> bool:
     return True
 
 
+def overlap(item: AcademicItem, query: str) -> float:
+    """Share of the query's words this item carries, in ``0..1``, saturating at all of them.
+
+    A title hit counts whole, an abstract hit for half: a title is what the authors chose the
+    work to be about. Matching is by substring, so a query word inside a longer one still
+    counts (``for`` in ``formaldehyde``) — cheap, and close enough for ranking.
+    """
+    tokens = _tokens(query)
+    if not tokens:
+        return 0.0
+    title = (item.title or "").lower()
+    abstract = (item.abstract or "").lower()
+    hits = sum(1 for t in tokens if t in title) + 0.5 * sum(1 for t in tokens if t in abstract)
+    return min(1.0, hits / len(tokens))
+
+
 def relevance(item: AcademicItem, query: str) -> tuple:
     """A descending sort key for "how well does this answer the query".
 

@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import cache, effort, expansion, fulltext, paths, project, scoring, survey_events, unpaywall
-from ..admission import decide
+from ..admission import decide, rank
 from ..aggregate import identity
 from ..backends._entitled import EntitledBackend
 from ..backends.base import GraphSource
@@ -593,8 +593,7 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
     counters = {key: int(envelope[key]) for key in ("refs", "citing", "related")}
     counters.update({key: int(envelope[f"{key}_cap"]) for key in ("arxiv", "publisher")})
     counters.update({site: int(envelope["graph_cap"]) for site in sites})
-    caps = {"admit": int(envelope["admit"])}
-    hop = sum(1 for event in trace if event.get("event") == "hop_end")
+    hop =sum(1 for event in trace if event.get("event") == "hop_end")
     best = max((float(row.get("score") or 0.0) for row in seen_rows if row.get("admit")),
                default=0.0)
     streak = admitted_total = landed_total = 0
@@ -665,6 +664,13 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
             fresh = errored = 0
             expanded_now = []
             abandoned_now = []
+            #: This hop's judged candidates. They are kept or dropped together once the hop is
+            #: over: how many may enter is the envelope's call and which of them is the score's,
+            #: not the order the sources happened to answer in.
+            pending: list[dict] = []
+            #: The collection as it stood when the hop opened. Frozen for the whole hop, so two
+            #: candidates of the same hop are scored against the same thing.
+            collected_at_hop_start = set(collected)
             #: What the whole hop charged, per site, for the refund below: a warm cache over a
             #: batch refunds every row that hit it, not only the last one.
             charged_by: dict[str, int] = {}
@@ -724,46 +730,53 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
                 charged += row_charge
                 for candidate, axis in pairs:
                     stamp([candidate], deps.by_name.get(candidate.source) or deps.sources()[0])
-                    total, parts = scoring.score(candidate, survey_project, collected, trace)
+                    total, parts = scoring.score(candidate, survey_project,
+                                                 collected_at_hop_start, trace)
                     candidate.extra["score"] = total
-                    verdict = decide(candidate, survey_project, seen, fresh, caps)
+                    verdict = decide(candidate, survey_project, seen)
                     seen.add(verdict["identity"])
-                    status = ""
-                    if verdict["admit"]:
-                        fresh += 1
-                        admitted_total += 1
-                        # Admitted here, expanded by a later hop of THIS run; a kill before
-                        # that hop leaves it unexpanded in `seen`, which resume picks up.
-                        frontier.append({"identity": verdict["identity"], "key": candidate.key,
-                                         "doi": candidate.doi, "source": candidate.source,
-                                         "title": candidate.title, "year": candidate.year})
-                        collected.update(str(w) for w in candidate.extra.get("referenced_works") or [])
-                        if total > best:
-                            best = total
-                        if counters["publisher"] > 0:
-                            counters["publisher"] -= 1
-                            status = _download_kept(candidate, deps, survey_project, session_was_alive)
-                        else:
-                            status = "unavailable"
-                        landed_total += status in ("ok", "cookie")
-                        landed[verdict["identity"]] = status
-                        _write_meta(survey_project, candidate, status)
-                    project.append_seen(survey_project, {
+                    pending.append({
                         "identity": verdict["identity"], "admit": verdict["admit"],
                         "reason": verdict["reason"], "hop": hop, "axis": axis,
                         "source": candidate.source, "key": candidate.key,
                         "title": candidate.title, "doi": candidate.doi, "year": candidate.year,
                         "score": total, "parts": parts,
                         "referenced_works": candidate.extra.get("referenced_works") or [],
-                        "download": status})
-                    emit("candidate", hop=hop, key=candidate.key, doi=candidate.doi,
-                         title=candidate.title, year=candidate.year, source=candidate.source,
-                         score=total, admit=verdict["admit"], reason=verdict["reason"])
-                    if verdict["admit"]:
-                        emit("admit", hop=hop, identity=verdict["identity"], key=candidate.key,
-                             score=total)
-                        emit("download", hop=hop, identity=verdict["identity"],
-                             key=candidate.key, status=status)
+                        "item": candidate})
+            # The hop is judged; now spend it. Best first, and only as many as the envelope
+            # allows — a demoted row still gets its record and its reason, but no copy and no
+            # place in the frontier.
+            rank(pending, int(envelope["admit"]))
+            for row in pending:
+                item = row.pop("item")
+                status = ""
+                if row["admit"]:
+                    fresh += 1
+                    admitted_total += 1
+                    # Admitted here, expanded by a later hop of THIS run; a kill before that
+                    # hop leaves it unexpanded in `seen`, which resume picks up.
+                    frontier.append({"identity": row["identity"], "key": row["key"],
+                                     "doi": row["doi"], "source": row["source"],
+                                     "title": row["title"], "year": row["year"]})
+                    collected.update(str(w) for w in row["referenced_works"])
+                    best = max(best, float(row["score"]))
+                    if counters["publisher"] > 0:
+                        counters["publisher"] -= 1
+                        status = _download_kept(item, deps, survey_project, session_was_alive)
+                    else:
+                        status = "unavailable"
+                    landed_total += status in ("ok", "cookie")
+                    landed[row["identity"]] = status
+                    _write_meta(survey_project, item, status)
+                project.append_seen(survey_project, {**row, "download": status})
+                emit("candidate", hop=hop, key=row["key"], doi=row["doi"],
+                     title=row["title"], year=row["year"], source=row["source"],
+                     score=row["score"], admit=row["admit"], reason=row["reason"])
+                if row["admit"]:
+                    emit("admit", hop=hop, identity=row["identity"], key=row["key"],
+                         score=row["score"])
+                    emit("download", hop=hop, identity=row["identity"],
+                         key=row["key"], status=status)
             hits_by = cache.stats()["by"]
             # A cached answer costs no request, so it refunds its charge — never more than the
             # site was actually charged, or the quota would drift above its cap on a hot cache.

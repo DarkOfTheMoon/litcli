@@ -74,11 +74,12 @@ corpus/          收下的文件（`safe_filename` 命名）+ 同名 .json 元�
 每个候选落 `seen.jsonl` 时带全部分量，可复算：
 
 - **(c) 簇亲和（骨架）**：与项目已收集合的共被引数（OpenAlex `referenced_works` 交集）、`related` 语义邻居、同刊命中。
+- **(q) 题目（锚）**：候选自身（题名、摘要）携带多少课题词。`c` 只说明「像已收下的东西」，集子一旦起漂就拉着自己的邻居一起漂；`q` 是不跟着漂的那根锚，也是首跳与只有题名的记录唯一可用的轴。
 - **(b) 时间（拉维度）**：年份在窗口内的归一化位置；引用种子的额外加分（前沿）。
 - **(a) 经典（兜底）**：被引数按年龄归一；只在簇稀疏（近三跳新增低于阈值）时提权。
 - **(d) 类型**：`project.toml` 里声明偏好（review / method / empirical），乘权重。
 
-准入：分数 ≥ 项目阈值、`aggregate.identity` 未见、通过约束过滤、未超单跳上限。**拒绝也要写理由**。
+准入分两问，同一个候选上依次判：**能不能进**由项目阈值（绝对地板，挡垃圾）与约束过滤、`aggregate.identity` 未见决定；**这一跳让谁进**由档位的单跳准入数按分数从高到低截取，不按到达顺序——先答上的源不等于答得最好的。跳内所有候选对同一份「跳首集子」打分，同分按到达顺序稳定。**拒绝也要写理由**（被截掉的记 `rank k of n for cap c`）。
 
 打分要的原始数据现在到不了模型：`openalex._work_to_item` 把 OpenAlex 的 `type` 折进 `_TYPE_MAP`（`review` → `article`，`openalex.py:23-30`），`referenced_works` 也没保留（只有 `extra["openalex_id"]`，`:134`）。因此该后端补两项：`extra["openalex_type"]` 原样带出（`--type` 收 OpenAlex 原词，显示时才映射回 CSL 词汇），`extra["referenced_works"]` 存进候选记录，供共被引打分与事后复算，不再回源。
 

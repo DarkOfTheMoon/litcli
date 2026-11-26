@@ -16,8 +16,6 @@ from litcli import admission
 from litcli.models import AcademicItem
 from litcli.project import Project
 
-CAPS = {"admit": 2}
-
 
 def make_item(**kw) -> AcademicItem:
     base = dict(source="openalex", key="W1", title="Wick boiling", doi="10.1016/j.x.2020.1",
@@ -32,8 +30,8 @@ def make_project(**kw) -> Project:
     return Project(**base)
 
 
-def verdict(item, project=None, seen=(), hop=0, caps=CAPS):
-    return admission.decide(item, project or make_project(), set(seen), hop, caps)
+def verdict(item, project=None, seen=()):
+    return admission.decide(item, project or make_project(), set(seen))
 
 
 class IdentityTest(unittest.TestCase):
@@ -77,12 +75,40 @@ class ContainerTest(unittest.TestCase):
         self.assertTrue(out["admit"])
 
 
-class HopCapTest(unittest.TestCase):
-    def test_the_cap_refuses_once_it_is_reached(self):
-        self.assertTrue(verdict(make_item(), hop=1)["admit"])
-        out = verdict(make_item(), hop=2)
-        self.assertFalse(out["admit"])
-        self.assertIn("2", out["reason"])
+class RankTest(unittest.TestCase):
+    """How many may enter is the envelope's call; which of them is the score's."""
+
+    def rows(self, *scores, admit=True):
+        return [{"identity": f"doi:{n}", "admit": admit, "reason": "score ok", "score": s}
+                for n, s in enumerate(scores)]
+
+    def test_only_the_best_are_kept(self):
+        rows = self.rows(2.0, 3.5, 2.8)
+        admission.rank(rows, 2)
+        self.assertEqual([r["admit"] for r in rows], [False, True, True])
+
+    def test_a_demoted_row_says_where_it_placed(self):
+        rows = self.rows(2.0, 3.5, 2.8)
+        admission.rank(rows, 2)
+        self.assertIn("rank 3 of 3", rows[0]["reason"])
+
+    def test_room_to_spare_demotes_nobody(self):
+        rows = self.rows(2.0, 3.5)
+        admission.rank(rows, 2)
+        self.assertTrue(all(r["admit"] for r in rows))
+        self.assertEqual(rows[0]["reason"], "score ok")
+
+    def test_a_refused_row_stays_refused_when_there_is_room(self):
+        rows = self.rows(3.0, 2.0)
+        rows[1].update(admit=False, reason="score 1.00 < 2.50")
+        admission.rank(rows, 5)
+        self.assertFalse(rows[1]["admit"])
+        self.assertEqual(rows[1]["reason"], "score 1.00 < 2.50")
+
+    def test_a_tie_keeps_the_order_it_arrived_in(self):
+        rows = self.rows(3.0, 3.0)
+        admission.rank(rows, 1)
+        self.assertEqual([r["admit"] for r in rows], [True, False])
 
 
 class ThresholdTest(unittest.TestCase):
@@ -107,6 +133,5 @@ class ReasonTest(unittest.TestCase):
         cases = [make_item(), make_item(year="1999"),
                  make_item(extra={"score": 0.0})]
         for item in cases:
-            for hop in (0, 5):
-                self.assertTrue(verdict(item, hop=hop)["reason"].strip())
+            self.assertTrue(verdict(item)["reason"].strip())
         self.assertTrue(verdict(make_item(), seen={"doi:10.1016/j.x.2020.1"})["reason"].strip())

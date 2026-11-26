@@ -74,6 +74,40 @@ class WalledDiscovery(FakeDiscovery):
     citing = related = references
 
 
+class RankedDiscovery(FakeDiscovery):
+    """Three candidates from one row, in an order that is not their score order.
+
+    ``A`` answers the question least, ``B`` and ``C`` both answer it whole; the low envelope
+    allows two, so a hop that admits as they arrive keeps ``A`` and a hop that ranks keeps the
+    two that answer the question.
+    """
+
+    def references(self, key, limit=5):
+        self.references_calls += 1
+        return [self.candidate("A", "A note on flame stretch", 40),
+                self.candidate("B", "Wick boiling in porous media", 0),
+                self.candidate("C", "Wick boiling transition in a channel", 0)]
+
+    def candidate(self, key, title, cited):
+        return AcademicItem(source=self.name, key=key, doi=f"10.1002/{key}", title=title,
+                            year="2020", cited_by_count=cited,
+                            extra={"openalex_type": "article", "referenced_works": []})
+
+
+class SharedReferenceDiscovery(FakeDiscovery):
+    """Two candidates that share one reference with each other and nothing else."""
+
+    def references(self, key, limit=5):
+        self.references_calls += 1
+        return [self.candidate("P", "Wick boiling one", ["W9"]),
+                self.candidate("Q", "Wick boiling two", ["W9"])]
+
+    def candidate(self, key, title, refs):
+        return AcademicItem(source=self.name, key=key, doi=f"10.1002/{key}", title=title,
+                            year="2020", cited_by_count=0,
+                            extra={"openalex_type": "article", "referenced_works": refs})
+
+
 class NeighbourOnly(FakeDiscovery):
     """A source that answers the neighbour axis alone: one charge per row, not three."""
 
@@ -337,6 +371,40 @@ class SurveyRunTest(unittest.TestCase):
         self.seed_trace_with_one_expanded_hop()
         survey.run_loop(self.project, self.deps)
         self.assertEqual(self.backend.references_calls, 1)
+
+    def hop_rows(self, hop):
+        return {r["identity"]: r for r in project.read_seen(self.project)
+                if r.get("hop") == hop and r.get("identity") != "doi:10.1002/seed"}
+
+    def test_a_hop_keeps_its_best_candidates_not_its_first(self):
+        # The cap used to be spent as candidates arrived, so with a threshold that let most of
+        # a hop through, "the first two the source happened to return" decided the collection.
+        self.deps.graph = [RankedDiscovery()]
+        survey.run_loop(self.project, self.deps)
+        rows = self.hop_rows(1)
+        self.assertTrue(rows["doi:10.1002/b"]["admit"])
+        self.assertTrue(rows["doi:10.1002/c"]["admit"])
+        self.assertFalse(rows["doi:10.1002/a"]["admit"])
+        self.assertIn("rank", rows["doi:10.1002/a"]["reason"])
+
+    def test_a_demoted_candidate_is_not_downloaded(self):
+        self.deps.graph = [RankedDiscovery()]
+        asked = []
+        real = self.deps.resolve
+        self.deps.resolve = lambda doi: (asked.append(doi), real(doi))[1]
+        survey.run_loop(self.project, self.deps)
+        self.assertIn("10.1002/B", asked)
+        self.assertNotIn("10.1002/A", asked)
+
+    def test_a_hop_scores_against_the_collection_as_it_stood_at_hop_start(self):
+        # Otherwise a candidate's score depends on where in the hop it arrived: the second of
+        # two candidates sharing a reference would out-score the first for no reason but order.
+        self.deps.graph = [SharedReferenceDiscovery()]
+        survey.run_loop(self.project, self.deps)
+        rows = self.hop_rows(1).values()
+        self.assertTrue(rows)
+        for row in rows:
+            self.assertEqual(row["parts"]["c"], 0.0)
 
     def test_a_walled_source_hands_the_hop_to_the_next_one(self):
         # The whole point of the chain: a spent budget on the first source is not the hop's end.

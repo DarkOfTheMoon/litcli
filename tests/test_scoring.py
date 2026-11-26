@@ -36,9 +36,9 @@ def parts_of(item, project, collected_refs=(), trace=()):
 
 
 class ClusterTest(unittest.TestCase):
-    def test_twenty_shared_references_saturate_the_axis(self):
-        item = make_item(extra={"referenced_works": [f"W{i}" for i in range(20)]})
-        parts = parts_of(item, make_project(), [f"W{i}" for i in range(20)])
+    def test_ten_shared_references_saturate_the_axis(self):
+        item = make_item(extra={"referenced_works": [f"W{i}" for i in range(10)]})
+        parts = parts_of(item, make_project(), [f"W{i}" for i in range(10)])
         self.assertAlmostEqual(parts["c"], 3.0)
 
     def test_forty_shared_references_do_not_exceed_the_axis(self):
@@ -49,6 +49,52 @@ class ClusterTest(unittest.TestCase):
     def test_no_shared_reference_is_zero(self):
         item = make_item(extra={"referenced_works": ["W9"]})
         self.assertAlmostEqual(parts_of(item, make_project(), ["W1"])["c"], 0.0)
+
+
+class QuestionTest(unittest.TestCase):
+    """The axis that knows the question: co-citation only says "like what we collected"."""
+
+    def question_project(self):
+        return make_project(question="reduced-order models for turbulent combustion")
+
+    def test_a_title_answering_the_question_scores_above_one_that_does_not(self):
+        on = make_item(title="Reduced-order models for turbulent combustion in a scramjet")
+        off = make_item(title="A note on flame stretch")
+        self.assertAlmostEqual(parts_of(on, self.question_project())["q"], scoring.W_QUESTION)
+        self.assertAlmostEqual(parts_of(off, self.question_project())["q"], 0.0)
+
+    def test_part_of_the_question_is_part_of_the_score(self):
+        half = make_item(title="Reduced-order models for a reheat duct")
+        whole = make_item(title="Reduced-order models for turbulent combustion")
+        parts = parts_of(half, self.question_project())["q"]
+        self.assertGreater(parts, 0.0)
+        self.assertLess(parts, parts_of(whole, self.question_project())["q"])
+
+    def test_a_title_hit_outweighs_an_abstract_hit(self):
+        title = make_item(title="Turbulent combustion", abstract="")
+        abstract = make_item(title="A note on flame stretch",
+                             abstract="turbulent combustion in a dump combustor")
+        self.assertGreater(parts_of(title, self.question_project())["q"],
+                           parts_of(abstract, self.question_project())["q"])
+
+    def test_an_off_topic_classic_loses_to_an_on_topic_paper(self):
+        # The failure this axis exists for: a stall lets the classicness weight triple and the
+        # walk drifts into the canon of whatever field the seeds came from.
+        trace = [{"step": n, "new": 0} for n in range(1, 4)]
+        classic = make_item(title="A note on flame stretch", year="2000", cited_by_count=20000)
+        on_topic = make_item(title="Reduced-order models for turbulent combustion",
+                             year="2018", cited_by_count=3)
+        classic_total, _ = scoring.score(classic, self.question_project(), set(), list(trace))
+        topic_total, _ = scoring.score(on_topic, self.question_project(), set(), list(trace))
+        self.assertGreater(topic_total, classic_total)
+
+    def test_the_cluster_axis_still_outweighs_the_question_axis(self):
+        # Co-citation is the better evidence once the collection is on topic; the question is
+        # what keeps it there.
+        self.assertGreater(scoring.W_CLUSTER, scoring.W_QUESTION)
+
+    def test_a_question_of_punctuation_alone_scores_zero(self):
+        self.assertAlmostEqual(parts_of(make_item(), make_project(question="--"))["q"], 0.0)
 
 
 class RecencyTest(unittest.TestCase):

@@ -1,29 +1,37 @@
-"""Rank a candidate by where it sits in the graph, then by time, then by its own standing.
+"""Rank a candidate by what it shares with the question and the cluster, then by time, then by
+its own standing.
 
-Three axes, each normalized to ``0..1`` *before* its weight is applied, so a weight only ever
+Five axes, each normalized to ``0..1`` *before* its weight is applied, so a weight only ever
 moves its own axis and a recorded score can be re-derived by hand:
 
 * ``c`` — the cluster skeleton: how many works it shares with what is already collected
-  (co-citation), 20 shared references saturating. This is the axis that knows the topic; it
-  gets the largest weight.
+  (co-citation), 10 shared references saturating. This is the best evidence of the topic once
+  the collection is on it, so it gets the largest weight.
+* ``q`` — the question: how many of the question's words the candidate itself carries. ``c``
+  only ever says "like what we collected", so a collection that starts drifting pulls its own
+  neighbours in and the drift compounds; ``q`` is the anchor that does not move with it, and
+  the only axis that works on the first hop or for a record carrying nothing but a title.
 * ``b`` — recency: a linear position inside the project's year window, halved so a candidate
   that cites one of the seeds can pull above the window's own top.
 * ``a`` — classicness, the fallback: citations per year of age. It only speaks loudly while
   the cluster is sparse (few new candidates lately), which is exactly when the skeleton has
   nothing to say.
 
-The fourth axis, ``d``, is the declared article type: a project weighs the types it wants
+The last axis, ``d``, is the declared article type: a project weighs the types it wants
 (``--type review`` writes 2.0) and everything unlisted falls back to a floor.
 
-Both axes of time and type are properties of the item alone; nothing here does I/O.
+``q``, ``b`` and ``d`` are properties of the item and the project alone; nothing here does I/O.
 """
 from __future__ import annotations
 
+from .commands.search import overlap
 from .models import AcademicItem
 from .project import Project
 
-#: Weights of the three shared axes. ``a``'s weight is the sparse one.
+#: Weights of the shared axes. The question sits above recency and below the cluster: it is
+#: the second-best evidence there is, and ``a``'s weight is the sparse one.
 W_CLUSTER = 3.0
+W_QUESTION = 2.0
 W_RECENCY = 1.0
 W_CLASSIC = 0.5
 W_CLASSIC_SPARSE = 1.5
@@ -35,7 +43,7 @@ DEFAULT_TYPES = frozenset({"article", "review", "preprint", "book", "book-chapte
 UNLISTED_TYPE_WEIGHT = 0.2
 
 #: References shared with the collection that saturate ``c``.
-CLUSTER_CAP = 20
+CLUSTER_CAP = 10
 #: Citations per year of age that saturate ``a``.
 PER_YEAR_CAP = 20
 #: A candidate citing a seed gets this much on top of its window position, capped at 1.
@@ -141,6 +149,7 @@ def score(item: AcademicItem, project: Project, collected_refs: set[str],
     classic_weight = W_CLASSIC_SPARSE if sparse(project, trace) else W_CLASSIC
     parts = {
         "c": W_CLUSTER * min(1.0, shared / CLUSTER_CAP),
+        "q": W_QUESTION * overlap(item, project.question),
         "b": W_RECENCY * _recency(item, project, {str(s) for s in project.seeds}),
         "a": classic_weight * _classicness(item),
         "d": _type_weight(item, project),
