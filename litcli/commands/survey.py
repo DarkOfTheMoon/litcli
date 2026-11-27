@@ -43,6 +43,8 @@ from .search import overlap, relevance
 
 #: Candidates the opening search may supply when the user named no seeds.
 OPENING_SEEDS = 3
+#: Rows per source a second opening pass reads when the first came back off the question.
+OPENING_RETRY = 10
 #: The lock and stop files inside a project directory (``$`` sorts after the data files).
 LOCK_NAME = "$.lock"
 STOP_NAME = "$.stop"
@@ -83,18 +85,20 @@ def _seed_identity(seed: str) -> str:
     return "doi:" + seed if seed.startswith(("10.", "https://doi.org/")) else "title:" + seed
 
 
-def _opening_seeds(cfg: dict, question: str) -> list[AcademicItem]:
+def _opening_seeds(cfg: dict, question: str,
+                   limit: int = OPENING_SEEDS) -> list[AcademicItem]:
     """Ask every source once and keep the closest titles, deduplicated.
 
     Stopping at the first source with enough hits let that one source's own order decide the
     whole walk (a live run followed lattice-Boltzmann work on a reduced-order-model question
     because an earlier source answered first); the sources are merged and ranked by the same
-    relevance ``search`` uses instead.
+    relevance ``search`` uses instead. ``limit`` is how deep each source is read: the second,
+    wider opening pass uses it to look past a weak top.
     """
     found: list[AcademicItem] = []
     for name, backend in get_all_backends(cfg, corpora=True).items():
         try:
-            found.extend(stamp(backend.search(question, limit=OPENING_SEEDS), backend))
+            found.extend(stamp(backend.search(question, limit=limit), backend))
         except Exception as e:  # one dead source must not sink the opening
             print(f"[skipped] {name}: {e}", file=sys.stderr)
     seen: set[str] = set()
@@ -105,7 +109,7 @@ def _opening_seeds(cfg: dict, question: str) -> list[AcademicItem]:
         seen.add(identity(item))
         unique.append(item)
     unique.sort(key=lambda item: relevance(item, question))
-    return unique[:OPENING_SEEDS]
+    return unique[:limit]
 
 
 def _expandable(key: str) -> bool:
@@ -274,15 +278,26 @@ def cmd_survey_new(cfg, args) -> int:
         seeds = [row["key"] for row in flags]
     else:
         found = _resolvable_seeds(_opening_seeds(cfg, question), cfg)
+        if _off_question(found, question, fields["floor"]):
+            # The top of an opening list can be off the question while rows a little further
+            # down answer it; read deeper before settling on a neighbouring field.
+            deeper = _resolvable_seeds(_opening_seeds(cfg, question, OPENING_RETRY), cfg)
+            above = [item for item in deeper
+                     if overlap(item, question) >= fields["floor"]]
+            if above:
+                found = above[:OPENING_SEEDS]
         if not found:
             print("[error] the opening search found nothing; pass --seed to start from a work "
                   "you already know", file=sys.stderr)
+            return 2
+        if _off_question(found, question, fields["floor"]):
+            _refuse_weak_seeds(found)
             return 2
         # The work id, not the DOI: the graph hands references back as work ids, so a seed has
         # to be spelled the same way for the seed-citer bonus to ever match.
         seeds = [_graph_id(item, backend) for item in found]
 
-    _warn_weak_seeds(found, [row["title"] for row in flags], question)
+    _warn_weak_seeds(found, [row["title"] for row in flags], question, fields["floor"])
     created = project.create(Path(args.root).expanduser() if args.root else paths.project_root(),
                              question, seeds=seeds, **fields)
     for item in found:
@@ -297,19 +312,24 @@ def cmd_survey_new(cfg, args) -> int:
     return 0
 
 
+def _off_question(found: list[AcademicItem], question: str, floor: float) -> bool:
+    """Whether no item carries the question up to the floor (nothing at all counts as weak)."""
+    return max((overlap(item, question) for item in found), default=0.0) < floor
+
+
 def _warn_weak_seeds(found: list[AcademicItem], typed_titles: list[str],
-                     question: str) -> None:
-    """Say so when no seed carries the question at all.
+                     question: str, floor: float) -> None:
+    """Say so when typed seeds carry nothing of the question.
 
     Seeds are the one class that skips both the year filter and the evidence floor, and the
     whole walk grows out of their references — three seeds off the question send every later
-    hop into a neighbouring field, and nothing on the way says anything. Not an error: a
-    question may legitimately start from a broad classic.
+    hop into a neighbouring field, and nothing on the way says anything. Not an error when the
+    caller chose them: a question may legitimately start from a broad classic.
     """
     judged = [overlap(item, question) for item in found]
     judged += [overlap(AcademicItem(source="", key="", title=title), question)
                for title in typed_titles if title]
-    if not judged or max(judged) >= project.DEFAULT_FLOOR:
+    if not judged or max(judged) >= floor:
         return
     titles = [str(item.title or item.key) for item in found] + [t for t in typed_titles if t]
     print("[warn] no seed carries two parts of the question — the walk will probably stay in "
@@ -318,6 +338,19 @@ def _warn_weak_seeds(found: list[AcademicItem], typed_titles: list[str],
         print(f"[warn]   seed: {title}", file=sys.stderr)
     if len(titles) > OPENING_SEEDS:  # the list stops at three; say what it left out
         print(f"[warn]   … and {len(titles) - OPENING_SEEDS} more", file=sys.stderr)
+
+
+def _refuse_weak_seeds(found: list[AcademicItem]) -> None:
+    """Refuse an opening whose every candidate is off the question, naming them.
+
+    The rows are what a caller can pass back as ``--seed``, so they are printed with their
+    identifiers: without them the refusal only says "no".
+    """
+    print("[error] no candidate found carries the question — the walk would stay in a "
+          "neighbouring field; pass --seed or sharpen the question", file=sys.stderr)
+    for item in found:
+        doi = f" (doi:{item.doi})" if item.doi else ""
+        print(f"[error]   {item.title or item.key}{doi}", file=sys.stderr)
 
 
 @dataclass

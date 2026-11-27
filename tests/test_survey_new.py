@@ -80,6 +80,12 @@ class SurveyNewTest(unittest.TestCase):
             code = survey.cmd_survey_new(self.cfg, self.args(*argv))
         return code, out.getvalue(), err.getvalue()
 
+    def on_question(self):
+        """Opening hits that carry the question, for the tests not about a weak opening."""
+        self.backend.hits = [AcademicItem(source="openalex", key=f"W{i}",
+                                          title=f"hit {i} of wick boiling",
+                                          doi=f"10.1/{i}", year="2020") for i in range(5)]
+
     def only_project(self):
         dirs = [d for d in self.root.iterdir() if d.is_dir()]
         self.assertEqual(len(dirs), 1)
@@ -123,20 +129,55 @@ class SurveyNewTest(unittest.TestCase):
         self.assertEqual(self.backend.search_calls, 0)
 
     def test_without_seeds_the_opening_search_supplies_three(self):
+        self.on_question()
         self.run_cmd()
-        self.assertEqual(self.backend.search_calls, 1)
+        self.assertEqual(self.backend.search_calls, 1)  # on the question: no deeper pass
         p = project.load(self.only_project())
         self.assertEqual(len(p.seeds), 3)
         self.assertEqual(len(project.read_seen(p)), 3)
         self.assertTrue(all(r["seed"] == "search" for r in project.read_seen(p)))
 
-    def test_seeds_that_share_nothing_with_the_question_are_flagged(self):
+    def test_seeds_that_share_nothing_with_the_question_are_refused(self):
         # The seeds decide the whole walk and bypass the year and evidence filters; three
-        # unrelated ones send it into a neighbouring field without a word of warning.
+        # unrelated ones send it into a neighbouring field. A second, deeper pass on the same
+        # question cannot rescue these, so the project is not created at all.
         code, _out, err = self.run_cmd_err()
-        self.assertEqual(code, 0)
+        self.assertEqual(code, 2)
         self.assertIn("neighbouring", err)
         self.assertIn("hit 0", err)
+        self.assertEqual([d for d in self.root.iterdir() if d.is_dir()], [])
+
+    def test_the_refusal_lists_the_candidates_with_their_dois(self):
+        # The rows are what a caller can pass back as --seed; without the identifier the
+        # refusal only says "no".
+        _code, _out, err = self.run_cmd_err()
+        self.assertIn("10.1/0", err)
+
+    def test_a_weak_opening_is_retried_deeper_and_the_on_question_row_wins(self):
+        # The top of an opening list can be off the question while rows further down answer
+        # it. Settling on the top three without reading deeper is what walked into a
+        # neighbouring field.
+        self.backend.hits = [AcademicItem(source="openalex", key=f"W{i}", title=f"hit {i}",
+                                          doi=f"10.1/{i}", year="2020") for i in range(8)]
+        self.backend.hits[5] = AcademicItem(source="openalex", key="W5",
+                                            title="wick boiling in a grooved tube",
+                                            doi="10.1/5", year="2020")
+        code, out = self.run_cmd()
+        self.assertEqual(code, 0)
+        seeds = project.load(self.root / out.strip()).seeds
+        self.assertEqual(seeds, ["W5"])
+
+    def test_a_typed_seed_off_the_question_is_only_warned_about(self):
+        # The caller chose it, so it stands and the project is made.
+        code, _out = self.run_cmd("--seed", "10.1002/x")
+        self.assertEqual(code, 0)
+        self.assertEqual(project.load(self.only_project()).seeds, ["10.1002/x"])
+
+    def test_the_floor_decides_what_counts_as_weak(self):
+        # With --floor 0 nothing is below the floor, so an off-question opening is not refused.
+        code, _out = self.run_cmd("--floor", "0")
+        self.assertEqual(code, 0)
+        self.assertEqual(len(project.load(self.only_project()).seeds), 3)
 
     def test_the_weak_warning_says_how_many_seeds_it_did_not_list(self):
         # The list stops at three; without the count the reader cannot tell a fourth seed
@@ -185,6 +226,7 @@ class SurveyNewTest(unittest.TestCase):
     def test_a_search_seed_is_stored_as_its_work_id(self):
         # The seed-citer bonus compares against graph references, which are work ids: a DOI
         # here could never match, and the bonus would be dead for every search seed.
+        self.on_question()
         self.run_cmd()
         self.assertEqual(project.load(self.only_project()).seeds, ["W0", "W1", "W2"])
 
@@ -193,10 +235,12 @@ class SurveyNewTest(unittest.TestCase):
         # own spelling. A Semantic Scholar paperId with no title to look up by is walkable as
         # it stands; dropping it with a "no title" note loses a seed for no reason.
         s2_id = "a" * 40
-        self.backend.hits = [AcademicItem(source="semanticscholar", key=s2_id, title="")]
+        self.backend.hits = [AcademicItem(source="semanticscholar", key=s2_id, title=""),
+                             AcademicItem(source="openalex", key="W1", title="wick boiling",
+                                          doi="10.1/1")]
         code, _out = self.run_cmd()
         self.assertEqual(code, 0)
-        self.assertEqual(project.load(self.only_project()).seeds, [s2_id])
+        self.assertIn(s2_id, project.load(self.only_project()).seeds)
 
     def test_a_seed_no_source_can_address_is_still_dropped(self):
         # The other half: an arXiv id the walk has no spelling for and no title to look up by
@@ -296,7 +340,7 @@ class SurveyNewTest(unittest.TestCase):
         self.backend.hits = [AcademicItem(source="arxiv", key="hep-th/9901001", title="gone",
                                           year="2007"),
                              AcademicItem(source="openalex", key="W5", doi="10.1/5",
-                                          title="kept", year="2020")]
+                                          title="wick boiling kept", year="2020")]
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             self.run_cmd()
@@ -305,8 +349,8 @@ class SurveyNewTest(unittest.TestCase):
 
     def test_a_doi_seed_from_another_source_is_kept_without_a_lookup(self):
         # ``/works/doi:…`` is as expandable as a W-id, so a DOI seed needs no conversion.
-        self.backend.hits = [AcademicItem(source="crossref", key="10.1002/x", title="t",
-                                          year="2020")]
+        self.backend.hits = [AcademicItem(source="crossref", key="10.1002/x",
+                                          title="wick boiling", year="2020")]
         self.run_cmd()
         self.assertEqual(project.load(self.only_project()).seeds, ["10.1002/x"])
         self.assertEqual(self.backend.search_calls, 1)  # the opening search, no title lookup
@@ -353,7 +397,8 @@ class SurveyNewTest(unittest.TestCase):
     def test_a_seed_without_a_title_or_expandable_key_is_dropped(self):
         self.backend.hits = [AcademicItem(source="arxiv", key="hep-th/9901001", title="",
                                           year="2007"),
-                             AcademicItem(source="openalex", key="W5", title="kept", year="2020")]
+                             AcademicItem(source="openalex", key="W5",
+                                          title="wick boiling kept", year="2020")]
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             self.run_cmd()

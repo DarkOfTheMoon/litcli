@@ -166,13 +166,14 @@ A backend without the field folds it into free text, or ignores it:
 
 A survey turns "collect the literature around a subject" into a long-running project: `survey new`
 writes the project (seeds, year window, journal constraint, evidence floor, effort level) to
-`project.toml`, `survey run` casts the citation graph one hop at a time, lands every admitted
+`project.toml` (an opening search where every hit is off the subject is retried ten rows per source deep
+and, if still nothing clears the floor, refused with the candidates listed), `survey run` casts the citation graph one hop at a time, lands every admitted
 fulltext and its metadata in `corpus/`, and records every step in `trace.jsonl` so a walk can be
 resumed and audited.
 
 | Command | What it does |
 |---|---|
-| `litcli survey new "<subject>" [--seed DOI|TITLE]... [--year A-B] [--type T] [--container JOURNAL] [--floor 0..1] [--effort LEVEL]` | create a project; prints only its name; without `--seed` it first searches and takes the first 3 hits as seeds |
+| `litcli survey new "<subject>" [--seed DOI|TITLE]... [--year A-B] [--type T] [--container JOURNAL] [--floor 0..1] [--effort LEVEL]` | create a project; prints only its name; without `--seed` it first searches and takes the first 3 hits as seeds — all off the subject, it reads ten rows per source, and with nothing above the floor it exits 2 and lists the candidates with their DOIs for `--seed` |
 | `litcli survey run <project> [--effort LEVEL] [--format jsonl\|md]` | resume from the last checkpoint; stdout is JSONL events, `--format md` prints one table per hop instead |
 | `litcli survey status <project>` | one JSON line: question, status, floor (`floor_legacy` names a migration from `threshold`), seeds (with their question coverage — `?` when the title is unknown — and `weak`), hops, admitted, last stop (with what it left unexpanded and the best evidence), remaining quota; `--why` switches to a text audit view |
 | `litcli survey stop <project>` | write `$.stop`; the walk ends at its next hop boundary |

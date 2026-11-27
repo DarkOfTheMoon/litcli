@@ -133,11 +133,11 @@ shell 补全只有 bash/zsh/fish（PowerShell 下可在 Git Bash 里生成）。
 
 ### 课题调查（survey）
 
-把「围绕一个课题收文献」做成长跑项目：`survey new` 建项目（种子、年份窗口、刊名约束、证据地板、档位落 `project.toml`；种子连问句两腿都带不上会先提醒），`survey run` 沿引文图谱一跳一跳收网，收到的全文与元数据落 `corpus/`，每一步落 `trace.jsonl` 供续跑与事后审查。
+把「围绕一个课题收文献」做成长跑项目：`survey new` 建项目（种子、年份窗口、刊名约束、证据地板、档位落 `project.toml`；开局检索全偏题会往深处复查一次，仍没有过地板的行就拒绝建项目并列出候选），`survey run` 沿引文图谱一跳一跳收网，收到的全文与元数据落 `corpus/`，每一步落 `trace.jsonl` 供续跑与事后审查。
 
 | 命令 | 说明 |
 |---|---|
-| `litcli survey new "<课题>" [--seed DOI|题名]... [--year A-B] [--type T] [--container 刊名] [--floor 0..1] [--effort 档]` | 建项目，只打印项目名；不给 `--seed` 先检索取前 3 条当种子 |
+| `litcli survey new "<课题>" [--seed DOI|题名]... [--year A-B] [--type T] [--container 刊名] [--floor 0..1] [--effort 档]` | 建项目，只打印项目名；不给 `--seed` 先检索取前 3 条当种子，全偏题时每源读到 10 条复查一次，仍无过地板的行则以 2 退出（不建项目，候选连 DOI 列出供 `--seed` 回传） |
 | `litcli survey run <项目> [--effort 档] [--format jsonl\|md]` | 从最后一个检查点继续；stdout 是 JSONL 事件，`--format md` 换成按跳的表格 |
 | `litcli survey status <项目>` | 一行 JSON：课题、状态、地板（旧项目另带 `floor_legacy` 说明迁移自 `threshold`）、种子（含题目覆盖——题名未知时为 `?`——与 `weak`）、跳数、准入数、最后停因（连同它留下的未展开数与最好证据）、剩余额度；`--why` 换成文本审计视图 |
 | `litcli survey stop <项目>` | 写 `$.stop`，循环在下一个跳边界收尾 |
