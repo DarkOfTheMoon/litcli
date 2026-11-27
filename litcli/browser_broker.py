@@ -13,11 +13,13 @@ the kernel does even when the client is SIGKILLed. The broker is a supervisor, n
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import json
 import os
 import selectors
 import socket
 import sys
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -27,6 +29,37 @@ from . import paths
 from .browser import BrowserUnavailable
 
 PROTOCOL_VERSION = 1
+
+
+@contextlib.contextmanager
+def profile_lock(profile: Path, timeout: float = 2.0):
+    """Exclusive lock on a profile: whatever is decided under it holds against a new client.
+
+    A client cannot say ``hello`` before it holds this lock, so whoever leaves can trust a
+    count of zero taken here. The lock file sits beside the profile, not inside it: Chrome
+    owns everything inside ``--user-data-dir``.
+    """
+    profile = Path(profile)
+    path = profile.parent / f"{profile.name}.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"profile is locked: {profile}") from None
+                time.sleep(0.05)
+        try:
+            yield fd
+        finally:
+            with contextlib.suppress(OSError):
+                fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 
 class BrokerUnavailable(BrowserUnavailable):
@@ -64,6 +97,7 @@ class Broker:
         self._be: Backend | None = None
         self._clock = clock
         self._listener: socket.socket | None = None
+        self._thread: threading.Thread | None = None
         self._selector = selectors.DefaultSelector()
         self._conns: set[socket.socket] = set()
         self._buffers: dict[socket.socket, bytes] = {}
@@ -92,12 +126,42 @@ class Broker:
     def exited(self) -> bool:
         return self._exited
 
-    def tick(self) -> None:
-        """One idle/shutdown decision. Task 2 fills it; the loop paces it once a second."""
+    def pin(self, pinned: bool = True) -> bool:
+        """A pinned broker ignores the idle timer until something clears it or stops it."""
+        self.pinned = bool(pinned)
+        return self.pinned
 
-    def stop(self) -> None:
-        """Leave the loop; idempotent, and safe from another thread."""
+    def tick(self) -> None:
+        """One idle decision: exit when nobody has held a lease for ``idle_minutes``.
+
+        The count is re-read under the lock so a client that is between "decided to connect"
+        and "sent hello" is not cut off by the broker leaving underneath it.
+        """
+        if self._stopping or self.leases or self.pinned or self.idle_minutes <= 0:
+            return
+        if self._clock() - self._last_release < self.idle_minutes * 60:
+            return
+        try:
+            with profile_lock(self.profile, timeout=2.0):
+                if self.leases or self._stopping:
+                    return
+                self._leave()
+        except TimeoutError:
+            pass  # somebody is deciding right now; the next tick sees where it landed
+
+    def _leave(self) -> None:
         self._stopping = True
+        self._exited = True
+
+    def stop(self, *, join: float | None = 5.0) -> None:
+        """Leave the loop; idempotent, and safe from another thread.
+
+        Joins the serving thread when called from outside it, so a caller that deletes the
+        profile it served from does not race the teardown.
+        """
+        self._stopping = True
+        if join and self._thread is not None and self._thread is not threading.current_thread():
+            self._thread.join(join)
 
     # -- lifetime --------------------------------------------------------------
 
@@ -221,17 +285,18 @@ class Broker:
                            "source": self.source, "owns": self._be.owns})
 
     def _cmd_shutdown(self, conn: socket.socket, msg: dict) -> None:
-        if msg.get("force"):
-            self._reply(conn, {"ok": True, "stopped": True})
-            self.stop()
-            return
-        self._reply(conn, {"ok": True, "stopped": not self.leases})
-        if not self.leases:
-            self.stop()
+        force = bool(msg.get("force"))
+        try:
+            with profile_lock(self.profile, timeout=2.0):
+                stopped = force or not self.leases
+        except TimeoutError:
+            stopped = force  # a forced stop does not wait for a decidier that is busy
+        self._reply(conn, {"ok": True, "stopped": stopped})
+        if stopped:
+            self._leave()
 
     def _cmd_pin(self, conn: socket.socket, msg: dict) -> None:
-        self.pinned = bool(msg.get("pinned", True))
-        self._reply(conn, {"ok": True, "pinned": self.pinned})
+        self._reply(conn, {"ok": True, "pinned": self.pin(bool(msg.get("pinned", True)))})
 
     # -- publishing and teardown ----------------------------------------------
 
