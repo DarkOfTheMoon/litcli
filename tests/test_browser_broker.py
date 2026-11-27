@@ -20,7 +20,8 @@ def _serve(backend=lambda: bb.Backend(41_000, True, None), **kw):
     b._thread = threading.Thread(target=b.serve, daemon=True)
     b._thread.start()
     for _ in range(100):
-        if paths.browser_session_file().exists():
+        info = bb.read_session()
+        if info and info["control_port"] == b.control_port:
             break
         time.sleep(0.02)
     return b, b.control_port
@@ -112,6 +113,30 @@ class LifecycleTest(BrokerTest):
             self.assertFalse(info["pinned"])
             self.assertEqual(info["pid"], os.getpid())
             self.assertEqual(paths.browser_session_file().stat().st_mode & 0o777, 0o600)
+        finally:
+            b.stop()
+
+    def test_a_reader_never_sees_half_a_written_session_file(self):
+        b, port = _serve(clock=self.clock)
+        try:
+            seen = []
+            real_dump = json.dump
+
+            def dump(obj, fh, **kw):
+                try:
+                    seen.append(paths.browser_session_file().read_text())
+                except FileNotFoundError:
+                    seen.append(None)
+                return real_dump(obj, fh, **kw)
+
+            with mock.patch.object(bb.json, "dump", side_effect=dump):
+                b._write_session(b._be)
+            self.assertTrue(seen)
+            for text in seen:
+                self.assertIsInstance(json.loads(text), dict)
+            self.assertEqual(bb.read_session()["control_port"], port)
+            self.assertFalse(paths.browser_session_file().with_name(
+                paths.browser_session_file().name + ".tmp").exists())
         finally:
             b.stop()
 
@@ -229,3 +254,72 @@ class PrepareTest(BrokerTest):
         pids = [call.args[0] for call in killed.call_args_list]
         self.assertEqual(pids.count(1), 2)   # headless: killed either way
         self.assertEqual(pids.count(2), 1)   # headed: only in the dedicated dir
+
+
+def _spawn_that_fails(stderr, code=1):
+    def spawn(argv, **kw):
+        return mock.Mock(returncode=code, poll=lambda: code,
+                         communicate=lambda timeout=None: (b"", stderr.encode()))
+    return spawn
+
+
+def _spawn_that_brings_up(port):
+    def spawn(argv, **kw):
+        threading.Timer(0.05, lambda: paths.browser_session_file().write_text(json.dumps(
+            {"pid": os.getpid(), "control_port": port, "cdp_port": 41_000,
+             "version": bb.PROTOCOL_VERSION}))).start()
+        return mock.Mock(poll=lambda: None)
+    return spawn
+
+
+class EnsureLeaseTest(BrokerTest):
+    def test_a_running_broker_is_joined(self):
+        b, port = _serve()
+        try:
+            paths.browser_session_file().write_text(json.dumps(
+                {"pid": os.getpid(), "control_port": port, "cdp_port": 41_000,
+                 "version": bb.PROTOCOL_VERSION}))
+            lease = bb.ensure_lease(paths.browser_profile_dir(), headless=True)
+            self.assertEqual(lease.cdpport, 41_000)
+            lease.close()
+        finally:
+            b.stop()
+
+    def test_a_dead_broker_is_replaced(self):
+        paths.browser_session_file().write_text(json.dumps(
+            {"pid": 1, "control_port": 1, "version": bb.PROTOCOL_VERSION}))
+        b, port = _serve()
+        try:
+            paths.browser_session_file().unlink()   # the fresh broker will write its own
+            with mock.patch.object(bb, "_spawn_broker", side_effect=_spawn_that_brings_up(port)):
+                lease = bb.ensure_lease(paths.browser_profile_dir(), headless=True)
+            self.assertEqual(lease.cdpport, 41_000)
+            lease.close()
+        finally:
+            b.stop()
+
+    def test_a_busy_profile_surfaces_as_exit_1_with_the_sentence(self):
+        with mock.patch.object(bb, "_spawn_broker",
+                               side_effect=_spawn_that_fails(bb._BUSY_SENTENCE)), \
+                self.assertRaises(bb.ProfileBusy) as ctx:
+            bb.ensure_lease(paths.browser_profile_dir(), headless=True)
+        self.assertEqual(ctx.exception.exit_code, 1)
+        self.assertIn("without a debugging port", str(ctx.exception))
+
+    def test_no_broker_by_the_deadline_is_unavailable(self):
+        with mock.patch.object(bb, "_spawn_broker", return_value=mock.Mock(poll=lambda: None)), \
+                self.assertRaises(bb.BrokerUnavailable):
+            bb.ensure_lease(paths.browser_profile_dir(), headless=True, wait=0.3)
+
+    def test_live_follows_the_socket(self):
+        b, port = _serve()
+        try:
+            paths.browser_session_file().write_text(json.dumps(
+                {"pid": os.getpid(), "control_port": port, "cdp_port": 41_000,
+                 "version": bb.PROTOCOL_VERSION}))
+            lease = bb.ensure_lease(paths.browser_profile_dir(), headless=True)
+            self.assertTrue(lease.live())
+            lease.close()
+            self.assertFalse(lease.live())
+        finally:
+            b.stop()

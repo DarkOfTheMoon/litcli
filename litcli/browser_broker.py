@@ -531,8 +531,8 @@ class Broker:
             self._drop(conn)
             return
         handler(conn, msg)
-        if cmd != "hello" and conn in self._conns:
-            self._drop(conn)
+        if cmd != "hello" and conn not in self._leases and conn in self._conns:
+            self._drop(conn)  # one command per connection -- except a lease, which keeps its own
 
     def _reply(self, conn: socket.socket, payload: dict) -> None:
         with contextlib.suppress(OSError):
@@ -581,11 +581,14 @@ class Broker:
                 "pinned": self.pinned, "started": time.time(), "leases": self.leases}
 
     def _write_session(self, be: Backend) -> None:
+        # Renamed into place: a reader sees either no file or a whole one, never a torn line.
         path = paths.browser_session_file()
         path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        tmp = path.with_name(path.name + ".tmp")
+        fd = os.open(tmp, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(self._session_fields(be), fh)
+        os.replace(tmp, path)
 
     def _teardown(self, be: Backend) -> None:
         for conn in list(self._conns):
@@ -610,3 +613,196 @@ class Broker:
             with contextlib.suppress(OSError):
                 self._listener.close()
             self._listener = None
+
+
+# -- client side ---------------------------------------------------------------
+
+
+class Lease:
+    """A held-open control connection: the release is its EOF, which the kernel does for us."""
+
+    def __init__(self, sock: socket.socket, reader, cdp_port: int, owns: bool, pinned: bool,
+                 version: int):
+        self._sock: socket.socket | None = sock
+        self._reader = reader
+        self.cdpport = cdp_port
+        self.owns = owns
+        self.pinned = pinned
+        self.version = version
+
+    def live(self) -> bool:
+        """Whether the broker still answers on this lease's connection."""
+        if self._sock is None:
+            return False
+        try:
+            self._sock.sendall(b'{"cmd":"status"}\n')
+            self._sock.settimeout(1.0)
+            line = self._reader.readline()
+            return bool(line) and isinstance(json.loads(line), dict)
+        except (OSError, ValueError):
+            return False
+
+    def close(self) -> None:
+        sock, self._sock = self._sock, None
+        if sock is not None:
+            with contextlib.suppress(OSError):
+                sock.close()
+
+
+def _conn(control_port: int, timeout: float = 2.0):
+    try:
+        sock = socket.create_connection(("127.0.0.1", int(control_port)), timeout=timeout)
+    except OSError as e:
+        raise BrokerUnavailable(f"no browser broker on port {control_port}: {e}") from e
+    return sock, sock.makefile("rb")
+
+
+def _exchange(control_port: int, msg: dict, timeout: float = 2.0) -> dict:
+    sock, reader = _conn(control_port, timeout)
+    try:
+        sock.sendall((json.dumps(msg) + "\n").encode())
+        return json.loads(reader.readline())
+    finally:
+        with contextlib.suppress(OSError):
+            sock.close()
+
+
+def connect(control_port, *, version: int = PROTOCOL_VERSION, headless: bool,
+            timeout: float = 2.0) -> Lease:
+    """Take a lease on an existing broker; a busy or dead port raises ``BrokerUnavailable``."""
+    sock, reader = _conn(control_port, timeout)
+    try:
+        sock.sendall((json.dumps({"cmd": "hello", "version": version,
+                                  "headless": headless, "pid": os.getpid()}) + "\n").encode())
+        answer = json.loads(reader.readline())
+    except (OSError, ValueError) as e:
+        with contextlib.suppress(OSError):
+            sock.close()
+        raise BrokerUnavailable(f"the broker on port {control_port} did not answer: {e}") from e
+    return Lease(sock, reader, int(answer["cdp_port"]), bool(answer.get("owns")),
+                 bool(answer.get("pinned")), int(answer.get("version", PROTOCOL_VERSION)))
+
+
+def shutdown(control_port, *, force: bool = False) -> dict:
+    return _exchange(control_port, {"cmd": "shutdown", "force": force})
+
+
+def pin(control_port, *, pinned: bool = True) -> dict:
+    return _exchange(control_port, {"cmd": "pin", "pinned": pinned})
+
+
+def read_session() -> dict | None:
+    """The discovery file as a dict, or ``None`` when it is absent or unreadable."""
+    try:
+        info = json.loads(paths.browser_session_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return info if isinstance(info, dict) and info.get("control_port") else None
+
+
+def _spawn_broker(argv: list[str], spawn=subprocess.Popen):
+    """Start a broker of its own, outliving this process (the same reason the browser does)."""
+    kw: dict = {"stdout": subprocess.DEVNULL, "stderr": subprocess.PIPE, "close_fds": True}
+    if paths._IS_WINDOWS:
+        kw["creationflags"] = (subprocess.DETACHED_PROCESS
+                               | subprocess.CREATE_NEW_PROCESS_GROUP)
+    else:
+        kw["start_new_session"] = True
+    return spawn(argv, **kw)
+
+
+def _broker_argv(profile: Path, *, headless: bool, profile_directory, source,
+                 idle_minutes: float, channel, proxy, pinned: bool) -> list[str]:
+    argv = [sys.executable, "-m", "litcli.browser_broker", "--profile", str(profile),
+            "--idle-minutes", str(idle_minutes), "--source", source]
+    if profile_directory:
+        argv += ["--profile-directory", profile_directory]
+    if headless:
+        argv.append("--headless")
+    if channel:
+        argv += ["--channel", channel]
+    if proxy:
+        argv += ["--proxy", proxy]
+    if pinned:
+        argv.append("--pinned")
+    return argv
+
+
+def _join(info: dict | None, version: int, headless: bool) -> Lease | None:
+    if not info:
+        return None
+    try:
+        return connect(info["control_port"], version=version, headless=headless)
+    except BrokerUnavailable:
+        return None
+
+
+def _child_stderr(child) -> str:
+    try:
+        _out, err = child.communicate(timeout=2.0)
+    except Exception:  # a mock, or a pipe that will not drain
+        return ""
+    return (err or b"").decode("utf-8", "replace").strip()
+
+
+def ensure_lease(profile, *, headless: bool, profile_directory=None, source: str = "default",
+                 idle_minutes: float = 10.0, channel=None, proxy=None, pinned: bool = False,
+                 version: int = PROTOCOL_VERSION, wait: float = 20.0,
+                 spawn=subprocess.Popen) -> Lease:
+    """Join the broker on ``profile``, or start one. Everything below the lock re-reads.
+
+    The lock is held across "read again, decide, spawn" so two clients cannot both decide the
+    profile is free and both launch a browser into it.
+    """
+    profile = Path(profile)
+    lease = _join(read_session(), version, headless)
+    if lease is not None:
+        return lease
+    try:
+        with profile_lock(profile, timeout=wait):
+            lease = _join(read_session(), version, headless)
+            if lease is not None:
+                return lease
+            child = _spawn_broker(_broker_argv(
+                profile, headless=headless, profile_directory=profile_directory,
+                source=source, idle_minutes=idle_minutes, channel=channel, proxy=proxy,
+                pinned=pinned), spawn=spawn)
+    except TimeoutError as e:
+        raise BrokerUnavailable(f"the profile stayed locked: {profile}") from e
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        lease = _join(read_session(), version, headless)
+        if lease is not None:
+            return lease
+        if child.poll() is not None:
+            err = _child_stderr(child)
+            if "without a debugging port" in err:
+                raise ProfileBusy(err)
+            raise BrokerUnavailable(err or f"the browser broker exited ({child.returncode})")
+        time.sleep(0.05)
+    raise BrokerUnavailable(
+        f"the browser broker did not come up within {wait:g}s",
+        hint="litcli browser status; LITCLI_DEBUG=1 litcli browser status shows the broker")
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="litcli.browser_broker")
+    parser.add_argument("--profile", required=True)
+    parser.add_argument("--profile-directory")
+    parser.add_argument("--source", default="default")
+    parser.add_argument("--headless", action="store_true")
+    parser.add_argument("--channel")
+    parser.add_argument("--proxy")
+    parser.add_argument("--pinned", action="store_true")
+    parser.add_argument("--idle-minutes", type=float, default=10.0)
+    args = parser.parse_args(argv)
+    broker = Broker(profile=Path(args.profile), headless=args.headless,
+                    profile_directory=args.profile_directory, source=args.source,
+                    pinned=args.pinned, idle_minutes=args.idle_minutes)
+    return broker.serve()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
