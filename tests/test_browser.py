@@ -7,13 +7,11 @@ import http.server
 import json
 import os
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
 import threading
 import unittest
-from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -21,7 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import litcli.browser as browser
 import litcli.paths as paths
 from litcli.browser import Session
-from tests.fake_browser import FakeDownload, FakeLauncher, FakeRuntime
+from tests.fake_browser import FakeDownload, FakeLease, FakeRuntime
 
 #: A pid no process has: the runtime's browser was reaped under it.
 DEAD_PID = 999999
@@ -54,7 +52,13 @@ print("up", flush=True)
 """
 
 
-class SessionTest(unittest.TestCase):
+class _SessionFixture(unittest.TestCase):
+    """A session holding a fake lease; the driver stays out of it (``_attach_engine`` is stubbed).
+
+    Nothing here starts a process: the lease is what a broker would answer, and the context is
+    a :class:`FakeRuntime` whose pages serve a queue.
+    """
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -65,81 +69,160 @@ class SessionTest(unittest.TestCase):
         env.start()
         self.addCleanup(env.stop)
         paths.browser_profile_dir().mkdir(parents=True)
-        self.launcher = FakeLauncher()
-        self.s = Session(launcher=self.launcher)
+        self.lease = FakeLease()
+        self.runtime = FakeRuntime()
+        self.context = self.runtime
+        self.stop = mock.Mock()
+        self.factory_kwargs: dict = {}
+        attach = mock.patch.object(browser, "_attach_engine",
+                                   return_value=(self.context, self.stop))
+        attach.start()
+        self.addCleanup(attach.stop)
+        self.s = Session(lease_factory=self.factory)
 
+    def factory(self, **kw):
+        self.factory_kwargs = kw
+        return self.lease
+
+
+class LeaseClientTest(_SessionFixture):
+    """The session is a *client* of a broker: it holds a lease, never the browser itself."""
+
+    def test_start_names_the_mode_from_ownership(self):
+        self.s.start()
+        self.assertEqual(self.s.mode, "attached")
+        self.assertTrue(self.s.alive())
+
+    def test_alive_is_false_once_the_lease_is_gone(self):
+        self.s.start()
+        self.lease.alive_flag = False
+        self.assertFalse(self.s.alive())
+
+    def test_each_session_gets_its_own_page_and_never_pages_zero(self):
+        self.s.start()
+        self.assertIs(self.s._page(), self.s._page())
+        self.assertIsNot(self.s._page(), self.s._runtime.context.pages[0])
+
+    def test_close_releases_the_lease_before_the_page(self):
+        order = []
+        self.s.start()
+        self.s._page()
+        self.s._lease.close = lambda: order.append("lease")
+        self.s._page_.close = lambda: order.append("page")
+        self.s.close()
+        self.assertEqual(order[:2], ["lease", "page"])
+
+    def test_terminate_asks_the_broker_to_stop(self):
+        self.s.start()
+        with mock.patch.object(browser.browser_broker, "shutdown") as down:
+            self.s.terminate()
+        down.assert_called_once_with(self.lease.control_port, force=True)
+
+    def test_reset_parks_only_its_own_page(self):
+        self.s.start()
+        own, first = self.s._page(), self.s._runtime.context.pages[0]
+        self.s.reset()
+        own.goto.assert_called_with("about:blank")
+        first.goto.assert_not_called()
+
+    def test_a_dead_engine_rebinds_and_retries_once(self):
+        self.s.start()
+        with mock.patch.object(self.s, "_goto",
+                               side_effect=[browser.PlaywrightError("Target closed"), None]), \
+                mock.patch.object(browser, "_DOWNLOAD_WAIT", 0.05):
+            self.s.page("https://example.org/a")
+        self.assertEqual(browser._attach_engine.call_count, 2)
+        self.stop.assert_called_once()  # the dead engine goes before the new one is bound
+
+
+class SessionTest(_SessionFixture):
     def test_a_second_start_reuses_the_running_one(self):
         self.s.start()
         self.s.start()
-        self.assertEqual(self.launcher.calls, 1)
-        self.assertTrue(self.s.alive())
+        self.assertEqual(browser._attach_engine.call_count, 1)
 
-    def test_start_writes_and_close_removes_the_session_file(self):
+    def test_the_mode_is_launched_for_a_broker_this_session_started(self):
+        self.lease.owns = True
         self.s.start()
-        self.assertTrue(paths.browser_session_file().exists())
-        self.s.close()
-        self.assertFalse(paths.browser_session_file().exists())
+        self.assertEqual(self.s.mode, "launched")
 
-    def test_terminate_stops_the_browser_this_process_started(self):
-        # `close` leaves a detached browser up so the clearance survives a later command; a
-        # survey run is one of many and would otherwise leave one browser behind per run.
+    def test_no_lease_and_no_broker_is_mode_none(self):
+        self.assertEqual(self.s.mode, "none")
+
+    def test_alive_probes_the_broker_without_holding_it(self):
+        paths.browser_session_file().write_text(json.dumps(
+            {"pid": os.getpid(), "control_port": 4321, "cdp_port": 41_000}))
+        with mock.patch.object(browser.browser_broker, "connect") as conn:
+            self.assertTrue(self.s.alive())
+        conn.return_value.close.assert_called_once()
+
+    def test_alive_is_false_when_the_probe_fails(self):
+        paths.browser_session_file().write_text(json.dumps(
+            {"pid": os.getpid(), "control_port": 4321, "cdp_port": 41_000}))
+        gone = browser.browser_broker.BrokerUnavailable("no")
+        with mock.patch.object(browser.browser_broker, "connect", side_effect=gone):
+            self.assertFalse(self.s.alive())
+
+    def test_the_lease_carries_the_profile_it_was_configured_with(self):
+        self.s = Session(profile="dedicated", profile_directory="Profile 1",
+                         profile_source="config", pinned=True, lease_factory=self.factory)
         self.s.start()
-        # the second answer is the liveness poll: the browser is gone
-        with mock.patch("litcli.browser.os.kill",
-                        side_effect=[None, ProcessLookupError]) as killed:
-            self.s.terminate()
-        self.assertEqual(killed.call_args_list[0], mock.call(os.getpid(), signal.SIGTERM))
-        self.assertFalse(paths.browser_session_file().exists())
+        self.assertEqual(self.factory_kwargs["profile"], paths.browser_profile_dir())
+        self.assertEqual(self.factory_kwargs["profile_directory"], "Profile 1")
+        self.assertEqual(self.factory_kwargs["source"], "config")
+        self.assertTrue(self.factory_kwargs["pinned"])
 
-    def test_terminate_leaves_a_browser_someone_else_started(self):
-        self.s.start()
-        self.s.close()  # disconnect; the "other process" browser lives on
-        with mock.patch("litcli.browser.os.kill") as killed:
-            self.s.terminate()
-        killed.assert_not_called()
+    def test_a_lease_from_an_older_broker_is_replaced(self):
+        stale = FakeLease(owns=False)
+        stale.version = 0
+        leases = iter([stale, self.lease])
 
-    def test_terminate_force_stops_a_browser_started_elsewhere(self):
-        # A browser someone else started (the process that ran `browser login`, or a test's
-        # helper subprocess) is not `terminate`'s by ownership, but whoever holds the project
-        # can still want it gone: `forcebal` names it the only way it is known — the file.
-        paths.browser_session_file().write_text(json.dumps({"pid": 4242, "port": 1}))
-        with mock.patch("litcli.browser.os.kill",
-                        side_effect=[None, ProcessLookupError]) as killed:
-            self.s.terminate(force=True)
-        self.assertEqual(killed.call_args_list[0], mock.call(4242, signal.SIGTERM))
-        self.assertFalse(paths.browser_session_file().exists())
+        def factory(**_kw):
+            return next(leases)
 
-    def test_reset_parks_the_page_on_about_blank(self):
-        # A saved file left up in the tab keeps a --pdf-renderer spinning after the driver has
-        # exited, and its signed address dies in minutes: the desktop shows a dead link and
-        # reads as a command that hung.
-        self.s.start()
-        page = self.s._runtime.context.pages[0]
-        page.url = "https://pdf.sciencedirectassets.com/x.am.pdf?sig=1"
-        self.s.reset()
-        self.assertEqual(page.url, "about:blank")
-        self.assertTrue(self.s.alive())  # parked, not closed: the clearance survives
+        self.s = Session(lease_factory=factory)
+        with mock.patch.object(browser.browser_broker, "shutdown") as down:
+            self.s.start()
+        down.assert_called_once_with(stale.control_port, force=True)
+        self.assertEqual(self.s._lease.version, browser.browser_broker.PROTOCOL_VERSION)
+
+    def test_an_older_broker_this_session_owns_only_warns(self):
+        self.lease.version = 0
+        self.lease.owns = True
+        with mock.patch.object(browser.debug, "notice") as told, \
+                mock.patch.object(browser.browser_broker, "shutdown") as down:
+            self.s.start()
+        down.assert_not_called()
+        told.assert_called_once()
 
     def test_reset_without_a_browser_is_quiet(self):
-        self.s.reset()  # no session file, nothing to park
+        self.s.reset()
 
-    def test_proxy_reaches_the_launcher(self):
-        Session(proxy="http://127.0.0.1:7890", launcher=self.launcher).start()
-        self.assertEqual(self.launcher.kwargs["proxy"], "http://127.0.0.1:7890")
+    def test_proxy_reaches_the_lease_factory(self):
+        Session(proxy="http://127.0.0.1:7890", lease_factory=self.factory).start()
+        self.assertEqual(self.factory_kwargs["proxy"], "http://127.0.0.1:7890")
+
+    def test_close_when_never_started_is_quiet(self):
+        self.s.close()
+
+    def test_terminate_when_never_started_still_asks_the_broker(self):
+        with mock.patch.object(browser.browser_broker, "shutdown") as down:
+            self.s.terminate()
+        down.assert_not_called()
 
     def test_a_challenge_that_solves_is_waited_out(self):
         # A managed challenge paints "Just a moment..." first and replaces itself ~10 s later;
         # judged on the first paint every gated site reads as unusable while it is a direct
         # load away from the article.
         self.s.start()
-        self.launcher.queue.append((403, "<html><title>Just a moment...</title></html>",
+        self.runtime.queue.append((403, "<html><title>Just a moment...</title></html>",
                                     "<html><title>APS Journals</title></html>"))
         answer = self.s.page("https://link.aps.org/")
         self.assertEqual((answer.status, "Just a moment" in answer.text), (200, False))
 
     def test_a_challenge_that_never_solves_keeps_its_gate(self):
         self.s.start()
-        self.launcher.queue.append((403, "<html><title>Just a moment...</title></html>"))
+        self.runtime.queue.append((403, "<html><title>Just a moment...</title></html>"))
         with mock.patch.object(browser, "_CHALLENGE_WAIT", 0):
             answer = self.s.page("https://link.aps.org/")
         self.assertEqual(answer.status, 403)
@@ -149,7 +232,7 @@ class SessionTest(unittest.TestCase):
         # clears on the next load rather than this one: one more navigation is a second chance
         # at the article, not a second guess.
         self.s.start()
-        self.launcher.queue.extend([(403, "<html><title>Just a moment...</title></html>"),
+        self.runtime.queue.extend([(403, "<html><title>Just a moment...</title></html>"),
                                     (200, "<html><title>APS Journals</title></html>")])
         with mock.patch.object(browser, "_CHALLENGE_WAIT", 0):
             answer = self.s.page("https://link.aps.org/")
@@ -218,13 +301,13 @@ class SessionTest(unittest.TestCase):
 
     def test_a_gate_page_is_returned_not_raised(self):
         self.s.start()
-        self.launcher.queue.append((403, "<html>__cf_chl</html>"))
+        self.runtime.queue.append((403, "<html>__cf_chl</html>"))
         with mock.patch.object(browser, "_CHALLENGE_WAIT", 0):
             self.assertEqual(self.s.page("https://x/a").status, 403)
 
     def test_a_download_returns_the_bytes(self):
         self.s.start()
-        self.launcher.queue.append(b"%PDF-1.4 body")
+        self.runtime.queue.append(b"%PDF-1.4 body")
         self.assertTrue(self.s.download("https://x/a.pdf").startswith(b"%PDF"))
 
     def test_a_pdf_gets_five_minutes_to_arrive(self):
@@ -422,208 +505,24 @@ class SessionTest(unittest.TestCase):
             "Target page, context or browser has been closed")
         with mock.patch.object(self.s, "_page", return_value=page), \
                 mock.patch.object(browser, "_CHALLENGE_POLL", 0), \
-                self.assertRaises(browser.Unavailable):
+                self.assertRaises(browser.BrowserUnavailable):
             self.s.download("https://x/a.pdf")
 
-    def test_running_browsers_are_found_without_their_proc_entry_matching(self):
-        # Chrome rewrites its own argv into one space-joined string, so NUL-splitting
-        # /proc/<pid>/cmdline never yields an argument and a per-argument match finds nothing.
-        # A profile that only shares a prefix with ours is someone else's browser.
-        proc = Path(self.tmp.name) / "proc"
-        mine = str(paths.browser_profile_dir())
-
-        def entry(pid, text):
-            (proc / pid).mkdir(parents=True)
-            (proc / pid / "cmdline").write_bytes(text.encode())
-
-        entry("100", f"/opt/google/chrome/chrome --headless=new --user-data-dir={mine} "
-                     "--remote-debugging-port=9333 --no-first-run about:blank")
-        entry("101", "\0".join(["/opt/google/chrome/chrome", f"--user-data-dir={mine}",
-                                "--remote-debugging-port=9444"]))
-        entry("102", f"/opt/google/chrome/chrome --user-data-dir={mine}2 "
-                     "--remote-debugging-port=9555")
-        entry("103", f"/opt/google/chrome/chrome --type=zygote --user-data-dir={mine} "
-                     "--remote-debugging-port=9666")
-        entry("104", f"/opt/google/chrome/chrome --user-data-dir={mine} --no-first-run")
-        (proc / "self").mkdir()
-        # 103 is a child (its port is the parent's): reaping it would kill a renderer, so it is
-        # left out. 104 is a browser started without a debugging port — invisible, but a browser.
-        self.assertEqual(browser._running_on(paths.browser_profile_dir(), proc),
-                         [(100, 9333), (101, 9444), (104, None)])
-
-    def test_a_portless_leftover_is_stopped_before_the_launch(self):
-        # Two browsers cannot share a profile: the second answers "Opening in existing browser
-        # session" and exits. A port-less browser cannot be attached, so it has to go before
-        # the launch — reaping after it is too late, the launch has already lost.
-        order = []
-        self.s._launcher = lambda *a, **k: (order.append("launch"), self.launcher(*a, **k))[1]
-        with mock.patch.object(browser, "_running_on", lambda profile: [(4242, None)]), \
-                mock.patch("litcli.browser.os.kill", lambda pid, sig: order.append("kill")):
-            self.s.start()
-        self.assertEqual(order[:2], ["kill", "launch"])
-
-    def test_a_headless_browser_is_replaced_when_a_window_is_wanted(self):
-        # A sign-in needs a window, and a headless browser has none: handing one back to
-        # `browser login` looks like the command did nothing.
-        with mock.patch.object(browser, "_running_on", lambda profile: [(4242, 9333)]), \
-                mock.patch.object(browser, "_is_headless", lambda pid: True), \
-                mock.patch("litcli.browser.os.kill", lambda pid, sig: None), \
-                mock.patch.object(browser, "_wait_gone", lambda pid, timeout=3.0: None):
-            self.s.start()
-        self.assertEqual(self.launcher.calls, 1)
-
-    def test_a_headless_browser_is_kept_when_headless_is_wanted(self):
-        self.s = Session(headless=True, launcher=self.launcher)
-        with mock.patch.object(browser, "_running_on", lambda profile: [(4242, 9333)]), \
-                mock.patch.object(browser, "_is_headless", lambda pid: True), \
-                mock.patch("litcli.browser.os.kill"):
-            self.s.start()
-        self.assertEqual(self.launcher.calls, 0)
-
-    def test_a_visible_browser_serves_a_headless_run_too(self):
-        with mock.patch.object(browser, "_running_on", lambda profile: [(4242, 9333)]), \
-                mock.patch.object(browser, "_is_headless", lambda pid: False), \
-                mock.patch("litcli.browser.os.kill"):
-            self.s = Session(headless=True, launcher=self.launcher)
-            self.s.start()
-        self.assertEqual(self.launcher.calls, 0)
-
-    def test_a_launch_that_loses_the_race_adopts_the_winner(self):
-        # A browser can appear between the scan and the launch; the launch then exits at once
-        # with "Opening in existing browser session". The session exists either way.
-        running = []
-
-        def losing_launch(*_a, **_k):
-            running.append((5151, 9292))  # the winner, one instant too late for the scan
-            raise browser.BrowserUnavailable("chrome exited at once (code 0)")
-
-        self.s._launcher = losing_launch
-        with mock.patch.object(browser, "_running_on", lambda profile: list(running)), \
-                mock.patch("litcli.browser.os.kill"):
-            self.s.start()
-        info = json.loads(paths.browser_session_file().read_text())
-        self.assertEqual((info["pid"], info["port"]), (5151, 9292))
-
-    def test_a_failed_launch_with_nobody_else_up_still_raises(self):
-        self.s._launcher = mock.Mock(side_effect=browser.BrowserUnavailable("no display"))
-        with mock.patch.object(browser, "_running_on", lambda profile: []), \
-                self.assertRaises(browser.BrowserUnavailable):
-            self.s.start()
-
-    def test_a_browser_whose_file_was_lost_is_adopted_not_relaunched(self):
-        # A crashed run or a cleaned /tmp takes the discovery file and leaves the browser: it is
-        # still there, still signed in, and starting a second one per command is what fills the
-        # machine (each is ~10 processes).
-        with mock.patch.object(browser, "_running_on",
-                               lambda profile: [(4242, 9333), (4343, 9444)]), \
-                mock.patch("litcli.browser.os.kill") as killed:
-            self.s.start()
-        self.assertEqual(self.launcher.calls, 0)
-        info = json.loads(paths.browser_session_file().read_text())
-        self.assertEqual((info["pid"], info["port"]), (4242, 9333))
-        killed.assert_called_once_with(4343, signal.SIGTERM)  # the duplicate goes
-
-    def test_a_leftover_the_launch_replaces_is_stopped(self):
-        # Reuse only works for a browser that can be talked to; one with no debugging port is
-        # invisible to CDP (and holds the profile lock), so a launch follows and the invisible
-        # one must not be left running.
-        with mock.patch.object(browser, "_running_on", lambda profile: [(4242, None)]), \
-                mock.patch("litcli.browser.os.kill") as killed:
-            self.s.start()
-        self.assertEqual(self.launcher.calls, 1)
-        killed.assert_any_call(4242, signal.SIGTERM)
-
-    def test_a_record_from_another_command_does_not_hide_a_dead_runtime(self):
-        # The discovery file is one path for every process on the profile: a parallel run reaps
-        # this browser and writes its own record straight away, so `alive()` reads true while
-        # the runtime points at a dead browser. The runtime, not the file, has to decide — the
-        # old context raised TargetClosedError out of every later page.
+    def test_a_dead_engine_with_nowhere_to_go_is_unavailable(self):
+        # The retry is one attempt, not a loop: a browser that cannot come back is the copy's
+        # failure, and the walk records it instead of unwinding the driver's own error.
         self.s.start()
-        self.s._runtime.pid = DEAD_PID
-        paths.browser_session_file().write_text(json.dumps(
-            {"pid": os.getpid(), "port": 9333, "profile": str(paths.browser_profile_dir())}))
-        attached = FakeRuntime([])
-        with mock.patch.object(browser, "_running_on", lambda profile: []), \
-                mock.patch("litcli.browser.os.kill", kill_unless_gone), \
-                mock.patch.object(browser, "cdp_ready", lambda port, timeout=0.5: True), \
+        page = mock.MagicMock()
+        page.goto.side_effect = browser.PlaywrightError("Target closed")
+        with mock.patch.object(self.s, "_page", return_value=page), \
                 mock.patch.object(browser, "_attach_engine",
-                                  lambda port: (attached, lambda: None)):
-            self.s.page("https://e.test/a.pdf")
-        self.assertIs(self.s._runtime.context, attached)
-
-    def test_a_dead_runtime_with_nothing_to_attach_to_is_unavailable(self):
-        # No replacement and no port on record: the copy is unavailable, which the walk knows
-        # how to record — not the driver's TargetClosedError unwinding out of it.
-        self.s.start()
-        self.s._runtime.pid = DEAD_PID
-        with mock.patch.object(browser, "_running_on", lambda profile: []), \
-                mock.patch("litcli.browser.os.kill", kill_unless_gone), \
+                                  side_effect=browser.BrowserUnavailable("gone")), \
                 self.assertRaises(browser.BrowserUnavailable):
-            self.s.download("https://e.test/a.pdf")
+            self.s.page("https://e.test/a")
 
-    def test_a_live_runtime_is_kept_and_owned_when_the_file_was_lost(self):
-        # `cdp_ready` can answer no under load while the browser is fine. Its runtime is what
-        # says so: the browser is kept, the record is put back, and it stays this process's to
-        # stop at the end (losing `_owned` would leave it running).
-        self.s.start()
-        stopped = []
-        self.s._runtime.stop = lambda: stopped.append(True)
-        with mock.patch.object(browser, "_running_on", lambda profile: [(5151, 9292)]), \
-                mock.patch("litcli.browser.os.kill", side_effect=kill_unless_gone) as killed, \
-                mock.patch.object(browser, "_wait_gone", lambda pid, timeout=3.0: None):
-            self.s.alive = lambda: False
-            self.s.start()
-            self.assertEqual(stopped, [])  # still talking to the browser: not dropped
-            self.assertEqual(self.launcher.calls, 1)
-            info = json.loads(paths.browser_session_file().read_text())
-            self.assertEqual(info["pid"], os.getpid())  # and back in the record
-            self.s.terminate()
-            killed.assert_any_call(os.getpid(), signal.SIGTERM)
-
-    def test_a_relaunch_after_the_browser_was_lost_stops_the_old_engine(self):
-        # Playwright's sync API takes one engine per thread: while the first engine is up, a
-        # second `sync_playwright().start()` raises "using Playwright Sync API inside the
-        # asyncio loop". Another command reaping this browser off the shared profile sends
-        # start() down the launch path with the old engine still alive, and the Error that
-        # used to come out of it ended a live walk mid-hop.
-        order = []
-
-        def launch(*args):
-            order.append("launch")
-            launched = self.launcher(*args)
-            launched.stop = lambda: order.append("stop")
-            return launched
-
-        self.s = Session(launcher=launch)
-        self.s.start()
-        self.s._runtime.pid = DEAD_PID  # the browser went away under the runtime
-        with mock.patch.object(browser, "_running_on", lambda profile: []), \
-                mock.patch("litcli.browser.os.kill", kill_unless_gone):
-            self.s.alive = lambda: False
-            self.s.start()
-        self.assertEqual(order, ["launch", "stop", "launch"])  # stopped, then the next engine
-
-    def test_adopting_a_replacement_browser_stops_the_lost_runtimes_engine(self):
-        # The lost browser can also be replaced by one another command started: the session is
-        # adopted rather than relaunched, and the runtime pointing at the dead browser must not
-        # stay — its context is what every later page would go through.
-        self.s = Session(headless=True, launcher=self.launcher)
-        self.s.start()
-        stopped = []
-        self.s._runtime.stop = lambda: stopped.append(True)
-        self.s._runtime.pid = DEAD_PID
-        with mock.patch.object(browser, "_running_on", lambda profile: [(4242, 9333)]), \
-                mock.patch("litcli.browser.os.kill", kill_unless_gone):
-            self.s.alive = lambda: False
-            self.s.start()
-        self.assertEqual(stopped, [True])  # the engine went before the browser was adopted
-        self.assertEqual(self.launcher.calls, 1)
-
-    def test_a_stale_pid_is_not_alive_and_is_replaced(self):
+    def test_a_stale_session_file_is_not_alive(self):
         paths.browser_session_file().write_text('{"pid": 999999, "profile": "/x"}')
         self.assertFalse(self.s.alive())
-        self.s.start()
-        self.assertEqual(self.launcher.calls, 1)
 
     def test_alive_is_false_once_closed(self):
         self.s.start()
@@ -705,7 +604,7 @@ class SharedSessionTest(unittest.TestCase):
 
 
 class AliveProbeTest(unittest.TestCase):
-    """A discovery file whose browser is gone must read as dead even if its pid is reused."""
+    """A discovery file whose broker is gone must read as dead."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -716,23 +615,23 @@ class AliveProbeTest(unittest.TestCase):
         file = paths.browser_session_file()
         file.parent.mkdir(parents=True, exist_ok=True)
         self.file = file
-        self.session = Session(headless=True, launcher=FakeLauncher())
+        self.session = Session(headless=True)
 
-    def test_a_live_pid_behind_a_dead_debugging_port_is_not_alive(self):
-        self.file.write_text(json.dumps({"pid": os.getpid(), "port": 1, "profile": "/x"}))
+    def test_a_control_port_nothing_answers_on_is_dead(self):
+        self.file.write_text(json.dumps({"pid": os.getpid(), "control_port": 1,
+                                         "cdp_port": 9333, "profile": "/x"}))
         self.assertFalse(self.session.alive())
 
-    def test_a_live_pid_with_no_port_keeps_the_old_meaning(self):
-        self.file.write_text(json.dumps({"pid": os.getpid(), "profile": "/x"}))
-        self.assertTrue(self.session.alive())
+    def test_no_discovery_file_is_dead(self):
+        self.assertFalse(self.session.alive())
 
 
 class MissingPlaywrightTest(unittest.TestCase):
     def test_the_error_names_the_install_command(self):
-        with mock.patch("litcli.browser_broker._CHROME_BINARIES", ()), \
-                mock.patch.dict(sys.modules, {"playwright.sync_api": None}), \
-                mock.patch.object(paths, "_IS_WINDOWS", False), \
+        # Reached in-process: the broker would be a child with its own imports, where the
+        # ``sys.modules`` patch below does not reach.
+        with mock.patch.dict(sys.modules, {"playwright.sync_api": None}), \
                 mock.patch.dict(os.environ, {"XDG_DATA_HOME": tempfile.mkdtemp()}), \
                 self.assertRaises(Exception) as ctx:
-            Session().start()
+            browser.browser_broker._bundled_binary()
         self.assertIn("install", str(ctx.exception).lower())

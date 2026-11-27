@@ -20,6 +20,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from litcli import browser_broker as broker
 from litcli import effort, project, survey_events
 from litcli.commands import survey
 from litcli.errors import BadInput, BotWall, NotFound, Unavailable
@@ -247,17 +248,12 @@ class DepsFromConfigTest(unittest.TestCase):
         # Starting the session is the first check's job, and Playwright can refuse it for
         # reasons of its own (its Error is neither LitcliError nor OSError, and it escaped the
         # hop loop when it came out of here): the copy takes the cookie path, the walk goes on.
-        class DriverError(Exception):
-            """Playwright's Error shape: not a LitcliError, not an OSError, not RuntimeError."""
-
         class Broken(FakeLiveSession):
             def start(self):
-                raise DriverError(
-                    "It looks like you are using Playwright Sync API inside the asyncio loop.")
+                raise broker.BrokerUnavailable("the browser broker did not come up")
 
         session = Broken()
-        with mock.patch.object(survey, "session_from_config", lambda cfg: session), \
-                mock.patch.object(survey, "PlaywrightError", DriverError):
+        with mock.patch.object(survey, "session_from_config", lambda cfg: session):
             deps = self.build({"browser": {"enabled": True}}, {"openalex": mock.Mock()})
             self.assertFalse(deps.session_alive())  # inside the patch: the clause is read now
 

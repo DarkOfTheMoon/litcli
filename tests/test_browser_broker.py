@@ -7,6 +7,7 @@ import tempfile
 import threading
 import time
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from litcli import browser_broker as bb
@@ -254,6 +255,34 @@ class PrepareTest(BrokerTest):
         pids = [call.args[0] for call in killed.call_args_list]
         self.assertEqual(pids.count(1), 2)   # headless: killed either way
         self.assertEqual(pids.count(2), 1)   # headed: only in the dedicated dir
+
+
+class RunningLookupTest(BrokerTest):
+    def test_running_browsers_are_found_without_their_proc_entry_matching(self):
+        # Chrome rewrites its own argv into one space-joined string, so NUL-splitting
+        # /proc/<pid>/cmdline never yields an argument and a per-argument match finds nothing.
+        # A profile that only shares a prefix with ours is someone else's browser.
+        proc = Path(self._home.name) / "proc"
+        mine = str(paths.browser_profile_dir())
+
+        def entry(pid, text):
+            (proc / pid).mkdir(parents=True)
+            (proc / pid / "cmdline").write_bytes(text.encode())
+
+        entry("100", f"/opt/google/chrome/chrome --headless=new --user-data-dir={mine} "
+                     "--remote-debugging-port=9333 --no-first-run about:blank")
+        entry("101", "\0".join(["/opt/google/chrome/chrome", f"--user-data-dir={mine}",
+                                "--remote-debugging-port=9444"]))
+        entry("102", f"/opt/google/chrome/chrome --user-data-dir={mine}2 "
+                     "--remote-debugging-port=9555")
+        entry("103", f"/opt/google/chrome/chrome --type=zygote --user-data-dir={mine} "
+                     "--remote-debugging-port=9666")
+        entry("104", f"/opt/google/chrome/chrome --user-data-dir={mine} --no-first-run")
+        (proc / "self").mkdir()
+        # 103 is a child (its port is the parent's): reaping it would kill a renderer, so it is
+        # left out. 104 is a browser started without a debugging port — invisible, but a browser.
+        self.assertEqual(bb._running_on(paths.browser_profile_dir(), proc),
+                         [(100, 9333), (101, 9444), (104, None)])
 
 
 def _spawn_that_fails(stderr, code=1):

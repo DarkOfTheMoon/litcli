@@ -7,6 +7,10 @@ whose pages pop queued ``(status, body)`` pairs (or bytes, for a download), and
 """
 from __future__ import annotations
 
+from unittest import mock
+
+PROTOCOL_VERSION = 1   # browser_broker.PROTOCOL_VERSION, kept import-free here
+
 
 class FakeResponse:
     def __init__(self, status: int, body: str, url: str):
@@ -83,6 +87,7 @@ class FakePage:
         self._solved = None
         self._listeners = {}
         self.url = ""
+        self.goto = mock.Mock(side_effect=self._goto)
 
     def on(self, event, handler):
         self._listeners.setdefault(event, []).append(handler)
@@ -94,6 +99,9 @@ class FakePage:
         pass
 
     def goto(self, url, **_kw):
+        return self._goto(url, **_kw)
+
+    def _goto(self, url, **_kw):
         step = (self._queue.pop(0) if len(self._queue) > 1
                 else self._queue[0] if self._queue else (200, ""))
         if isinstance(step, Exception):
@@ -124,15 +132,22 @@ class FakePage:
 
 
 class FakeRuntime:
-    def __init__(self, queue):
-        self._page = FakePage(queue)
-        self.pages = [self._page]
+    def __init__(self, queue=None):
+        self.queue = [] if queue is None else queue
+        self.pages = [FakePage(self.queue)]   # the tab that existed before the session
+        self.page = self.pages[0]
         self.request = FakeRequest()
         self.closed = False
         self.terminated = False
 
+    @property
+    def context(self):
+        return self
+
     def new_page(self):
-        return self._page
+        self.page = FakePage(self.queue)
+        self.pages.append(self.page)
+        return self.page
 
     def set_default_timeout(self, timeout):
         previous, self.timeout = getattr(self, "timeout", 30000.0), timeout
@@ -180,6 +195,22 @@ class _Launched:
 
     def stop(self):
         self.context.close()
+
+
+class FakeLease:
+    """A held control connection: ``live`` is a flag the test flips, ``close`` the release."""
+
+    def __init__(self, cdpport=41_000, owns=False, pinned=False, control_port=43_000):
+        self.cdpport, self.owns, self.pinned = cdpport, owns, pinned
+        self.control_port = control_port
+        self.version = PROTOCOL_VERSION
+        self.alive_flag = True
+
+    def live(self):
+        return self.alive_flag
+
+    def close(self):
+        self.alive_flag = False
 
 
 class FakeSession:

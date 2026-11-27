@@ -6,37 +6,23 @@ A browser that is already signed in keeps its own session, renews it, and passes
 being a browser — ScienceDirect rejects even headless Chromium (verified 2026-11-24), so the
 page itself is fetched through here and the cookies are never lifted into ``httpx``.
 
-The instance is shared by every site and by every command: :meth:`Session.start` reuses a
-running one — it is found through a discovery file, or through ``/proc`` when that file is
-gone — and :meth:`Session.terminate` stops the one a command started.
-``launcher`` is injected so the whole module is testable without a browser.
+The instance is shared by every site and by every command: the browser belongs to a broker
+(``litcli.browser_broker``) that one process per profile keeps, and a :class:`Session` is a
+client holding a lease on it. ``lease_factory`` is injected so the whole module is testable
+without a browser.
 """
 from __future__ import annotations
 
 import contextlib
-import json
-import os
 import shutil
-import signal
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
-from . import debug, paths
+from . import browser_broker, debug, paths
 from .backends._cf_gate import is_challenge_page
-from .browser_broker import (  # noqa: F401 - transitional re-exports until Session moves
-    _CHROME_BINARIES,
-    BrowserUnavailable,
-    _attach_engine,
-    _binary,
-    _is_headless,
-    _launch_detached,
-    _reap,
-    _running_on,
-    _wait_gone,
-    cdp_ready,
-)
+from .browser_broker import _CHROME_BINARIES, BrowserUnavailable, _attach_engine
 from .errors import Unavailable
 
 
@@ -88,6 +74,7 @@ _FALLBACK_WAIT = 60.0
 _REDIRECT_GRACE = 30.0
 
 try:  # optional dependency: the module stays importable without Playwright
+    from playwright._impl._errors import TargetClosedError  # not exported by sync_api
     from playwright.sync_api import Error as PlaywrightError
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 except ImportError:  # pragma: no cover - exercised through the missing-Playwright test
@@ -95,6 +82,17 @@ except ImportError:  # pragma: no cover - exercised through the missing-Playwrig
         """Stand-in so :meth:`Session.download` reads the same either way."""
 
     PlaywrightError = OSError  # type: ignore[misc]
+    TargetClosedError = OSError  # type: ignore[misc]
+
+
+#: Messages that mean the browser or its tab went away rather than the page answering badly.
+_WENT_AWAY = ("Target closed", "has been closed", "has been disconnected",
+              "Browser closed", "Context closed")
+
+
+def _went_away(e: BaseException) -> bool:
+    """Whether ``e`` is the browser leaving, which one rebind can repair."""
+    return isinstance(e, TargetClosedError) or any(hint in str(e) for hint in _WENT_AWAY)
 
 
 @dataclass
@@ -126,32 +124,24 @@ class PageResponse:
 
 
 class _Runtime:
-    """The live objects a launcher returns, so a caller can close both the context and the driver.
+    """The client-side pair behind a lease: a CDP context and the way to let it go.
 
-    ``port``/``pid`` say how the browser can be found again once this process is gone: a
-    detached browser is reachable over CDP at ``port`` and is its own ``pid``. A paired-down
-    runtime (the bundled-browser path) has neither, and stays same-process only.
+    The browser is the broker's, so ``stop`` only detaches the driver; the port is kept so the
+    session can still name the broker after the context has gone.
     """
 
-    def __init__(self, context, stopper=None, port=None, pid=None):
+    def __init__(self, context, stopper=None, port=None):
         self.context = context
         self._stopper = stopper
         self.port = port
-        self.pid = pid
 
     def stop(self) -> None:
         try:
-            if not self.port:  # attached: closing the context would close the shared browser
+            if not self.port:  # no broker to talk to: closing the context is all there is
                 self.context.close()
         finally:
             if self._stopper:
                 self._stopper()
-
-
-def _default_launcher(profile, headless, channel, proxy) -> _Runtime:
-    """Start a browser against ``profile`` for one command (until Session becomes a client)."""
-    rt = _launch_detached(_binary(channel), profile, headless, proxy)
-    return _Runtime(rt.context, rt.stop, port=rt.port, pid=rt.pid)
 
 
 def session_from_config(cfg: dict) -> Session | None:
@@ -221,252 +211,199 @@ _CHALLENGE_POLL = 0.5
 
 
 class Session:
-    """A shared, persistent Chrome. Cheap to construct; :meth:`start` is the expensive part."""
+    """A client of the browser broker: it holds a lease, and the browser is the broker's.
+
+    Cheap to construct; :meth:`start` is the expensive part (it may start a broker). One session
+    never drives another's tab: every session opens its own page and parks only that one.
+    """
 
     def __init__(self, profile: str | None = None, headless: bool = False,
-                 channel: str | None = None, proxy: str | None = None, launcher=None,
-                 profile_directory: str = "Default", profile_source: str = "default"):
+                 channel: str | None = None, proxy: str | None = None,
+                 profile_directory: str = "Default", profile_source: str = "default",
+                 pinned: bool = False, lease_factory=None):
         self._profile = paths.resolve_browser_profile(profile)
         self._profile_directory = profile_directory
         self._profile_source = profile_source
         self._headless = headless
         self._channel = channel
         self._proxy = proxy
-        self._launcher = launcher or _default_launcher
+        self._pinned = pinned
+        self._lease_factory = lease_factory
+        self._lease: browser_broker.Lease | None = None
         self._runtime: _Runtime | None = None
-        self._owned = False
+        self._page_: object | None = None
+
+    @property
+    def mode(self) -> str:
+        """``attached`` (someone else's browser), ``launched`` (ours), or ``none``."""
+        if self._lease is None:
+            return "none"
+        return "attached" if not self._lease.owns else "launched"
 
     # -- lifetime --------------------------------------------------------------
 
     def alive(self) -> bool:
-        """True while the discovery file names a browser that still answers.
+        """Whether a browser session answers right now.
 
-        The pid alone is not enough: a browser can be closed while the file survives, and the
-        pid may then even be reused. When the file names a debugging port, the browser has to
-        answer on it.
+        With a lease the broker itself is asked. Without one the discovery file is probed
+        through a throwaway lease, so a dead file (or a port nothing listens on) reads as dead
+        without this session adopting anything.
         """
-        try:
-            info = json.loads(paths.browser_session_file().read_text(encoding="utf-8"))
-            os.kill(int(info["pid"]), 0)
-        except (OSError, ValueError, KeyError, TypeError):
+        if self._lease is not None:
+            return self._lease.live()
+        info = browser_broker.read_session()
+        if not info:
             return False
-        port = info.get("port")
-        return cdp_ready(port) if port else True
+        try:
+            lease = browser_broker.connect(info["control_port"], headless=self._headless)
+        except browser_broker.BrokerUnavailable:
+            return False
+        lease.close()
+        return True
+
+    def ensure(self) -> None:
+        """Take a lease on the profile's broker, starting one when there is none."""
+        lease = self._new_lease()
+        if lease.version != browser_broker.PROTOCOL_VERSION:
+            if not lease.owns:
+                # An older broker of another process: replace it, nobody else can read ours.
+                with contextlib.suppress(browser_broker.BrokerUnavailable, OSError):
+                    browser_broker.shutdown(lease.control_port, force=True)
+                lease.close()
+                lease = self._new_lease()
+            if lease.version != browser_broker.PROTOCOL_VERSION:
+                debug.notice(f"the browser broker answers protocol {lease.version}, this litcli "
+                             f"speaks {browser_broker.PROTOCOL_VERSION}; run `litcli browser "
+                             "stop` to replace it")
+        self._lease = lease
+
+    def _new_lease(self) -> browser_broker.Lease:
+        if self._lease_factory is not None:
+            return self._lease_factory(profile=self._profile, headless=self._headless,
+                                       profile_directory=self._profile_directory,
+                                       source=self._profile_source, pinned=self._pinned,
+                                       channel=self._channel, proxy=self._proxy)
+        return browser_broker.ensure_lease(
+            self._profile, headless=self._headless,
+            profile_directory=self._profile_directory, source=self._profile_source,
+            pinned=self._pinned, channel=self._channel, proxy=self._proxy)
 
     def start(self) -> None:
-        """Reuse the browser already on this profile; launch one only when there is none.
-
-        The shared profile exists so a sign-in survives; the same reuse is what keeps one
-        browser in the machine instead of one per command (each is ~10 processes). A browser
-        found on the profile but missing from the discovery file is put back in it rather than
-        followed by a second one, and anything else left over on the profile is stopped.
-        """
-        # The session file is one path for the whole profile, and a parallel command writes its
-        # own record the moment it reaps ours: `alive()` can be true with this runtime's
-        # browser long dead, so the runtime is what says whether there still is one.
-        if self._runtime is not None and not self._runtime_live():
-            # A dead runtime's Playwright engine cannot drive anything else, and a second
-            # ``sync_playwright().start()`` while one is up raises "using Playwright Sync API
-            # inside the asyncio loop": both paths below (adopting a replacement, launching
-            # one) need it stopped first.
-            self._drop_runtime()
+        """Make sure a browser session is up and bind this session's driver to it."""
         if self._runtime is not None:
-            # Ours is alive but the file was lost or taken (a peer reaped and re-recorded):
-            # put ours back rather than launch beside it.
-            if not self.alive():
-                self._record(getattr(self._runtime, "pid", None),
-                             getattr(self._runtime, "port", None))
             return
-        if self.alive():
-            return
-        self._profile.mkdir(parents=True, exist_ok=True)
-        reachable = [(pid, port) for pid, port in _running_on(self._profile) if port]
-        if reachable:  # running, but the file was lost or names something else
-            pid, port = reachable[0]
-            if self._headless or not _is_headless(pid):
-                self._record(pid, port)
-                self._reap(keep=pid)
-                return
-            # A sign-in needs a window and a headless browser has none: handing one back to
-            # `browser login` reads as the command having done nothing. The profile carries
-            # the cookies across, so nothing is lost by replacing it.
-            self._stop(pid)
-            self._reap(keep=None)
-        # A port-less browser holds the profile lock and can never be attached, so it goes
-        # before the launch: a second browser on a locked profile just exits.
-        self._reap(keep=None)
-        try:
-            self._runtime = self._launcher(self._profile, self._headless, self._channel,
-                                           self._proxy)
-        except BrowserUnavailable:
-            # One can still appear between the scan and the launch (two commands at once); it
-            # is the session now, and losing that race is not a failed start.
-            reachable = [(pid, port) for pid, port in _running_on(self._profile) if port]
-            if not reachable:
-                raise
-            pid, port = reachable[0]
-            self._record(pid, port)
-            return
-        self._owned = True
-        pid = getattr(self._runtime, "pid", None)
-        self._record(pid, getattr(self._runtime, "port", None))
-        self._reap(keep=pid)  # a leftover too old to be in the file is still costing memory
+        self.ensure()
+        assert self._lease is not None
+        self._bind(self._lease.cdpport)
 
-    def _record(self, pid: int | None, port: int | None) -> None:
-        record = {"profile": str(self._profile), "pid": pid or os.getpid()}
-        if port:  # another process finds the browser through this
-            record["port"] = int(port)
-        paths.browser_session_file().parent.mkdir(parents=True, exist_ok=True)
-        paths.browser_session_file().write_text(json.dumps(record), encoding="utf-8")
+    def _bind(self, port: int) -> None:
+        self._runtime = _Runtime(*_attach_engine(port), port=port)
 
-    def _reap(self, keep: int | None) -> None:
-        """Stop the other browsers on this profile: nothing attaches to them again."""
-        for pid, _port in _running_on(self._profile):
-            if pid == keep:
-                continue
-            with contextlib.suppress(OSError):
-                os.kill(pid, signal.SIGTERM)
+    def _recover(self) -> None:
+        """Drop a dead engine and bind a fresh one, so the caller can retry once."""
+        self._drop_runtime()
+        self.ensure()
+        assert self._lease is not None
+        self._bind(self._lease.cdpport)
+
+    def _drop_runtime(self) -> None:
+        """Release the lease and stop the engine; the browser itself belongs to the broker."""
+        runtime, self._runtime = self._runtime, None
+        self._page_ = None
+        with contextlib.suppress(Exception):
+            if runtime is not None:
+                runtime.stop()
+        if self._lease is not None:
+            with contextlib.suppress(Exception):
+                self._lease.close()
+            self._lease = None
 
     def reset(self) -> None:
-        """Park the tabs on ``about:blank`` and drop the extras.
+        """Park this session's page on ``about:blank``.
 
         An answered file left up in the tab keeps a ``--pdf-renderer`` spinning after the driver
         has exited, and its signed address expires in minutes: the desktop then shows a dead
-        link, which reads as a hung command. The browser itself is left running (``close`` is
-        what detaches it); only the page content is cleared.
+        link, which reads as a hung command. Another session's tab is left alone.
         """
-        if not self.alive():
-            return
+        if self._lease is None and self._page_ is None:
+            return  # nothing was started by this session: do not start one just to park it
         try:
-            if self._runtime is None:
-                self._attach()
-            pages = self._runtime.context.pages
-            for page in pages:
-                with contextlib.suppress(Exception):
-                    page.goto("about:blank")
-            for page in pages[1:]:
-                with contextlib.suppress(Exception):
-                    page.close()
-        except Exception:  # a browser that died mid-way is not worth failing the command for
-            pass
+            page = self._page_ if self._page_ is not None else self._page()
+        except BrowserUnavailable:
+            return
+        with contextlib.suppress(Exception):
+            page.goto("about:blank")
 
     def close(self) -> None:
-        """Disconnect; a detached browser keeps running for the next command."""
-        if self._runtime:
-            self._runtime.stop()
-        self._runtime = None
-        self._owned = False
-        if self.alive_elsewhere():
-            return  # the browser is its own process: the file still describes a real session
-        paths.browser_session_file().unlink(missing_ok=True)
-
-    def _drop_runtime(self) -> None:
-        """Stop and forget a runtime whose browser went away.
-
-        Only the engine goes: the browser behind an attached runtime was already found dead,
-        and ``stop`` on that one detaches rather than closing a shared browser. What this
-        process started is no longer its to terminate afterwards, so ``_owned`` goes too.
-        """
+        """Release the lease; the broker keeps the browser for the next command."""
+        lease, self._lease = self._lease, None
+        if lease is not None:
+            with contextlib.suppress(Exception):
+                lease.close()
+        page, self._page_ = self._page_, None
+        if page is not None:
+            with contextlib.suppress(Exception):
+                page.close()
         runtime, self._runtime = self._runtime, None
-        self._owned = False
         if runtime is not None:
             with contextlib.suppress(Exception):
                 runtime.stop()
 
-    def _runtime_live(self) -> bool:
-        """Whether the browser behind this session's runtime still answers.
+    def terminate(self, force: bool = True) -> None:
+        """Release the lease and ask the broker to stop.
 
-        ``alive()`` answers for the profile, not for this process: the file it reads is
-        shared, so a true there can describe some other command's browser. The runtime's own
-        pid, or the port it is attached to, is what answers for this one. (The driver's own
-        objects do not: ``context.pages`` is a local list and stays readable once the browser
-        is gone.)
+        ``force`` stops it even while another lease is held; without it the broker stays for
+        whoever still holds one. What happens to the browser is the broker's rule (its own and
+        headless is killed, an attached one is kept).
         """
-        if self._runtime is None:
-            return True
-        # The port first: a killed browser stays a zombie until this process reaps it, and a
-        # zombie still answers `kill(pid, 0)`. Where there is no port (the bundled, in-process
-        # browser) that is all there is to look at.
-        port = getattr(self._runtime, "port", None)
-        if port:
-            return cdp_ready(port)
-        pid = getattr(self._runtime, "pid", None)
-        if pid:
-            try:
-                os.kill(int(pid), 0)
-            except OSError:
-                return False
-        return True
-
-    def terminate(self, force: bool = False) -> None:
-        """Disconnect, and stop the browser if this process started it.
-
-        ``close`` deliberately leaves a detached browser up so the clearance survives to the
-        next command; a command that runs on its own (a survey walk) has no next command and
-        would otherwise leave one browser behind per run. ``force`` stops the browser in the
-        discovery file even when another process started it (a browser left by a helper
-        subprocess, say) — a sign-in the user opened up by hand is the case it does not cover.
-        """
-        pid = None
-        if force:
-            pid = self._named_pid()
-        elif self._owned and self._runtime:
-            pid = self._runtime.pid
+        port = self._lease.control_port if self._lease is not None else None
         self.close()
-        if pid is None:
+        if port is None:
             return
-        self._stop(pid)
-        if self._named_pid() == pid:
-            paths.browser_session_file().unlink(missing_ok=True)
-
-    def _stop(self, pid: int) -> None:
-        """SIGTERM ``pid`` and wait for it to go."""
-        with contextlib.suppress(OSError, ProcessLookupError):
-            os.kill(pid, signal.SIGTERM)
-        _wait_gone(pid)
-
-    def _named_pid(self) -> int | None:
-        """The browser the discovery file names, if there is a readable one."""
-        try:
-            return int(json.loads(paths.browser_session_file().read_text(encoding="utf-8"))["pid"])
-        except (OSError, ValueError, KeyError, TypeError):
-            return None
+        with contextlib.suppress(browser_broker.BrokerUnavailable, OSError):
+            browser_broker.shutdown(port, force=force)
 
     def alive_elsewhere(self) -> bool:
-        """Alive and owned by a process other than this one."""
-        try:
-            info = json.loads(paths.browser_session_file().read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        """Whether some other process currently holds a lease on the broker."""
+        info = browser_broker.read_session()
+        if not info:
             return False
-        return int(info.get("pid", 0)) != os.getpid()
-
-    def _attach(self) -> None:
-        """Attach to the browser in the discovery file (one started by another job or command)."""
         try:
-            port = int(json.loads(paths.browser_session_file().read_text(encoding="utf-8"))["port"])
-        except (OSError, ValueError, KeyError, TypeError) as e:
-            raise BrowserUnavailable(
-                "the browser session belongs to another process and is not attachable "
-                "(it was started without a debugging port)", hint="litcli browser login") from e
-        self._runtime = _Runtime(*_attach_engine(port), port=port)
+            lease = browser_broker.connect(info["control_port"], headless=self._headless)
+        except browser_broker.BrokerUnavailable:
+            return False
+        lease.close()
+        return True
 
     # -- work ------------------------------------------------------------------
 
     def _page(self):
-        if self._runtime is not None and not self._runtime_live():
-            self._drop_runtime()  # a true `alive()` may only be describing another command
-        if not self.alive():
-            raise BrowserUnavailable(
-                "no browser session is running — run `litcli browser login <site>` first "
-                "(or configure a cookie + user_agent to use the HTTP path).",
-                hint="litcli browser login")
-        if self._runtime is None:  # started by another process: attach, then reuse it
-            self._attach()
-        page = self._runtime.context.pages[0] if self._runtime.context.pages \
-            else self._runtime.context.new_page()
-        return page
+        """This session's own tab, opened once and never somebody else's."""
+        if self._runtime is None:
+            self.start()
+        assert self._runtime is not None
+        if self._page_ is None:
+            self._page_ = self._runtime.context.new_page()
+        return self._page_
+
+    def _retrying(self, work):
+        """Run ``work``; a browser that went away is rebound and the work tried once more."""
+        try:
+            return work()
+        except PlaywrightError as e:
+            if not _went_away(e):
+                raise
+        self._recover()
+        try:
+            return work()
+        except PlaywrightError as e:
+            raise BrowserUnavailable(f"the browser session went away: {e}") from e
 
     def page(self, url: str) -> PageResponse:
+        """Navigate and hand back the answer (one rebind-and-retry when the browser left)."""
+        return self._retrying(lambda: self._navigate(url))
+
+    def _navigate(self, url: str) -> PageResponse:
         """Navigate and hand back the answer (a gate page included; it is not an error here).
 
         A challenge that solves itself is waited out first: the first paint is the
@@ -537,6 +474,14 @@ class Session:
             time.sleep(_CHALLENGE_POLL)
 
     def download(self, url: str) -> bytes:
+        """Navigate to a file URL and return its bytes (one rebind-and-retry when it left)."""
+        try:
+            return self._retrying(lambda: self._fetch(url))
+        except PlaywrightError as e:
+            # Closed mid-download: a failed copy, not a crash of the whole command.
+            raise Unavailable(f"the session browser failed during the download: {e}") from e
+
+    def _fetch(self, url: str) -> bytes:
         """Navigate to a file URL and return its bytes.
 
         Whether the endpoint is still working, refused for want of entitlement, or rendering the
@@ -611,10 +556,6 @@ class Session:
                 target, headers={"Accept": "application/pdf"},
                 timeout=max(_FALLBACK_WAIT, deadline - time.monotonic()) * 1000)
             return answer.body()
-        except PlaywrightError as e:
-            # The window was closed mid-download (TargetClosedError) or the page went away:
-            # a failed download, not a crash of the whole command.
-            raise Unavailable(f"the session browser failed during the download: {e}") from e
         finally:
             with contextlib.suppress(PlaywrightError):
                 context.set_default_timeout(None)  # back to the library default

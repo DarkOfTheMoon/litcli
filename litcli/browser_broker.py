@@ -621,10 +621,11 @@ class Broker:
 class Lease:
     """A held-open control connection: the release is its EOF, which the kernel does for us."""
 
-    def __init__(self, sock: socket.socket, reader, cdp_port: int, owns: bool, pinned: bool,
-                 version: int):
+    def __init__(self, sock: socket.socket, reader, control_port: int, cdp_port: int, owns: bool,
+                 pinned: bool, version: int):
         self._sock: socket.socket | None = sock
         self._reader = reader
+        self.control_port = control_port
         self.cdpport = cdp_port
         self.owns = owns
         self.pinned = pinned
@@ -679,8 +680,9 @@ def connect(control_port, *, version: int = PROTOCOL_VERSION, headless: bool,
         with contextlib.suppress(OSError):
             sock.close()
         raise BrokerUnavailable(f"the broker on port {control_port} did not answer: {e}") from e
-    return Lease(sock, reader, int(answer["cdp_port"]), bool(answer.get("owns")),
-                 bool(answer.get("pinned")), int(answer.get("version", PROTOCOL_VERSION)))
+    return Lease(sock, reader, int(control_port), int(answer["cdp_port"]),
+                 bool(answer.get("owns")), bool(answer.get("pinned")),
+                 int(answer.get("version", PROTOCOL_VERSION)))
 
 
 def shutdown(control_port, *, force: bool = False) -> dict:
