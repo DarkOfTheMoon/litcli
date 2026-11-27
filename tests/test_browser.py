@@ -729,7 +729,7 @@ class AliveProbeTest(unittest.TestCase):
 
 class MissingPlaywrightTest(unittest.TestCase):
     def test_the_error_names_the_install_command(self):
-        with mock.patch.object(browser, "_CHROME_BINARIES", ()), \
+        with mock.patch("litcli.browser_broker._CHROME_BINARIES", ()), \
                 mock.patch.dict(sys.modules, {"playwright.sync_api": None}), \
                 mock.patch.object(paths, "_IS_WINDOWS", False), \
                 mock.patch.dict(os.environ, {"XDG_DATA_HOME": tempfile.mkdtemp()}), \

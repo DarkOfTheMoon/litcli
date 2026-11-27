@@ -166,3 +166,66 @@ class LifecycleTest(BrokerTest):
                 self.assertRaises(TimeoutError), \
                 bb.profile_lock(paths.browser_profile_dir(), timeout=0.2):
             pass
+
+
+class PrepareTest(BrokerTest):
+    def setUp(self):
+        super().setUp()
+        paths.browser_profile_dir().mkdir(parents=True, exist_ok=True)
+
+    def test_a_live_devtools_port_is_attached_without_launching(self):
+        (paths.browser_profile_dir() / "DevToolsActivePort").write_text("5555\n/x\n")
+        with mock.patch.object(bb, "cdp_ready", return_value=True) as ready, \
+                mock.patch.object(bb, "_attach_engine", return_value=(object(), None)):
+            out = bb.prepare(paths.browser_profile_dir(), True, None, None, None)
+        self.assertFalse(out.owns)
+        self.assertEqual(out.port, 5555)
+        self.assertEqual(ready.call_args.args[0], 5555)
+
+    def test_a_stale_port_file_is_not_attached(self):
+        (paths.browser_profile_dir() / "DevToolsActivePort").write_text("5555\n/x\n")
+        with mock.patch.object(bb, "cdp_ready", return_value=False), \
+                mock.patch.object(bb, "profile_holder", return_value=None), \
+                mock.patch.object(bb, "_launch_detached",
+                                  return_value=bb.BrowserRuntime(7123, None)) as launch:
+            bb.prepare(paths.browser_profile_dir(), True, None, None, None)
+        launch.assert_called_once()
+
+    def test_a_held_profile_without_a_port_raises_the_exact_sentence(self):
+        with mock.patch.object(bb, "live_port", return_value=None), \
+                mock.patch.object(bb, "profile_holder", return_value=4242), \
+                self.assertRaises(bb.ProfileBusy) as ctx:
+            bb.prepare(paths.browser_profile_dir(), True, None, None, None)
+        self.assertEqual(ctx.exception.exit_code, 1)
+        self.assertEqual(str(ctx.exception), bb._BUSY_SENTENCE)
+
+    def test_the_profile_directory_and_headless_flag_reach_the_command_line(self):
+        with mock.patch.object(bb.subprocess, "Popen") as popen, \
+                mock.patch.object(bb, "cdp_ready", return_value=True), \
+                mock.patch.object(bb, "_attach_engine", return_value=(object(), None)):
+            popen.return_value.poll.return_value = None
+            bb._launch_detached("/bin/true", paths.browser_profile_dir(), True, None, "Profile 1")
+        argv = popen.call_args.args[0]
+        self.assertIn("--profile-directory=Profile 1", argv)
+        self.assertIn("--headless=new", argv)
+
+    def test_without_any_chrome_the_bundled_browser_is_launched(self):
+        with mock.patch.object(bb.shutil, "which", return_value=None), \
+                mock.patch.object(bb, "_bundled_binary", return_value="/b/chrome"), \
+                mock.patch.object(bb, "live_port", return_value=None), \
+                mock.patch.object(bb, "profile_holder", return_value=None), \
+                mock.patch.object(bb, "_launch_detached",
+                                  return_value=bb.BrowserRuntime(7123, None)) as launch:
+            bb.prepare(paths.browser_profile_dir(), True, None, None, None)
+        self.assertEqual(launch.call_args.args[0], "/b/chrome")
+
+    def test_reap_kills_headless_leftovers_but_not_headed_ones_on_a_user_profile(self):
+        elsewhere = paths.browser_profile_dir().parent / "elsewhere"
+        with mock.patch.object(bb, "_running_on", return_value=[(1, None), (2, None)]), \
+                mock.patch.object(bb, "_is_headless", side_effect=lambda pid: pid == 1), \
+                mock.patch.object(bb.os, "kill") as killed:
+            bb._reap(elsewhere, keep=None)
+            bb._reap(paths.browser_profile_dir(), keep=None)
+        pids = [call.args[0] for call in killed.call_args_list]
+        self.assertEqual(pids.count(1), 2)   # headless: killed either way
+        self.assertEqual(pids.count(2), 1)   # headed: only in the dedicated dir

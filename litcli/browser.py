@@ -16,24 +16,31 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-import re
 import shutil
 import signal
-import socket
-import subprocess
 import time
-import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
 from . import paths
 from .backends._cf_gate import is_challenge_page
+from .browser_broker import (  # noqa: F401 - transitional re-exports until Session moves
+    _CHROME_BINARIES,
+    BrowserUnavailable,
+    _attach_engine,
+    _binary,
+    _is_headless,
+    _launch_detached,
+    _reap,
+    _running_on,
+    _wait_gone,
+    cdp_ready,
+)
 from .debug import notice
-from .errors import External, Unavailable
+from .errors import Unavailable
 
-#: How long a freshly spawned Chrome gets to open its debugging port.
-_READY_TIMEOUT = 20.0
+
 def _still_coming(page) -> bool:
     """Whether the page is still the challenge rather than something to read.
 
@@ -91,12 +98,6 @@ except ImportError:  # pragma: no cover - exercised through the missing-Playwrig
     PlaywrightError = OSError  # type: ignore[misc]
 
 
-class BrowserUnavailable(External):
-    """No usable browser: Playwright missing, the browser not downloaded, or nothing running."""
-
-    exit_code = 2
-
-
 @dataclass
 class PageResponse:
     """What :meth:`Session.page` hands back — the fields callers of a page need.
@@ -148,191 +149,10 @@ class _Runtime:
                 self._stopper()
 
 
-def _running_on(profile: Path, root: Path = Path("/proc")) -> list[tuple[int, int | None]]:
-    """``(pid, debugging port)`` for every browser already started on this profile.
-
-    Process rows only — a zygote or renderer carries the same command line and would otherwise
-    be reaped on its own (it goes with the browser that forked it).
-
-    Chrome keeps no list of itself, so this reads ``/proc``: a browser whose discovery file
-    was lost (a crashed run, a cleaned ``/tmp``) is still there and still usable, and starting
-    a second one per command is what fills the machine with them. Profiles carry across
-    processes, so the ``user-data-dir`` argument is the whole match.
-
-    The command line is read as a whole string, not split on NUL: Chrome rewrites its own
-    argv into one space-joined line, so a per-argument match finds nothing at all.
-    """
-    marker = f"--user-data-dir={profile}"
-    found = []
-    try:
-        entries = list(root.iterdir())
-    except OSError:
-        return found  # not Linux: no /proc, and nothing is found (a launch follows)
-    for entry in entries:
-        if not entry.name.isdigit():
-            continue
-        try:
-            line = (entry / "cmdline").read_bytes().decode("utf-8", "replace")
-        except OSError:
-            continue  # it exited under us
-        at = line.find(marker)
-        after = line[at + len(marker):at + len(marker) + 1] if at >= 0 else ""
-        if at < 0 or after not in (" ", "\0", ""):
-            continue  # absent, or a profile that only shares a prefix with ours
-        if "--type=" in line:
-            continue  # a zygote, renderer or utility process: it goes with its browser
-        # Only the browser process takes a debugging port; its zygotes and renderers do not,
-        # which is what picks the one that can be talked to out of the group.
-        port = re.search(r"--remote-debugging-port=(\d+)", line)
-        found.append((int(entry.name), int(port.group(1)) if port else None))
-    return sorted(found)
-
-
-def _wait_gone(pid: int, timeout: float = 3.0) -> None:
-    """Wait for ``pid`` to disappear, escalating to SIGKILL.
-
-    A browser takes a moment to shut down, and the next command (or a test's temp-dir cleanup)
-    arrives immediately: without the wait it can still hold the profile lock, or still be
-    writing into a directory about to be removed.
-    """
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            os.kill(pid, 0)
-        except OSError:
-            return
-        time.sleep(0.05)
-    with contextlib.suppress(OSError):
-        os.kill(pid, signal.SIGKILL)
-
-
-def _is_headless(pid: int) -> bool:
-    """Whether ``pid`` runs without a window (its command line says so)."""
-    try:
-        line = Path(f"/proc/{pid}/cmdline").read_bytes().decode("utf-8", "replace")
-    except OSError:
-        return False
-    return "--headless" in line
-
-
-def _free_port() -> int:
-    """A port free right now (Chrome fails to start on a taken one)."""
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
-
-
-def cdp_ready(port: int, timeout: float = 0.5) -> bool:
-    """Whether a browser answers CDP on ``port`` (the liveness probe for a detached session)."""
-    try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{int(port)}/json/version",
-                                    timeout=timeout) as answer:
-            return answer.status == 200
-    except (OSError, ValueError):
-        return False
-
-
-def _attach_engine(port: int):
-    """A context of the already-running browser at ``port``, and the stop that detaches from it."""
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError as e:
-        raise BrowserUnavailable(
-            "Playwright is not installed. Install it with `litcli backends install-browser` "
-            "and retry (or fall back to a configured cookie + user_agent).") from e
-    paths.apply_browser_cache()
-    engine = sync_playwright().start()
-    try:
-        browser = engine.chromium.connect_over_cdp(f"http://127.0.0.1:{int(port)}")
-    except Exception as e:
-        engine.stop()
-        raise BrowserUnavailable(
-            f"could not attach to the running browser on port {port}: {e}") from e
-    if not browser.contexts:
-        engine.stop()
-        raise BrowserUnavailable("the running browser has no window to work in")
-    return browser.contexts[0], engine.stop
-
-
-def _launch_detached(binary: str, profile, headless: bool, proxy: str | None) -> _Runtime:
-    """Start a Chrome that outlives this process, then attach to it.
-
-    Detached on purpose (``start_new_session``): `browser login` exits and the clearance must
-    still be there for the next command, which attaches over CDP from a process of its own.
-    """
-    port = _free_port()
-    profile = Path(profile)
-    profile.mkdir(parents=True, exist_ok=True)
-    argv = [binary, f"--user-data-dir={profile}", f"--remote-debugging-port={port}",
-            "--no-first-run", "--no-default-browser-check", "about:blank"]
-    if headless:
-        argv.insert(1, "--headless=new")
-    if proxy:
-        # The clearance is bound to the egress IP, so the browser must leave by the same proxy
-        # as httpx or every cookie it earned is worthless to the request path.
-        argv.insert(1, f"--proxy-server={proxy}")
-    try:
-        child = subprocess.Popen(argv, start_new_session=True, stdout=subprocess.DEVNULL,
-                                 stderr=subprocess.DEVNULL)
-    except OSError as e:
-        raise BrowserUnavailable(f"could not start {binary}: {e}",
-                                 hint="litcli backends install-browser") from e
-    deadline = time.monotonic() + _READY_TIMEOUT
-    while time.monotonic() < deadline and not cdp_ready(port):
-        if child.poll() is not None:
-            raise BrowserUnavailable(
-                f"{binary} exited at once (code {child.returncode}); a headed browser needs a "
-                "display", hint="litcli backends install-browser")
-        time.sleep(0.1)
-    if not cdp_ready(port):
-        raise BrowserUnavailable(
-            f"{binary} never opened its debugging port (pid {child.pid})",
-            hint="litcli backends install-browser")
-    context, stop = _attach_engine(port)
-    return _Runtime(context, stop, port=port, pid=child.pid)
-
-
 def _default_launcher(profile, headless, channel, proxy) -> _Runtime:
-    """Start a browser against ``profile``.
-
-    A real Chrome on the machine is started detached and driven over CDP, because the whole
-    point is a session that outlives the command that signed in. Without one the bundled
-    Chromium is launched in-process (``channel`` is dropped by :func:`session_from_config` in
-    that case), which still works but only within the one command.
-    """
-    binary = next((found for name in _CHROME_BINARIES if (found := shutil.which(name))), None)
-    if binary:
-        try:
-            return _launch_detached(binary, profile, headless, proxy)
-        except BrowserUnavailable as e:
-            # A real Chrome that cannot run (no display, say) must not sink the session: the
-            # bundled browser serves this one command instead of nothing.
-            notice(f"{e}; falling back to the bundled browser for this command")
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError as e:
-        raise BrowserUnavailable(
-            "Playwright is not installed. Install it with `litcli backends install-browser` "
-            "and retry (or fall back to a configured cookie + user_agent).") from e
-    paths.apply_browser_cache()
-    engine = sync_playwright().start()
-    kw: dict = {"headless": headless, "viewport": {"width": 1360, "height": 900}}
-    if channel:
-        kw["channel"] = channel
-    if proxy:
-        kw["proxy"] = {"server": proxy}
-    try:
-        context = engine.chromium.launch_persistent_context(str(profile), **kw)
-    except Exception as e:
-        engine.stop()
-        raise BrowserUnavailable(
-            f"could not start the browser (run `litcli backends install-browser` first): {e}",
-            hint="litcli backends install-browser") from e
-    return _Runtime(context, engine.stop)
-
-
-#: How a real Chrome is spelled on each platform (the ``chrome`` channel needs one installed).
-_CHROME_BINARIES = ("google-chrome", "google-chrome-stable", "chrome", "chromium", "chromium-browser")
+    """Start a browser against ``profile`` for one command (until Session becomes a client)."""
+    rt = _launch_detached(_binary(channel), profile, headless, proxy)
+    return _Runtime(rt.context, rt.stop, port=rt.port, pid=rt.pid)
 
 
 def session_from_config(cfg: dict) -> Session | None:
