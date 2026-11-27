@@ -42,6 +42,11 @@ SITES = {
     "ieee": "https://ieeexplore.ieee.org/",
 }
 
+#: A cookie only a signed-in visit leaves, per site. The root page renders a fallback that
+#: text alone can read as signed in; the cookie is positive evidence. A site absent here
+#: keeps the text verdict only, the same as before.
+SESSION_COOKIES = {"sciencedirect": "SD_REMOTEACCESS"}
+
 _SIGNED_IN = "signed in"
 _SIGNED_OUT = "signed out"
 _GATED = "gated"
@@ -59,12 +64,22 @@ def _classify(status: int, body: str) -> str:
     return _SIGNED_OUT if is_sign_in_page(body, title) else _SIGNED_IN
 
 
-def _probe(session: Session, url: str) -> str:
+def _probe(session: Session, site: str, url: str) -> str:
     """One site's answer. A timeout gets one retry: a probe is cheap, a slow site is not a no."""
     for _ in range(2):
         try:
             answer = session.page(url)
-            return _classify(answer.status, answer.text)
+            state = _classify(answer.status, answer.text)
+            name = SESSION_COOKIES.get(site)
+            if state == _SIGNED_IN and name:
+                jar: set = set()
+                # A jar that cannot be read is a downgrade, not a site error: the row says
+                # signed out, which is the answer that asks the reader to check.
+                with contextlib.suppress(Exception):
+                    jar = {c.get("name") for c in session.cookies(url)}
+                if name not in jar:
+                    return _SIGNED_OUT
+            return state
         except PlaywrightTimeoutError:
             state = _NO_ANSWER
         except Exception as e:  # a single dead site must not hide the others; no retry
@@ -138,8 +153,8 @@ def cmd_browser_login(cfg, args) -> int:
 
 def _targets_the_users_own_profile(cfg: dict) -> bool:
     """Whether ``[browser].profile`` resolves to the platform's default Chrome profile."""
-    return (paths.resolve_browser_profile((cfg.get("browser") or {}).get("profile"))
-            == paths.user_browser_profile_dir())
+    return paths.same_profile(paths.resolve_browser_profile(
+        (cfg.get("browser") or {}).get("profile")), paths.user_browser_profile_dir())
 
 
 def _open_window(cfg: dict, url: str) -> None:
@@ -220,12 +235,17 @@ def cmd_browser_stop(cfg, args) -> int:
         print("no session")
         return 0
     try:
-        lease = broker.connect(state["control_port"], headless=False)
+        # No heal: the session ends here, and healing would open a window for the stop to
+        # close again (the pid printed below would be the new one's, not the one just closed).
+        lease = broker.connect(state["control_port"], headless=False, heal=False)
     except broker.BrokerUnavailable:
         print("no session")
         return 0
     owns, headless = bool(state.get("owns")), bool(state.get("headless"))
     pid = lease.browser_pid or state.get("pid")  # the window's pid, not the broker's own
+    # Before the shutdown: that is the moment that kills a headless browser, and afterwards
+    # only a not-yet-reaped zombie still reads as alive.
+    alive = bool(pid) and broker._pid_alive(pid)
     try:
         with contextlib.suppress(BrowserUnavailable, OSError, ValueError):
             broker.shutdown(lease.control_port, force=True)  # gone already is the same outcome
@@ -234,9 +254,11 @@ def cmd_browser_stop(cfg, args) -> int:
     if not owns:
         print("your Chrome was left running")
     elif headless:
-        print(f"stopped (pid {pid})")
-    else:
+        print(f"stopped (pid {pid})" if alive else "stopped")
+    elif alive:
         print(f"left running (pid {pid}) - close the window to end it")
+    else:
+        print("the window was already closed")
     return 0
 
 
@@ -255,7 +277,11 @@ def cmd_browser_status(cfg, args) -> int:
                 value = session.mode
             print(f"{name}: {value}")
         print()
-        rows = [(site, _probe(session, url)) for site, url in SITES.items()]
+        width = max(len(site) for site in SITES)
+        for site, url in SITES.items():
+            # Eleven sites cost minutes; a table printed only once all of them answered is a
+            # status that shows nothing for that long. Each row goes out as its answer lands.
+            print(f"{site:<{width}}  {_probe(session, site, url)}", flush=True)
     except broker.ProfileBusy as e:
         print(f"[error] {e}", file=sys.stderr)
         return e.exit_code
@@ -267,9 +293,6 @@ def cmd_browser_status(cfg, args) -> int:
         # Playwright driver active in this process, and the next session start would collide.
         # The broker keeps running either way — it idles out on its own.
         session.close()
-    width = max(len(site) for site, _ in rows)
-    for site, state in rows:
-        print(f"{site:<{width}}  {state}")
     print("\n`gated` means the site answered with its bot gate; `signed out` means no session; "
           "`no answer` means it did not finish loading in time. Run `litcli browser login "
           "<site>` for the first two.")

@@ -58,5 +58,21 @@ class ReadmeParityTest(unittest.TestCase):
                 self.assertIn(name, registry)
 
 
+class BrowserProfileDocTest(unittest.TestCase):
+    """The profile default is what an upgrade silently changes: both docs must own it."""
+
+    def test_both_readmes_name_the_new_profile_default(self):
+        for name in ("README.md", "README.en.md"):
+            text = _read(os.path.join(ROOT, name))
+            self.assertIn("browser stop", text)
+
+    def test_both_readmes_carry_the_escape_hatch(self):
+        # The reader whose sign-ins sit in the old dedicated profile needs the way back to it
+        # in the doc that told them the default changed.
+        for name in ("README.md", "README.en.md"):
+            text = _read(os.path.join(ROOT, name))
+            self.assertIn('profile = "dedicated"', text)
+
+
 if __name__ == "__main__":
     unittest.main()

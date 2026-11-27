@@ -425,6 +425,48 @@ class SessionTest(_SessionFixture):
         # address, then the one challenge retry — no root in between
         self.assertEqual(len(self.s._page().gotos), 2)
 
+    def test_a_user_profile_spelled_another_way_still_warms(self):
+        # The setting may name their directory through `..`; that is still the signed-in
+        # profile the challenge follows, and a string compare would skip the warm-up.
+        own = paths.user_browser_profile_dir()
+        self.s = Session(profile=str(own / ".." / own.name), profile_source="config",
+                         lease_factory=self.factory)
+        self.s.start()
+        url = "https://www.sciencedirect.com/science/article/pii/S1"
+        self.runtime.queue.extend([(403, "<html><title>Just a moment...</title></html>"),
+                                   (403, "<html><title>Just a moment...</title></html>"),
+                                   (200, "<title>Journal</title>"),
+                                   (200, "<title>Article</title>")])
+        with mock.patch.object(browser, "_CHALLENGE_WAIT", 0):
+            self.s.page(url)
+        self.assertIn("https://www.sciencedirect.com/", self.s._page().gotos)
+
+    def test_cookies_are_asked_of_the_context_for_that_url(self):
+        # A cookie is per-URL evidence; asking the jar for everything would count a
+        # signed-in marker set for another host.
+        self.s.start()
+        self.runtime.jar = [{"name": "SD_REMOTEACCESS"}]
+        self.assertEqual(self.s.cookies("https://www.sciencedirect.com/"),
+                         [{"name": "SD_REMOTEACCESS"}])
+        self.assertEqual(self.runtime.cookie_asks, [["https://www.sciencedirect.com/"]])
+
+    def test_a_navigation_interrupted_by_the_challenges_own_reload_is_not_an_error(self):
+        # A challenge replaces the document under the pending navigation and Playwright says
+        # "interrupted by another navigation". That is the exchange in progress, not a dead
+        # site; the document in hand is what the caller asked to judge.
+        self.s.start()
+        page = mock.MagicMock()
+        page.url = "https://x/a"
+        page.content.return_value = "<html><title>Just a moment...</title></html>"
+        page.goto.side_effect = browser.PlaywrightError(
+            'Page.goto: Navigation to "https://x/a" is interrupted by another navigation '
+            'to "https://x/b"')
+        with mock.patch.object(self.s, "_page", return_value=page), \
+                mock.patch.object(browser, "_CHALLENGE_WAIT", 0):
+            answer = self.s.page("https://x/a")
+        self.assertEqual(answer.status, 403)
+        self.assertIn("Just a moment", answer.text)
+
     def test_a_gate_page_is_returned_not_raised(self):
         self.s.start()
         self.runtime.queue.append((403, "<html>__cf_chl</html>"))
@@ -435,6 +477,20 @@ class SessionTest(_SessionFixture):
         self.s.start()
         self.runtime.queue.append(b"%PDF-1.4 body")
         self.assertTrue(self.s.download("https://x/a.pdf").startswith(b"%PDF"))
+
+    def test_a_download_interrupted_by_the_challenges_own_reload_still_delivers(self):
+        # The same self-reload the probe tolerates happens under a file address too: the
+        # challenge replaces the document and Playwright reports the navigation as
+        # interrupted. That is the gate in progress, not a dead endpoint -- falling through to
+        # the request context is what gets the bytes.
+        self.s.start()
+        self.runtime.queue.append(browser.PlaywrightError(
+            'Page.goto: Navigation to "https://x/a.pdf" is interrupted by another navigation '
+            'to "https://x/b"'))
+        with mock.patch.object(browser, "_REDIRECT_GRACE", 0):
+            self.assertTrue(self.s.download("https://x/a.pdf").startswith(b"%PDF"))
+        (url, _kw), = self.s._runtime.context.request.calls
+        self.assertEqual(url, "https://x/a.pdf")
 
     def test_a_pdf_gets_five_minutes_to_arrive(self):
         # The wait covers the challenge being solved and a slow link alike; four seconds cut

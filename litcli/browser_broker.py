@@ -356,7 +356,7 @@ def _launch_detached(binary: str, profile, headless: bool, proxy: str | None,
         # as httpx or every cookie it earned is worthless to the request path.
         argv.insert(1, f"--proxy-server={proxy}")
     env = None
-    if profile.resolve() == paths.user_browser_profile_dir().resolve():
+    if paths.same_profile(profile, paths.user_browser_profile_dir()):
         # Naming the directory is not enough: Chrome opens no debugging port while the named
         # path is its platform default, and that default is derived from XDG_CONFIG_HOME. A
         # private config home for the child makes the named path non-default; the cookies are
@@ -495,7 +495,7 @@ def _reap(profile: Path, keep: int | None) -> None:
     A headed browser on a profile the user may own is theirs to keep; only the dedicated
     directory has no other user's things in it, so there the old clean sweep still applies.
     """
-    dedicated = Path(profile).resolve() == paths.browser_profile_dir().resolve()
+    dedicated = paths.same_profile(profile, paths.browser_profile_dir())
     found = _running_on(profile)
     if not found and not _PROC.is_dir():
         # No /proc: the lock is the only place a leftover can be found there.
@@ -544,7 +544,8 @@ class Broker:
         # shadow it, so the shared browser on it is always hidden whatever the caller asked.
         # `browser login` is the one place a window is due, and it starts a browser of its own
         # instead of a broker. Everywhere else the caller's choice stands.
-        self.headless = headless or self.profile.resolve() == paths.user_browser_profile_dir().resolve()
+        self.headless = headless or paths.same_profile(
+            self.profile, paths.user_browser_profile_dir())
         self.profile_directory = profile_directory
         self.source = source
         self.channel = channel
@@ -564,6 +565,7 @@ class Broker:
         self._stopping = False
         self._torn_down = False
         self._exited = False
+        self._last_busy: str | None = None
         self.control_port = 0
 
     # -- control port ----------------------------------------------------------
@@ -681,7 +683,10 @@ class Broker:
         """Ask the injected backend for a browser; a busy profile becomes exit code 1.
 
         ``quiet`` keeps the busy sentence off stderr for a first attempt that will be retried.
+        A busy profile leaves its sentence in ``_last_busy``: ``None`` here means "no browser",
+        but the caller's reply should still say what the user has to do about it.
         """
+        self._last_busy = None
         if self._backend is None:
             from .browser_broker import prepare  # own module: keeps the name patchable
 
@@ -691,6 +696,7 @@ class Broker:
         try:
             return self._backend()
         except ProfileBusy as e:
+            self._last_busy = str(e)
             if not quiet:
                 print(str(e), file=sys.stderr)
             return None
@@ -783,13 +789,17 @@ class Broker:
         with contextlib.suppress(Exception):
             if be.stop is not None:
                 be.stop()
-        new, failure = None, None
+        new, failure, spoken = None, None, False
         for attempt in range(2):
             try:
                 with profile_lock(self.profile, timeout=_LOCK_WAIT):
                     new = self._bring_up(quiet=attempt == 0)
             except (BrowserUnavailable, TimeoutError) as e:
-                failure = e
+                failure, spoken = e, False
+            else:
+                failure = self._last_busy
+                # The attempt itself says a busy sentence when it is not the quiet first one.
+                spoken = failure is not None and attempt > 0
             if new is not None:
                 break
             if attempt == 0:
@@ -797,12 +807,13 @@ class Broker:
                 # opening Chrome right now) is not worth the broker every client is on.
                 time.sleep(_HOLD_SETTLE)
         if new is None:
-            # A busy profile was reported on stderr already; a failed relaunch says why the
-            # same way. Either way this broker has no browser it can serve, so it leaves and
-            # the next client starts a fresh one. The reply carries the same reason: the
-            # stderr pipe of a detached broker has no reader.
-            reason = str(failure) if failure is not None else "the browser is gone"
-            print(reason, file=sys.stderr)
+            # Either way this broker has no browser it can serve, so it leaves and the next
+            # client starts a fresh one. The reply carries the reason: the stderr pipe of a
+            # detached broker has no reader. A sentence the attempt already printed is not
+            # printed a second time here; a failed relaunch has not been said yet.
+            reason = str(failure) if failure else "the browser is gone"
+            if not spoken:
+                print(reason, file=sys.stderr)
             self._leave()
             return reason
         self._be = new
@@ -810,7 +821,9 @@ class Broker:
         return None
 
     def _cmd_hello(self, conn: socket.socket, msg: dict) -> None:
-        reason = self._heal()
+        # A client that is about to stop the broker asks not to be healed: the relaunch would
+        # only be undone a moment later, and the stale backend holds the pid stop reports.
+        reason = self._heal() if msg.get("heal", True) else None
         if reason is not None:
             self._reply(conn, {"error": reason})
             return
@@ -972,14 +985,19 @@ def _exchange(control_port: int, msg: dict, timeout: float = 2.0) -> dict:
 
 
 def connect(control_port, *, version: int = PROTOCOL_VERSION, headless: bool,
-            timeout: float = 2.0) -> Lease:
-    """Take a lease on an existing broker; a busy or dead port raises ``BrokerUnavailable``."""
+            timeout: float = 2.0, heal: bool = True) -> Lease:
+    """Take a lease on an existing broker; a busy or dead port raises ``BrokerUnavailable``.
+
+    ``heal`` is what a caller that means to keep the session wants. ``browser stop`` turns it
+    off: a heal there relaunches a browser the user has just closed, and the stop would take
+    that new one down again -- a window flashing up in the middle of a stop.
+    """
     sock, reader = _conn(control_port, timeout)
     try:
         # The broker heals before answering a hello, and a heal may relaunch the browser: as
         # long a wait as a cold launch, not the 2 s a broker with nothing to do needs.
         sock.settimeout(_HELLO_TIMEOUT)
-        sock.sendall((json.dumps({"cmd": "hello", "version": version,
+        sock.sendall((json.dumps({"cmd": "hello", "version": version, "heal": heal,
                                   "headless": headless, "pid": os.getpid()}) + "\n").encode())
         answer = json.loads(reader.readline())
     except (OSError, ValueError) as e:
@@ -1028,7 +1046,14 @@ def read_session() -> dict | None:
 def _spawn_broker(argv: list[str], spawn=None):
     """Start a broker of its own, outliving this process (the same reason the browser does)."""
     spawn = spawn or subprocess.Popen   # looked up late, so a test can stand in for it
-    kw: dict = {"stdout": subprocess.DEVNULL, "stderr": subprocess.PIPE, "close_fds": True}
+    env = dict(os.environ)
+    # The child is `python -m litcli.browser_broker` and its search path starts at the cwd, but
+    # the command that spawns it runs from wherever the user stands. The package root (in an
+    # install, site-packages; from source, the repo) makes the import independent of both.
+    root = str(Path(__file__).resolve().parent.parent)
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [root, env.get("PYTHONPATH")]))
+    kw: dict = {"stdout": subprocess.DEVNULL, "stderr": subprocess.PIPE, "close_fds": True,
+                "env": env}
     if paths._IS_WINDOWS:
         kw["creationflags"] = _DETACHED_PROCESS | _CREATE_NEW_PROCESS_GROUP
     else:
@@ -1061,10 +1086,7 @@ def _same_profile(spelled, profile) -> bool:
     """
     if spelled in (None, ""):
         return True  # older files carry no field; guessing "different" replaces needlessly
-    try:
-        return Path(spelled).resolve() == Path(profile).resolve()
-    except OSError:
-        return str(spelled) == str(profile)
+    return paths.same_profile(spelled, profile)
 
 
 def _join(info: dict | None, version: int, headless: bool,

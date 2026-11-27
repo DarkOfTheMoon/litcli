@@ -167,6 +167,20 @@ def resolve_browser_profile(value: str | None) -> Path:
     return Path(value).expanduser()
 
 
+def same_profile(a, b) -> bool:
+    """Whether two spellings name one profile directory.
+
+    ``/p/``, ``/p/../p`` and a symlink to ``/p`` are one directory; a string compare would
+    say "different" and spend a running broker -- or skip the warm-up -- over the spelling.
+    A path that cannot be resolved at all (a symlink loop, a directory already removed) falls
+    back to the strings: the caller wants an answer, not an exception.
+    """
+    try:
+        return Path(a).resolve() == Path(b).resolve()
+    except (OSError, RuntimeError):  # RuntimeError: resolve's loop check before 3.13
+        return str(a) == str(b)
+
+
 def browser_session_file() -> Path:
     """Discovery file of a running browser session (endpoint + pid); absent when none runs."""
     return _data_dir() / "browser-session.json"

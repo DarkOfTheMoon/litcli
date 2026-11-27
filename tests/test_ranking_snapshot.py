@@ -44,7 +44,7 @@ class RankingSnapshotTest(unittest.TestCase):
         paths = sorted(FIXTURES.glob("*.json"))
         self.assertEqual(len(paths), 3)
         for path in paths:
-            with open(path) as fh:
+            with open(path, encoding="utf-8") as fh:
                 fixture = json.load(fh)
             self.assertEqual(fixture["floor"], project.DEFAULT_FLOOR)
             # `walk` says which live run a fixture was read from: without it a fixture cannot
@@ -54,7 +54,7 @@ class RankingSnapshotTest(unittest.TestCase):
     def test_every_fixture_keeps_its_verdicts(self):
         for path in sorted(FIXTURES.glob("*.json")):
             with self.subTest(walk=path.stem):
-                with open(path) as fh:
+                with open(path, encoding="utf-8") as fh:
                     fixture = json.load(fh)
                 self.assertTrue(fixture["rows"], "an empty fixture proves nothing")
                 for row in fixture["rows"]:

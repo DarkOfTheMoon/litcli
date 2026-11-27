@@ -223,21 +223,40 @@ ACM（`dl.acm.org`）、APS（`link.aps.org`）、IOPscience（`iopscience.iop.o
 DOAB 的 `/rest` 拒绝无 JS 客户端，所以走它的 Atom feed；DOAB 详情页、Sci-Hub、Z-Library 用可解的工作量证明，
 litcli 在本地做题后复用 cookie，不改写、不绕过。知网与豆瓣的滑块交你在可见浏览器手动完成。
 
-**不想搬 cookie 就走浏览器会话**：装好 Chrome，`litcli browser login sciencedirect`（站点名见 `litcli browser status`）
-在弹出的窗口里机构登录一次，浏览器保持运行（独立于那条命令，关掉该窗口才结束会话，之后按同一 profile 重开）；
-之后 `fetch` 对这些出版社的取全文就走这只活着的浏览器，
-页面与 PDF 都在页内取，凭据不离开浏览器、过期也会自己续。`litcli browser status` 逐站看 `signed in` / `signed out` / `gated` / `no answer`；
+**不想搬 cookie 就走浏览器会话**：装好 Chrome，`litcli browser login sciencedirect`（站点名见 `litcli browser status`），
+在弹出的窗口里机构登录一次。**默认用你自己 Chrome 的 profile**（`[browser].profile` 留空或写 `user`）：登录态本来就在里头，
+`login` 只负责把站点开出来。之后 `fetch` 对这些出版社的取全文也走同一个 profile，页面与 PDF 都在页内取，
+凭据不离开浏览器、过期也会自己续。
+我们的页开在**你的真实会话上**：接上你开着的浏览器时不动你已开着的标签页（每个会话自己开一张），写下的 cookie 落进你平时的 profile。
+你的 Chrome 开着却没有调试口时，命令退 1 并给 `without a debugging port`：关掉它再跑，或改用
+`google-chrome --remote-debugging-port=0` 启动，命令就会**接上它**，不再另开一只。
+别的命令正占着会话时，`login` / `status` 退 2 并说等它用完：一个会话同一时刻只给一件事用。
+`[browser].headless = true` 时我们拉起的是隐藏实例，你自己点图标启动的 Chrome 会被转发进去——窗口不出现，像没启动。
+Chrome 另有一条硬规矩：`--user-data-dir` 指到它自己的默认目录时不开调试口，而你自己的 profile 正是那个目录——
+所以在你自己的 profile 上 `browser login` 开的是**普通窗口**（无调试口，命令只把站点打开、等你按回车）。
+`fetch` / `status` 改在无头里读同一个 profile 的 cookie，登录态照样生效。这条无头路径给拉起的那只浏览器一个私有的
+`XDG_CONFIG_HOME`（在本工具自己的目录下）：它据此认定你 profile 那个路径不再是默认目录，调试口照开，cookie 仍写进你真实的
+profile。目录同样要显式带上 `--user-data-dir=<你的 profile>`——不带的话 Chrome 会自建一个一次性的 `scoped_dir` 打开就丢，
+读到的 cookie 是空的。
+`litcli browser status` 没有会话时先把会话拉起来，开头几行是 `profile` / `source` / `profile_directory` / `mode` /
+`headless` / `leases`，再逐站看 `signed in` / `signed out` / `gated` / `no answer`；
 `gated` 指首屏就是站点的机器人闸，托管挑战本来会自己换页过去，所以判定前先等它过完（等不到就再导航一次），报出的 `gated` 是真过不去。
 它由 `[browser].enabled = true` 打开（默认关闭）；关着时逐字走上面的 cookie 路径，配了 cookie 照样能工作。
 PDF 同样是等页面自己说话：还在挑战页就等（上限五分钟），一旦页面是文档——内联查看器、被送回 `/abs/` 的无权页、登录页——就当场按它判，
 不拿一个固定秒数去猜「没权限」还是「正在下载」。
 浏览器沿用 `[network].proxy`——清关绑出口 IP，两边必须是同一出口。
 同一 profile 上只会有一只浏览器：命令先找在跑的那只接上（连发现文件丢了也认它），
-顺手停掉同 profile 上多出来的实例；由这条命令拉起来的那只在本命令结束时关掉，`login` 打开的留着复用。
+顺手停掉同 profile 上多出来的实例；换了 `[browser].profile` 时，旧 profile 上那只连同它的监督进程先被停掉再起新的。
+命令结束只断开，浏览器（以及替你看着它的那个常驻监督进程）留着给下一条命令复用。
+`litcli browser stop` 才结束会话，关不关浏览器只看是谁的：接在你浏览器上的留着，说 `your Chrome was left running`；
+我们拉起的有窗口的那只也留着，给出 pid 说关掉窗口即结束；我们拉起的无头实例关掉。
+会话没人用满 `[browser].idle_minutes`（默认 10，写 `0` 不按空闲退）也按同一张去向表自行退出。
 这只会话也是**免 key 的 OA 主机**的兜底：有些站（如 MDPI）对任何无 JS 客户端整站回 403，朴素下载失败后自动再走浏览器，
 它是兜底而不是主路，扑空时报的仍是朴素那次的错。无论拿到、没有还是出错，命令结束都把页面归到 `about:blank` 再关会话，
 免得死掉的无权页（和一个 `--pdf-renderer`）留在那里；best-effort 的预签名地址（`X-Amz-Expires`）会额外提示它会几分钟失效。
-所以连着跑调查不会一场堆一只浏览器。
+
+升级后 `[browser].profile` 留空的安装会改用你自己的 Chrome profile，原先专用目录里的登录态随之闲置（不自动搬 cookie）。
+要沿用旧目录就写 `profile = "dedicated"`：那是本工具自己的专用目录，登录态独立于你的 Chrome，`login` 在那里也带调试口、能自己开页。
 
 ## 配置
 

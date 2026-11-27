@@ -7,7 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- 浏览器会话默认改用**你自己的 Chrome profile**（`[browser].profile` 留空或 `user`；`dedicated` 仍指本工具的专用目录）。
+  升级后登录态在你本来就登录过的那个 profile 里，不必再登一次；代价是会话与你自己点开的那只浏览器共处一个 profile——
+  Chrome 不许它的默认目录带调试口，所以在你自己的 profile 上 `browser login` 开普通窗口、`fetch`/`status` 在无头里读同一份
+  cookie。升级时会打一行提示；专用目录里还有登录态、想沿用的写 `profile = "dedicated"`。你自己的 profile 上拉起的
+  浏览器一律无头（可见的 Chrome 在那个目录上不开调试口），`[browser].headless` 只对专用目录起作用。
+- 浏览器会话改为一个常驻 broker 持有：命令结束只断开，浏览器与监督进程留给下一条命令复用，没人用满
+  `[browser].idle_minutes`（默认 10）自动退出。跨进程互杀、同 profile 第二只浏览器的问题随之消失。
+- 无头拉起一律显式命名 profile 目录。不命名时 Chrome 会自建一个一次性的 `scoped_dir` 打开就丢，读到的 cookie 是空的，
+  「登录态明明有却不生效」就出在这里。光命名还不够：Chrome 拒绝在它的默认目录上开调试口，而按 `XDG_CONFIG_HOME`
+  算出来的默认目录正是它——所以拉起的浏览器另给一个私有的 `XDG_CONFIG_HOME`，调试口照开、cookie 仍落在真实 profile。
+  用户自己的 profile 上固定无头，`[browser].headless` 只对专用目录有用。
+- 浏览器挂掉后的自愈先长一点重探再判死，两次都拉不起来时把原因写进回复并以 2 退出——不再让客户端对着死端口
+  报「连不上」；已经算过最坏耗时，等回复的超时与自愈预算对齐。
+- `browser status` 没有会话时先把会话拉起来，开口先打 `profile` / `source` / `profile_directory` / `mode` /
+  `headless` / `leases` 头；结束时只断开，不关浏览器。
+- 别的命令占着会话时 `browser login` / `status` 退 2 并说要等它用完；`fetch` 退 1 并带上那句话，`survey run` 记一行警告。
+- 换了 `[browser].profile` 后旧 profile 的 broker 先被停掉再起新的，不两份并跑。
+- `browser stop` 只结束会话、不顺手救活：窗口早已关掉的那次 stop 不会再弹一个新窗口，直接说
+  `the window was already closed`；pid 也只在它真的还活着时报，不给一个已经不存在的进程号。
+- `browser status` 对 ScienceDirect 以会话 cookie `SD_REMOTEACCESS` 佐证：页面文字像登录了、cookie 不在的，
+  报 `signed out` 而不是替人许诺一个会话。
+- `browser status` 每个站点答完就出一行，不再等整张表（十一个站点这里是十几分钟）才一次性打印。
+- 挑战页自己重载文档造成的 `Navigation … is interrupted by another navigation` 不再算站点错误，
+  按还在挑战处理；`browser status` 整表不再因此出现成片 `error:` 行。
+- broker 子进程带上包根的 `PYTHONPATH`，源码安装下从任何目录运行都能拉起（此前只在仓库根目录可用）。
+- 没有会话的 `browser stop` 退 0 说 `no session`；`survey run` 收尾改用只停没人用的那只（`terminate(force=False)`），
+  并发中的 `fetch` 不会被打断。
+
 ### Added
+
+- `browser stop`：结束会话。接在你自己浏览器上的（`owns = false`）留着；我们拉起的有窗口的那只也留着并给出 pid；
+  只有我们拉起的无头实例被关掉。空闲退出按同一张去向表。
+- 客户端每次会话自己开一张页，不再共用第一张：接上用户的浏览器时不动他们正开着的标签页。
+- 已登录 profile 上撞到托管挑战时，回站点根预热一次再重试。
 
 - 开局种子的题目覆盖提醒：种子跳过年份与地板，整轮走查从它们的参考文献长出来，偏题的种子此前无声无息。`survey new`
   现在按题目的腿算每颗种子的覆盖，最强的一颗连两腿都带不上（低于证据地板）时打一行 `[warn]` 并列出种子；种子

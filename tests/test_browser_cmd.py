@@ -64,6 +64,7 @@ class StopTest(_WithDataHome):
         _state(owns=True, headless=True, pid=99)
         with mock.patch.object(cmd.broker, "connect",
                                return_value=FakeLease(owns=True, browser_pid=4242)), \
+                mock.patch.object(cmd.broker, "_pid_alive", return_value=True), \
                 mock.patch.object(cmd.broker, "shutdown") as down, \
                 mock.patch("builtins.print") as printed:
             self.assertEqual(cmd.cmd_browser_stop({}, mock.Mock()), 0)
@@ -76,12 +77,62 @@ class StopTest(_WithDataHome):
         _state(owns=True, headless=False, pid=99)
         with mock.patch.object(cmd.broker, "connect",
                                return_value=FakeLease(owns=True, browser_pid=4242)), \
+                mock.patch.object(cmd.broker, "_pid_alive", return_value=True), \
                 mock.patch.object(cmd.broker, "shutdown"), \
                 mock.patch("builtins.print") as printed:
             self.assertEqual(cmd.cmd_browser_stop({}, mock.Mock()), 0)
         out = " ".join(str(c.args[0]) for c in printed.call_args_list if c.args)
         self.assertIn("close the window to end it", out)
         self.assertIn("(pid 4242)", out)
+
+    def test_a_headless_browser_that_already_died_is_stopped_without_a_pid(self):
+        # The state file still names the pid the browser had; printing it after it is gone
+        # sends the reader looking for a process that no longer exists.
+        _state(owns=True, headless=True, pid=99)
+        with mock.patch.object(cmd.broker, "connect",
+                               return_value=FakeLease(owns=True, browser_pid=4242)), \
+                mock.patch.object(cmd.broker, "shutdown"), \
+                mock.patch.object(cmd.broker, "_pid_alive", return_value=False), \
+                mock.patch("builtins.print") as printed:
+            self.assertEqual(cmd.cmd_browser_stop({}, mock.Mock()), 0)
+        out = " ".join(str(c.args[0]) for c in printed.call_args_list if c.args)
+        self.assertIn("stopped", out)
+        self.assertNotIn("pid", out)
+
+    def test_a_window_that_already_closed_is_reported_as_closed(self):
+        _state(owns=True, headless=False, pid=99)
+        with mock.patch.object(cmd.broker, "connect",
+                               return_value=FakeLease(owns=True, browser_pid=4242)) as joined, \
+                mock.patch.object(cmd.broker, "shutdown"), \
+                mock.patch.object(cmd.broker, "_pid_alive", return_value=False), \
+                mock.patch("builtins.print") as printed:
+            self.assertEqual(cmd.cmd_browser_stop({}, mock.Mock()), 0)
+        out = " ".join(str(c.args[0]) for c in printed.call_args_list if c.args)
+        self.assertIn("already closed", out)
+        self.assertNotIn("pid", out)
+        # Stop ends the session, so the hello must not heal: a heal would open a fresh window
+        # for the stop to close again, and the pid it printed would be the new one's.
+        self.assertIs(joined.call_args.kwargs["heal"], False)
+
+    def test_the_pid_is_sampled_before_the_shutdown_that_kills_it(self):
+        # The forced shutdown is what kills a headless browser. A sample taken after it is a
+        # corpse: on Linux it reads "alive" only until the broker reaps it (a zombie), on
+        # Windows straight away -- the same command would print a pid on one and not the other.
+        _state(owns=True, headless=True, pid=99)
+        killed = {"yet": False}
+
+        def shutdown(*_a, **_kw):
+            killed["yet"] = True
+
+        with mock.patch.object(cmd.broker, "connect",
+                               return_value=FakeLease(owns=True, browser_pid=4242)), \
+                mock.patch.object(cmd.broker, "shutdown", side_effect=shutdown), \
+                mock.patch.object(cmd.broker, "_pid_alive",
+                                  side_effect=lambda _pid: not killed["yet"]), \
+                mock.patch("builtins.print") as printed:
+            self.assertEqual(cmd.cmd_browser_stop({}, mock.Mock()), 0)
+        out = " ".join(str(c.args[0]) for c in printed.call_args_list if c.args)
+        self.assertIn("stopped (pid 4242)", out)
 
     def test_a_stale_file_is_no_session(self):
         _state(control_port=1)
@@ -310,6 +361,49 @@ class LoginTest(_WithDataHome):
         self.assertIn("gated", out)
         self.assertIn("signed in", out)
 
+    def test_a_row_is_printed_before_the_next_site_is_probed(self):
+        # Eleven sites cost minutes: waiting for the whole table means a status that shows
+        # nothing for that long. Each row goes out as its answer lands.
+        self.session.queue = [(200, '<meta name="citation_title" content="A paper">')] * len(cmd.SITES)
+        self.session.jar = [{"name": "SD_REMOTEACCESS"}]
+        printed_rows: list = []
+        real = cmd._probe
+
+        def probe(session, site, url):
+            # What the caller could already read at the moment this site is asked.
+            printed_rows.append([str(c.args[0]) for c in printed.call_args_list
+                                 if c.args and "  " in str(c.args[0])])
+            return real(session, site, url)
+
+        with mock.patch.object(cmd, "_probe", side_effect=probe), \
+                mock.patch("builtins.print") as printed:
+            self.assertEqual(cmd.cmd_browser_status({}, mock.Mock(site=None)), 0)
+        # Before the second site was probed, the first site's row was already out.
+        self.assertEqual(len(printed_rows[1]), 1)
+        self.assertTrue(printed_rows[1][0].startswith("sciencedirect "))
+
+    def test_science_direct_is_not_signed_in_without_its_session_cookie(self):
+        # The root page renders a fallback that the text classifier can read as signed in;
+        # SD_REMOTEACCESS is what a signed-in visit leaves, and the design names it as the
+        # evidence. Without it the row must not promise a session.
+        self.session.queue = [(200, '<meta name="citation_title" content="A paper">')] * len(cmd.SITES)
+        self.session.jar = []
+        with mock.patch("builtins.print") as printed:
+            cmd.cmd_browser_status({}, mock.Mock(site=None))
+        rows = [str(c.args[0]) for c in printed.call_args_list
+                if c.args and "  " in str(c.args[0])]
+        self.assertIn("sciencedirect  signed out", next(r for r in rows if r.startswith("sciencedirect ")))
+
+    def test_the_session_cookie_keeps_the_science_direct_row_signed_in(self):
+        self.session.queue = [(200, '<meta name="citation_title" content="A paper">')] * len(cmd.SITES)
+        self.session.jar = [{"name": "SD_REMOTEACCESS"}]
+        with mock.patch("builtins.print") as printed:
+            cmd.cmd_browser_status({}, mock.Mock(site=None))
+        rows = [str(c.args[0]) for c in printed.call_args_list
+                if c.args and "  " in str(c.args[0])]
+        self.assertIn("sciencedirect  signed in", next(r for r in rows if r.startswith("sciencedirect ")))
+        self.assertEqual(self.session.cookie_asks, [cmd.SITES["sciencedirect"]])
+
     def test_a_site_that_does_not_answer_stays_one_line(self):
         # A dead site answers with a Playwright error carrying a multi-line call log; dropped
         # into the table raw it splits the row. A timeout is also not a site refusal: it gets
@@ -333,6 +427,7 @@ class LoginTest(_WithDataHome):
     def test_a_site_that_times_out_once_is_probed_again(self):
         # A slow site is not a refusal; one second chance separates the two.
         from litcli.browser import PlaywrightTimeoutError
+        self.session.jar = [{"name": "SD_REMOTEACCESS"}]   # the first row is sciencedirect
         self.session.queue = [(PlaywrightTimeoutError("Page.goto: Timeout 30000ms exceeded.")),
                               (200, '<meta name="citation_title" content="A paper">')]
         with mock.patch("builtins.print") as printed:
@@ -374,6 +469,13 @@ class OwnProfileTest(unittest.TestCase):
         self.assertTrue(cmd._targets_the_users_own_profile({"browser": {"profile": ""}}))
         self.assertTrue(cmd._targets_the_users_own_profile({"browser": {"profile": "user"}}))
 
+    def test_a_spelling_of_their_directory_still_means_it(self):
+        # `..` (and a trailing slash) survive `Path`; comparing the strings would send a
+        # login for `/x/../x` down the headless path, where no window opens.
+        own = paths.user_browser_profile_dir()
+        spelled = str(own / ".." / own.name)
+        self.assertTrue(cmd._targets_the_users_own_profile({"browser": {"profile": spelled}}))
+
     def test_another_directory_does_not(self):
         self.assertFalse(cmd._targets_the_users_own_profile({"browser": {"profile": "dedicated"}}))
         self.assertFalse(cmd._targets_the_users_own_profile({"browser": {"profile": "/tmp/x"}}))
@@ -401,6 +503,6 @@ class WindowTest(unittest.TestCase):
                                   return_value=Path("/u")) as own, \
                 mock.patch.object(cmd.subprocess, "Popen") as popen:
             cmd._open_window({}, "https://x/")
-        self.assertIn("--user-data-dir=/u", popen.call_args.args[0])
+        self.assertIn(f"--user-data-dir={Path('/u')}", popen.call_args.args[0])
         self.assertIn("--no-sandbox", popen.call_args.args[0])
         own.assert_called()

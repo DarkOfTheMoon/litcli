@@ -139,12 +139,18 @@ class FakeRuntime:
         self.pages = [FakePage(self.queue)]   # the tab that existed before the session
         self.page = self.pages[0]
         self.request = FakeRequest()
+        self.jar: list[dict] = []
+        self.cookie_asks: list = []
         self.closed = False
         self.terminated = False
 
     @property
     def context(self):
         return self
+
+    def cookies(self, urls=None):
+        self.cookie_asks.append(urls)
+        return list(self.jar)
 
     def new_page(self):
         self.page = FakePage(self.queue)
@@ -229,6 +235,8 @@ class FakeSession:
         self.terminated = False
         self.started = False
         self.mode = "launched"
+        self.jar: list[dict] = []   # cookie dicts the site jar would hold
+        self.cookie_asks: list = []
         self._lease = FakeLease(owns=True)
 
     def start(self):
@@ -237,6 +245,10 @@ class FakeSession:
     def page(self, url):
         self.urls.append(url)
         return FakePage(self.queue).goto(url)
+
+    def cookies(self, url):
+        self.cookie_asks.append(url)
+        return list(self.jar)
 
     def download(self, url):
         self.urls.append(url)

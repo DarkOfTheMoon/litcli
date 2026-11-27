@@ -207,6 +207,10 @@ def _goto_allowing_download(page, url: str, **kw):
             return _DOWNLOAD_STARTED
         if "ERR_ABORTED" in message:
             return None
+        # A challenge under this address reloads its own document; that is the gate being
+        # worked on, and the request context still gets the file once the wait is over.
+        if "interrupted by another navigation" in message:
+            return None
         raise
 
 
@@ -315,7 +319,8 @@ class Session:
                              "stop` to replace it")
         self._lease = lease
         self._user_profile = (self._profile_source == "default"
-                              or self._profile == paths.user_browser_profile_dir())
+                              or paths.same_profile(self._profile,
+                                                    paths.user_browser_profile_dir()))
 
     def _new_lease(self) -> browser_broker.Lease:
         if self._lease_factory is not None:
@@ -445,6 +450,12 @@ class Session:
         except PlaywrightError as e:
             raise BrowserUnavailable(f"the browser session went away: {e}") from e
 
+    def cookies(self, url: str) -> list[dict]:
+        """The cookies the browser holds for ``url`` -- a signed-in visit's evidence."""
+        if self._runtime is None:
+            return []
+        return self._runtime.context.cookies([url])
+
     def page(self, url: str) -> PageResponse:
         """Navigate and hand back the answer (one rebind-and-retry when the browser left).
 
@@ -520,7 +531,9 @@ class Session:
         except PlaywrightTimeoutError:
             return None
         except PlaywrightError as e:
-            if "ERR_ABORTED" not in str(e):
+            # A challenge reloads its own document over the navigation; that is the exchange
+            # in progress, and the settle loop reads whatever document is in hand after it.
+            if "ERR_ABORTED" not in str(e) and "interrupted by another navigation" not in str(e):
                 raise
             return None
 

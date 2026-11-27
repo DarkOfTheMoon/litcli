@@ -82,7 +82,7 @@ class SessionFromConfigTest(unittest.TestCase):
         cfg = {"browser": {"enabled": True, "profile": "~/elsewhere"}}
         with mock.patch("shutil.which", return_value="/usr/bin/google-chrome"):
             session = session_from_config(cfg)
-        self.assertEqual(str(session._profile), os.path.expanduser("~/elsewhere"))
+        self.assertEqual(session._profile, Path("~/elsewhere").expanduser())
 
     def test_the_idle_minutes_reach_the_broker(self):
         # The idle exit takes its delay from the config, the same way as the profile: an
@@ -104,6 +104,27 @@ class SessionFromConfigTest(unittest.TestCase):
         with mock.patch("shutil.which", return_value=None):
             session = session_from_config({"browser": {"enabled": True}})
         self.assertIsNone(session._channel)
+
+
+class SameProfileTest(unittest.TestCase):
+    """One directory, however it is spelled: the three callers must agree on "theirs"."""
+
+    def test_spellings_of_one_directory_compare_equal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            real = Path(tmp) / "p"
+            real.mkdir()
+            self.assertTrue(paths.same_profile(real / ".." / "p", real))
+            self.assertTrue(paths.same_profile(str(real) + "/", real))
+            self.assertFalse(paths.same_profile(real, Path(tmp) / "other"))
+
+    def test_a_symlink_loop_still_answers(self):
+        # `resolve()` gives up on a loop (RuntimeError before 3.13, OSError after); the
+        # caller's question still has an answer, so the strings decide instead of the crash.
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "a").symlink_to("b")
+            Path(tmp, "b").symlink_to("a")
+            self.assertTrue(paths.same_profile(Path(tmp, "a"), str(Path(tmp, "a"))))
+            self.assertFalse(paths.same_profile(Path(tmp, "a"), Path(tmp, "b")))
 
 
 class SessionAttachedTest(unittest.TestCase):

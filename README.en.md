@@ -270,12 +270,31 @@ cleared by `TS*` cookies) — and an unentitled session's PDF endpoint redirects
 one DOI at a time, at low frequency.
 
 **Rather than copying cookies, use the browser session**: with Chrome installed, run
-`litcli browser login sciencedirect` (see `litcli browser status` for the site names), sign in
-institutionally once in the window that opens, and leave the browser up — it outlives the
-command, and closing that window ends the session (relaunching reuses the same profile).
-`fetch` then pulls these publishers' fulltext through that live browser, taking both page and PDF in-page — the
-credentials never leave the browser and renew themselves. `litcli browser status` reports each
-site as `signed in` / `signed out` / `gated` / `no answer`. `gated` means the first paint was
+`litcli browser login sciencedirect` (see `litcli browser status` for the site names) and sign
+in institutionally once in the window that opens. **Your own Chrome profile is the default**
+(`[browser].profile` empty or `user`): the sign-ins are already in it, and `login` only opens
+the site. `fetch` then pulls these publishers' fulltext through the same profile, taking both
+page and PDF in-page — the credentials never leave the browser and renew themselves.
+The pages open on **your real session**: when it attaches to a browser you have open, your
+tabs stay where they are (each session gets a tab of its own) and the cookies it earns land in
+your everyday profile. If your Chrome is open without a debugging port, the command exits 1
+with `without a debugging port`: close it and rerun, or start it with
+`google-chrome --remote-debugging-port=0` and the command attaches to it instead of opening
+another. While another command holds the session, `login` / `status` exit 2 and say to wait:
+one session serves one thing at a time. With `[browser].headless = true` the browser we launch is hidden, and a Chrome you
+start from the icon is forwarded into it — no window appears, and it looks like nothing
+started. Chrome has one hard rule on top: it opens no debugging port while `--user-data-dir`
+names its own default directory, which is exactly what your profile is — so on your own
+profile `browser login` opens a **plain window** (no debugging port; the command opens the
+site and waits for Enter). `fetch` / `status` read that profile's cookies in a headless
+browser instead, where the sign-ins still apply. That headless launch gives the browser a
+private `XDG_CONFIG_HOME` (under litcli's own directory), so your profile stops being its
+default directory and the port opens — the cookies still go into the real profile. It also
+spells out `--user-data-dir=<your profile>`: left to choose, Chrome opens a throwaway
+`scoped_dir`, throws it away, and the cookie store it reads is empty.
+`litcli browser status` raises the session first when none runs, prints `profile` / `source` /
+`profile_directory` / `mode` / `headless` / `leases` as a header, then reports each site as
+`signed in` / `signed out` / `gated` / `no answer`. `gated` means the first paint was
 the site's bot gate; a managed challenge swaps itself out, so it is waited out (and given one
 more navigation) before the site is judged — a `gated` row is one the session really does not
 get through. It is switched on by `[browser].enabled = true`
@@ -286,15 +305,25 @@ PDFs are judged by the page rather than by a clock: a page still showing the cha
 waited out (up to five minutes), and the moment it is a document — an inline viewer, a page
 redirected back to `/abs/`, a sign-in page — the wait stops and that page is the answer.
 Only one browser per profile ever runs: a command attaches to the one already up (finding it
-through `/proc` even when its discovery file was lost) and stops any duplicate on the profile,
-and one it launched itself is stopped when the command ends — the one `login` left up is reused.
-Back-to-back survey runs therefore do not pile up one browser each.
+through `/proc` even when its discovery file was lost) and stops any duplicate on the profile;
+when `[browser].profile` changes, the old profile's browser and its supervisor are stopped
+first and the new one is started. The command then only disconnects — the browser, and the resident supervisor process watching
+it, stay for the next command. `litcli browser stop` is what ends the session, and whether the
+browser goes depends only on whose it is: one attached to yours is kept (`your Chrome was left
+running`); one we launched with a window is kept too, its pid named and the window pointed at
+as the way to end it; a headless instance we launched is stopped. An idle session does the
+same after `[browser].idle_minutes` (10 by default, `0` never idles out).
 That session is also the fallback for **keyless open-access hosts**: some sites (MDPI, for one)
 answer 403 to every client without JS site-wide, so a failed plain download is retried through
 the browser. It is a fallback, not the main road — when it fails too, the plain failure is what
 gets reported. Either way the command ends the same: every page is parked on `about:blank` and
 the session is closed, so no dead unentitled tab (and no `--pdf-renderer`) is left behind; a
 presigned asset address (`X-Amz-Expires`) also gets a note that it lapses within minutes.
+
+After the upgrade an installation with no `[browser].profile` moves to your own Chrome profile,
+and the sign-ins in the old dedicated directory go idle (cookies are not copied over). To stay
+on the old directory, set `profile = "dedicated"`: that is this tool's own directory, separate
+from your Chrome — and there `login` does carry a debugging port and drives the page itself.
 
 ## Configuration
 

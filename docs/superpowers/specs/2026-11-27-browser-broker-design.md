@@ -224,6 +224,11 @@ broker 是**监督者**而不是代理：它负责拉起、持有、公布、空
     notice 且它指出 `profile = "dedicated"`；设了该键后不再打。
 18. `browser stop` 的三种去向各一例，且都查进程：接的（`owns = false`）→ 他们的 pid 仍活；我们拉起的有头
     → pid 仍活且输出里有那个 pid；无头 → pid 消失。空闲退出同样不许杀前两种。
+19. 冻结构建的启动形状（`litcli -m litcli.browser_broker`，不带 `python -m`）能起 broker，拉起的浏览器 argv
+    带着它拿到的那条 `--user-data-dir`；默认 profile 上无头启动在**`XDG_CONFIG_HOME` 未设**与**已设**两个信封下
+    都拿到调试口、都读到已登录 cookie、都不落一次性 `scoped_dir`，且子进程拿到私有的 `XDG_CONFIG_HOME`。
+20. 拿到 broker 后把 `[browser].profile` 改到另一个目录：上一条命令自己拉起时先退役旧 broker，新的 profile
+    被服务，旧 broker 的进程消失（不许两只并存、不许把新命令接到旧 profile 上）。
 
 ## 最可能做错的几步
 

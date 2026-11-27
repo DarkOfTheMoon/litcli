@@ -72,13 +72,26 @@ class BrokerTest(unittest.TestCase):
         paths.browser_session_file().parent.mkdir(parents=True, exist_ok=True)
 
     def test_hello_answers_the_cdp_port_and_becomes_a_lease(self):
+        # The connection is kept, not closed like `_line` does: the lease ends with the socket,
+        # and a closed one may already be gone by the time the count is read.
+        b, port = _serve()
+        try:
+            s = _hold(port)
+            try:
+                self.assertEqual(b.leases, 1)
+            finally:
+                s.close()
+        finally:
+            b.stop()
+        # _hold's answer is the same reply `connect` reads; its fields are covered next.
+
+    def test_the_hello_reply_carries_the_port_and_ownership(self):
         b, port = _serve()
         try:
             answer = _line(port, {"cmd": "hello", "version": bb.PROTOCOL_VERSION,
                                   "headless": True, "pid": 1})
             self.assertEqual(answer["cdp_port"], 41_000)
             self.assertTrue(answer["owns"])
-            self.assertEqual(b.leases, 1)
         finally:
             b.stop()
 
@@ -327,6 +340,75 @@ class BrokerTest(unittest.TestCase):
         # heal would time out and the broker would be replaced under its own clients.
         self.assertEqual(bb.status.__kwdefaults__["timeout"], bb._HELLO_TIMEOUT)
 
+    def test_a_hello_can_skip_the_heal(self):
+        # `browser stop` is about to end this session. Healing first would relaunch a browser
+        # the user has just closed -- a window popping up during a stop -- only for the stop to
+        # take it down again; the stale pid it reports is the fact stop wants. The backend here
+        # can be called once, so a heal would be a second call and blow up.
+        backend = _backend_from(bb.Backend(41_000, True, None, 4242))
+        b, port = _serve(backend=backend, idle_minutes=0)
+        try:
+            with mock.patch.object(bb, "cdp_ready", return_value=False):
+                lease = bb.connect(port, headless=True, heal=False)
+                try:
+                    self.assertEqual(lease.browser_pid, 4242)
+                finally:
+                    lease.close()
+        finally:
+            b.stop()
+
+    def test_a_heal_that_stays_busy_answers_with_the_busy_sentence(self):
+        # Both attempts finding the profile held is not the same as a dead browser: the client
+        # should hear the sentence that says what to do (close Chrome, or restart it with a
+        # debugging port), not the generic "gone".
+        busy = "your Chrome is already running on this profile without a debugging port"
+        backend = _backend_from(bb.Backend(41_002, True, None),
+                                bb.ProfileBusy(busy), bb.ProfileBusy(busy))
+        b, port = _serve(backend=backend, idle_minutes=0)
+        try:
+            with mock.patch.object(bb, "cdp_ready", return_value=False), \
+                    mock.patch.object(bb, "_HOLD_SETTLE", 0.05), \
+                    mock.patch.object(bb.sys, "stderr", io.StringIO()), \
+                    self.assertRaises(bb.BrokerUnavailable) as caught:
+                bb.status(port)
+        finally:
+            b.stop()
+        self.assertIn("without a debugging port", str(caught.exception))
+
+    def test_a_busy_sentence_is_printed_once_not_twice(self):
+        # Both the non-quiet attempt and the close-out print it today; the broker's stderr is
+        # only read while it is attached, and the same line twice reads like two problems.
+        busy = "your Chrome is already running on this profile without a debugging port"
+        backend = _backend_from(bb.Backend(41_002, True, None), bb.ProfileBusy(busy),
+                                bb.ProfileBusy(busy))
+        b, port = _serve(backend=backend, idle_minutes=0)
+        said = io.StringIO()
+        try:
+            with mock.patch.object(bb, "cdp_ready", return_value=False), \
+                    mock.patch.object(bb, "_HOLD_SETTLE", 0.05), \
+                    mock.patch.object(bb.sys, "stderr", said), \
+                    self.assertRaises(bb.BrokerUnavailable):
+                bb.status(port)
+        finally:
+            b.stop()
+        self.assertEqual(said.getvalue().count(busy), 1)
+
+    def test_an_empty_busy_reason_is_still_a_refusal(self):
+        # `_error_of` reads an empty string as "no error", so an empty reason would answer a
+        # dict without a port and the client would die on the missing key instead.
+        backend = _backend_from(bb.Backend(41_002, True, None), bb.ProfileBusy(""),
+                                bb.ProfileBusy(""))
+        b, port = _serve(backend=backend, idle_minutes=0)
+        try:
+            with mock.patch.object(bb, "cdp_ready", return_value=False), \
+                    mock.patch.object(bb, "_HOLD_SETTLE", 0.05), \
+                    mock.patch.object(bb.sys, "stderr", io.StringIO()), \
+                    self.assertRaises(bb.BrokerUnavailable) as caught:
+                bb.connect(port, headless=True)
+        finally:
+            b.stop()
+        self.assertIn("the browser is gone", str(caught.exception))
+
     def test_a_failed_heal_answers_with_its_reason(self):
         # The broker leaves after a failed heal; without the reason on the reply the client
         # attaches to the port of the browser that is gone and reports only that.
@@ -359,7 +441,8 @@ class LifecycleTest(BrokerTest):
             self.assertEqual(info["leases"], 0)
             self.assertFalse(info["pinned"])
             self.assertEqual(info["pid"], os.getpid())
-            self.assertEqual(paths.browser_session_file().stat().st_mode & 0o777, 0o600)
+            if not paths._IS_WINDOWS:  # Windows has no POSIX bits; it reports 0o666 either way
+                self.assertEqual(paths.browser_session_file().stat().st_mode & 0o777, 0o600)
         finally:
             b.stop()
 
@@ -476,6 +559,7 @@ class PrepareTest(BrokerTest):
         (paths.browser_profile_dir() / "DevToolsActivePort").write_text("5555\n/x\n")
         with mock.patch.object(bb, "cdp_ready", return_value=False), \
                 mock.patch.object(bb, "profile_holder", return_value=None), \
+                mock.patch.object(bb, "_binary", return_value=("/bin/true", False)), \
                 mock.patch.object(bb, "_launch_detached",
                                   return_value=bb.BrowserRuntime(7123, None)) as launch:
             bb.prepare(paths.browser_profile_dir(), True, None, None, None)
@@ -501,6 +585,7 @@ class PrepareTest(BrokerTest):
         with mock.patch.object(bb, "live_port", return_value=None), \
                 mock.patch.object(bb, "profile_holder", side_effect=holder), \
                 mock.patch.object(bb, "_reap"), \
+                mock.patch.object(bb, "_binary", return_value=("/bin/true", False)), \
                 mock.patch.object(bb, "_launch_detached",
                                   return_value=bb.BrowserRuntime(7123, None)) as launch:
             bb.prepare(paths.browser_profile_dir(), True, None, None, None)
@@ -534,7 +619,7 @@ class PrepareTest(BrokerTest):
                 mock.patch.object(bb, "cdp_ready", return_value=True), \
                 mock.patch.object(bb, "_attach_engine", return_value=(object(), None)):
             bb._launch_detached("/bin/true", Path("/tmp/some-profile"), True, None, "Default")
-        self.assertIn("--user-data-dir=/tmp/some-profile", popen.call_args.args[0])
+        self.assertIn(f"--user-data-dir={Path('/tmp/some-profile')}", popen.call_args.args[0])
 
     def test_the_users_own_profile_child_gets_a_private_config_home(self):
         # Naming the default directory is not enough: Chrome refuses a debugging port while
@@ -578,6 +663,24 @@ class PrepareTest(BrokerTest):
                 self.assertRaises(bb.BrowserUnavailable):
             bb._launch_detached("/bin/true", paths.browser_profile_dir(), True, None, None)
         kill.assert_called_once_with(4242, bb._KILL)
+
+    def test_the_broker_child_can_import_the_package_from_any_directory(self):
+        # `./bin/litcli` is run from wherever the user stands, and the child is
+        # `python -m litcli.browser_broker`: its search path starts at the cwd. Without the
+        # package root handed to it, a command run from another directory spawns a broker
+        # that dies on the import before serving one call.
+        before = os.getcwd()
+        with tempfile.TemporaryDirectory() as elsewhere:
+            os.chdir(elsewhere)
+            try:
+                # An inherited PYTHONPATH would smuggle the root in and hide the defect;
+                # emptied, only what `_spawn_broker` hands the child can make the import work.
+                with mock.patch.dict(os.environ, {"PYTHONPATH": ""}):
+                    proc = bb._spawn_broker(
+                        [sys.executable, "-m", "litcli.browser_broker", "--help"])
+                    self.assertEqual(proc.wait(timeout=60), 0)
+            finally:
+                os.chdir(before)   # the temporary directory is gone by the time it would exit
 
     def test_the_channel_and_proxy_reach_prepare(self):
         # `[browser].channel` and `[network].proxy` are parsed by main() and handed on; dropping
