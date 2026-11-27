@@ -201,6 +201,21 @@ class StatusStopTest(unittest.TestCase):
         self.assertEqual(report["last_stop"], "saturated")
         self.assertEqual(report["status"], "done")
 
+    def test_the_stop_margin_is_reported_and_shown_by_why(self):
+        # "saturated" alone cannot be checked: the same word covers "the pool dried up" and
+        # "the streak ran out with work still queued", and only the second is a reason to
+        # raise the effort.
+        project.append_trace(self.project, {"event": "stop", "reason": "saturated",
+                                            "admitted": 3, "frontier": 4,
+                                            "best_evidence": 0.31, "floor": 0.2})
+        _code, out, _err = self.run_cmd("status")
+        report = json.loads(out)
+        self.assertEqual((report["last_stop_frontier"], report["last_stop_evidence"]),
+                         (4, 0.31))
+        _code, why, _err = self.run_cmd("status", "--why")
+        self.assertIn("unexpanded: 4", why)
+        self.assertIn("0.31", why)
+
     def test_an_unknown_project_is_an_error(self):
         parser = argparse.ArgumentParser()
         sub = parser.add_subparsers(dest="survey_cmd")

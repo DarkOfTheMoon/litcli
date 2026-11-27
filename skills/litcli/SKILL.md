@@ -44,7 +44,7 @@ description: 用 litcli 与用户的学术资料互操作——检索、读取�
 | 列后端 | `litcli backends list`（能力）· `litcli backends status`（授权/可达） | 只读 |
 | 课题调查 | `litcli survey new "课题" [--seed DOI …] [--year A-B] [--type T] [--container 刊名] [--effort 档]` 建项目并打印项目名；种子与约束落 `project.toml`，不给 `--seed` 则先检索取前 3 条 | **建项目** |
 | 课题续跑 | `litcli survey run <项目> [--effort 档] [--format jsonl\|md]` 沿引文图谱一跳一跳收网，每跳落检查点；stdout 是 JSONL 事件（`--format md` 换成按跳的表格），加到目标即续跑同一条命令 | 写 corpus |
-| 课题状态 | `litcli survey status <项目>` 一行 JSON：课题/状态/地板/种子及其题目覆盖/跳数/准入数/最后停因/剩余额度；`--why` 换成文本审计视图（种子逐颗标 weak、最后一跳的候选按证据从高到低带理由） | 只读 |
+| 课题状态 | `litcli survey status <项目>` 一行 JSON：课题/状态/地板/种子及其题目覆盖/跳数/准入数/最后停因（连同留下的未展开数 `last_stop_frontier` 与最好证据 `last_stop_evidence`）/剩余额度；`--why` 换成文本审计视图（种子逐颗标 weak、最后一跳的候选按证据从高到低带理由，`admit`/`expand`/`refuse` 三态） | 只读 |
 | 课题停止 | `litcli survey stop <项目>` 写 `$.stop`，循环在下一个跳边界收尾；已停再停退 0 | 只读 |
 | 订阅会话 | `litcli browser login <站点>` 在弹出的窗口里机构登录一次（浏览器独立运行、跨命令复用，之后无需搬 cookie；关窗口即结束）；`litcli browser status` 看各站是 signed in / signed out / gated / no answer（`gated` 是等挑战页自己过完、再导航一次后的结论，报出来就是真过不去） | 只读 |
 | 失败明细 | `litcli --verbose <命令>`：检索里哪个来源、什么原因失败（默认静默，只写 stderr） | 只读 |
@@ -61,8 +61,8 @@ description: 用 litcli 与用户的学术资料互操作——检索、读取�
 
 一个课题是一个目录：`project.toml`（课题、种子、约束、证据地板、档位）+ `seen.jsonl`（每条候选的分数分量与收/不收的理由）+ `trace.jsonl`（每步：扩展了谁、花了多少、余额、停因）+ `corpus/`（收下的文件与元数据）。全部追加式，可 grep、可 diff。
 
-- **档位决定走多宽，不决定收多少条**：热的题自己走到额度或饱和，冷的题几跳没动静就自己停。`--effort low|medium|high|max`（默认 medium）：前沿/跳 4/8/16/24、准入/跳 2/5/8/12、邻居/条 10/20/30/50 等三个方向、连续无新高 2/3/4/6 跳即停、最长 6/20/50/120 跳。额度按请求计，命中缓存不扣、重试照扣。
-- **停止是正常收尾**：`stop` 事件分别报 `saturated`（饱和）/ `budget`（发现来源额度用尽）/ `max_hops` / `stopped` / `interrupted`（SIGINT，状态可续）。续跑就是再跑一次 `run`：已展开过的条目不再展开。中断按两下算：第一下（Ctrl-C 与 SIGTERM 同等）结束当前跳、留下可续跑的检查点，第二下才真正中止：在手的副本记 `error:interrupted`（续跑不再为它重复付费）、未展开的行留在前沿、状态落成 `stopped`，进程按 128+信号值退出（Ctrl-C 130、SIGTERM 143）。
+- **档位决定走多宽，不决定收多少条**：热的题自己走到额度或饱和，冷的题几跳没动静就自己停。`--effort low|medium|high|max`（默认 medium）：前沿/跳 4/8/16/24、准入/跳 2/5/8/12、邻居/条 10/20/30/50 等三个方向、连续无准入 2/3/4/6 跳即停、最长 6/20/50/120 跳。被准入上限挤掉但过了地板的行仍留在前沿作扩展起点（不进集合、不下载），所以「饱和」只该来自池子真干或连续无准入，`stop` 事件里的 `frontier` 与 `best_evidence` 就是这两个数的实底。额度按请求计，命中缓存不扣、重试照扣。
+- **停止是正常收尾**：`stop` 事件分别报 `saturated`（池子真干或连续无准入）/ `budget`（发现来源额度用尽）/ `max_hops` / `stopped` / `interrupted`（SIGINT，状态可续）。续跑就是再跑一次 `run`：已展开过的条目不再展开。中断按两下算：第一下（Ctrl-C 与 SIGTERM 同等）结束当前跳、留下可续跑的检查点，第二下才真正中止：在手的副本记 `error:interrupted`（续跑不再为它重复付费）、未展开的行留在前沿、状态落成 `stopped`，进程按 128+信号值退出（Ctrl-C 130、SIGTERM 143）。
 - **出错的一跳不算空跳**：扩展报错（429 突发、返回的不是 JSON）时该条目不记作已展开、下一跳重试，也不消耗饱和计数的干步；限速/不可达的条目一直重试（受 `[backends.arxiv]`/`[backends.openalex]` 的 `retries` 与最高跳数约束），图里查不到的条目（404）重试一次后记入 `abandoned` 不再花跳。
 - **一个项目同时只允许一个 `run`**（存在 `$.lock` 即退 2，先 `survey stop` 或确认进程已死再删锁）。
 - **开局种子偏题会先说一句**：种子跳过年份与地板、整轮走查从它们的参考文献长出来，一颗偏题的种子能把后面几跳全带走；`survey new` 在看到最强种子连问句的两腿都带不上（覆盖低于地板）时打 `[warn]` 并列出种子，`survey status` 里每颗种子也带覆盖与 `weak` 标记。

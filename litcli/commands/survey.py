@@ -624,7 +624,16 @@ def _consumed(trace: list[dict]) -> set[str]:
 
 
 def _frontier(seen_rows: list[dict], trace: list[dict]) -> tuple[list[dict], set[str]]:
-    """Admitted works never expanded, one row per identity, and everything already consumed.
+    """Works never expanded that the walk may still look from, one row per identity, and
+    everything already consumed.
+
+    Two kinds of row earn a place: an admitted work (it enters the collection, and its
+    bibliography is where the walk goes next) and a row the cap demoted although it cleared the
+    floor (it is out of the collection, but it is on the question and still worth looking
+    from — see the ``expand`` mark below). A row refused *below* the floor stays out of both.
+    Letting only admitted rows feed the frontier is what used to drain it: ``admit`` is below
+    ``frontier`` at every level, so a hop handed out fewer rows than it took and the walk
+    "saturated" after a handful of works on a question with plenty more.
 
     An identity gets several admitted rows over its life — the download pass writes the row
     back to record the copy — so the first row is kept and the rest are the same work. Handing
@@ -634,7 +643,7 @@ def _frontier(seen_rows: list[dict], trace: list[dict]) -> tuple[list[dict], set
     rows: dict[str, dict] = {}
     for row in seen_rows:
         identity_now = str(row.get("identity"))
-        if row.get("admit") and identity_now not in expanded:
+        if (row.get("admit") or row.get("expand")) and identity_now not in expanded:
             rows.setdefault(identity_now, row)
     return list(rows.values()), expanded
 
@@ -642,10 +651,17 @@ def _frontier(seen_rows: list[dict], trace: list[dict]) -> tuple[list[dict], set
 def run_loop(survey_project: project.Project, deps: Deps) -> dict:
     """Walk the graph hop by hop from the last checkpoint; returns ``{"stop", "admitted"}``.
 
-    Stop reasons: ``saturated`` (no new high for the level's streak, or nothing left to
-    expand — the normal ending), ``budget`` (the discovery source's envelope is spent),
-    ``max_hops``, ``stopped`` (a ``$.stop`` sentinel written by ``survey stop``) and
-    ``interrupted`` (SIGINT, state left resumable).
+    Stop reasons: ``saturated`` (the level's dry streak spent with nothing above the floor
+    found, or nothing left to expand — the normal ending), ``budget`` (the discovery source's
+    envelope is spent), ``max_hops``, ``stopped`` (a ``$.stop`` sentinel written by
+    ``survey stop``) and ``interrupted`` (SIGINT, state left resumable).
+
+    "Dry" is counted on evidence, not on the score total: the total carries recency,
+    classicness and type, so a famous recent work about something else could keep resetting a
+    score-based streak while the walk learned nothing about the question — and an on-topic
+    work that simply was not famous could fail to reset it. A hop is productive when anything
+    cleared the floor (and entered the collection); the stop event records how much was left
+    unexpanded and what the best evidence was, so "saturated" can be read rather than guessed.
     """
     trace = project.read_trace(survey_project)
     seen_rows = project.read_seen(survey_project)
@@ -668,8 +684,8 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
     counters.update({key: int(envelope[f"{key}_cap"]) for key in ("arxiv", "publisher")})
     counters.update({site: int(envelope["graph_cap"]) for site in sites})
     hop =sum(1 for event in trace if event.get("event") == "hop_end")
-    best = max((float(row.get("score") or 0.0) for row in seen_rows if row.get("admit")),
-               default=0.0)
+    best_evidence = max((float(row.get("evidence") or 0.0) for row in seen_rows
+                         if row.get("admit")), default=0.0)
     streak = admitted_total = landed_total = 0
     retried: set[str] = set()  # identities an error already cost once (a dead row gets no more)
     interrupted: list[int] = []
@@ -713,16 +729,19 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
             if stop:
                 break
             hop += 1
-            high_before = best
             charged = 0
             session_was_alive = deps.session_alive()
             # A row can be admitted and never handed to the download path: a seed is, since it
             # is never seen as a fresh candidate, and so is a row whose run was killed between
             # its admission and its copy. Land those before expanding, once each: the row's
             # own `download` records it, so a resume reads it back and skips the second try.
+            # A row demoted by the cap is on the frontier to be *expanded*, not collected: only
+            # an admitted work is worth a copy, and spending the publisher allowance on rows
+            # that will never enter the collection would starve the copies that matter.
             for row in frontier:
                 identity_now = str(row.get("identity"))
-                if identity_now in landed or counters["publisher"] <= 0:
+                if (not row.get("admit") or identity_now in landed
+                        or counters["publisher"] <= 0):
                     continue
                 counters["publisher"] -= 1
                 item = _row_item(row)
@@ -847,9 +866,22 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
                         "referenced_works": candidate.extra.get("referenced_works") or [],
                         "item": candidate})
             # The hop is judged; now spend it. Best first, and only as many as the envelope
-            # allows — a demoted row still gets its record and its reason, but no copy and no
-            # place in the frontier.
+            # allows — a demoted row still gets its record and its reason, but no copy.
             rank(pending, int(envelope["admit"]))
+            #: Rows the cap demoted although they cleared the floor. They leave the collection
+            #: but keep a place in the walk: ``expand`` says so, here for the rest of the run
+            #: and in the row for a resume to rebuild. Only a ``rank`` demotion qualifies —
+            #: every other refusal already says the row is not worth looking from (below the
+            #: floor, outside the window, already seen). They are queued after this loop, so
+            #: the works admitted by the same hop are expanded first.
+            refill: list[dict] = []
+            for row in pending:
+                if not row["admit"] and row["reason"].startswith("rank "):
+                    row["expand"] = True
+                    refill.append({"identity": row["identity"], "key": row["key"],
+                                   "doi": row["doi"], "source": row["source"],
+                                   "title": row["title"], "year": row["year"],
+                                   "admit": False, "expand": True})
             for row in pending:
                 item = row.pop("item")
                 status = ""
@@ -864,7 +896,7 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
                                          "title": row["title"], "year": row["year"]})
                         collected.update(str(w) for w in row["referenced_works"])
                         cited.update(scoring.bare(w) for w in row["referenced_works"])
-                        best = max(best, float(row["score"]))
+                        best_evidence = max(best_evidence, float(row["evidence"]))
                         if stop:
                             status = ""  # admitted, copy not tried: the resume lands it
                         elif counters["publisher"] > 0:
@@ -893,6 +925,7 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
                     # Same as on the seed path: a strike can land in the record, after the
                     # wait. The walk ends as interrupted rather than unwinding mid-hop.
                     struck, stop = True, "interrupted"
+            frontier.extend(refill)
             hits_by = cache.stats()["by"]
             # A cached answer costs no request, so it refunds its charge — never more than the
             # site was actually charged, or the quota would drift above its cap on a hot cache.
@@ -905,21 +938,28 @@ def run_loop(survey_project: project.Project, deps: Deps) -> dict:
             # A hop whose expansions errored (a 429 burst, an unreadable answer) found nothing
             # because it could not look, not because there was nothing: it must not spend the
             # saturation streak, or two rate-limited hops end a run that never got started.
-            if best > high_before:
+            # Nothing clearing the floor is what a dry hop means; the score total does not get
+            # a vote (see the docstring).
+            if fresh:
                 streak = 0
             elif not errored:
                 streak += 1
             emit("hop_end", hop=hop, new=fresh, expanded=expanded_now, abandoned=abandoned_now,
                  hits=hits, charged=charged, refund=refund, errored=errored,
+                 best_evidence=round(best_evidence, 3),
                  remaining={**{site: counters.get(site, 0) for site in sites},
                             **{key: counters[key] for key in ("arxiv", "publisher")}})
             project.save(survey_project)
-        emit("stop", reason=stop, admitted=admitted_total)
+        emit("stop", reason=stop, admitted=admitted_total, frontier=len(frontier),
+             best_evidence=round(best_evidence, 3),
+             floor=float(survey_project.floor if survey_project.floor is not None
+                         else project.DEFAULT_FLOOR))
         if struck:
             # Re-raised, not swallowed: a killed job is exit 143 to its scheduler, and the
             # `finally` below still puts the signal handlers back.
             raise SystemExit(128 + (interrupted[-1] if interrupted else signal.SIGTERM))
-        return {"stop": stop, "admitted": admitted_total, "landed": landed_total}
+        return {"stop": stop, "admitted": admitted_total, "landed": landed_total,
+                "frontier": len(frontier), "best_evidence": round(best_evidence, 3)}
     finally:
         for signum, handler in previous.items():
             with contextlib.suppress(ValueError):
@@ -998,7 +1038,9 @@ def cmd_survey_run(cfg, args) -> int:
             sys.stdout.write(survey_events.render_md(project.read_trace(survey_project)))
         survey_project.status = "done" if result["stop"] == "saturated" else "stopped"
         project.save(survey_project)
-        print(f"stop={result['stop']} admitted={result['admitted']}", file=sys.stderr)
+        print(f"stop={result['stop']} admitted={result['admitted']} "
+              f"unexpanded={result['frontier']} best_evidence={result['best_evidence']}",
+              file=sys.stderr)
     finally:
         with contextlib.suppress(OSError):
             lock.unlink()
@@ -1048,8 +1090,10 @@ def cmd_survey_status(cfg, args) -> int:
         if event.get("event") == "hop_end" and isinstance(event.get("remaining"), dict):
             remaining.update({k: int(v) for k, v in event["remaining"].items()})
             break
-    last_stop = next((str(e.get("reason") or "") for e in reversed(trace)
-                      if e.get("event") == "stop"), "")
+    # The stop event says why the walk ended *and* how much it left behind: a run that stopped
+    # because the pool dried up reads differently from one that stopped with work still queued.
+    last_stop_event = next((e for e in reversed(trace) if e.get("event") == "stop"), {})
+    last_stop = str(last_stop_event.get("reason") or "")
     seeds = _seed_report(survey_project, seen)
     report = {"question": survey_project.question, "status": survey_project.status,
               "floor": survey_project.floor,
@@ -1060,11 +1104,13 @@ def cmd_survey_status(cfg, args) -> int:
               "hops": sum(1 for e in trace if e.get("event") == "hop_end"),
               "admitted": sum(1 for row in seen if row.get("admit")),
               "last_stop": last_stop, "remaining": remaining,
+              "last_stop_frontier": last_stop_event.get("frontier"),
+              "last_stop_evidence": last_stop_event.get("best_evidence"),
               "corpus": len(list((survey_project.root / "corpus").glob("*")))
               if (survey_project.root / "corpus").is_dir() else 0,
               "running": (survey_project.root / LOCK_NAME).exists()}
     if getattr(args, "why", False):
-        _print_why(survey_project, seen, seeds, trace)
+        _print_why(survey_project, seen, seeds, last_stop_event, trace)
     else:
         print(json.dumps(report, ensure_ascii=False))
     return 0
@@ -1100,12 +1146,17 @@ def _seed_report(survey_project: project.Project, seen: list[dict]) -> list[dict
 
 
 def _print_why(survey_project: project.Project, seen: list[dict], seeds: list[dict],
-               trace: list[dict]) -> None:
-    """The audit view: what the seeds are, and what the last hop judged, best first."""
+               last_stop: dict, trace: list[dict]) -> None:
+    """The audit view: why the seeds are what they are, how the walk ended, its last hop."""
     print(f"question: {survey_project.question}")
     migrated = (f"   (migrated from `{survey_project.legacy_floor}`, a score floor — not this "
                 "scale)" if survey_project.legacy_floor else "")
     print(f"floor: {survey_project.floor:g}{migrated}   effort: {survey_project.effort}")
+    if last_stop:
+        left = last_stop.get("frontier")
+        left = "?" if left is None else left
+        print(f"stop: {last_stop.get('reason')}   unexpanded: {left}   "
+              f"best evidence: {last_stop.get('best_evidence')}")
     print(f"seeds: {len(seeds)} (weak: {sum(1 for row in seeds if row['weak'])})")
     for seed in seeds:
         if seed["cover"] is None:  # no title to judge (a lookup that failed): unknown, not weak
@@ -1128,7 +1179,8 @@ def _print_why(survey_project: project.Project, seen: list[dict], seeds: list[di
     rows.sort(key=lambda row: -float(row.get("evidence") or 0.0))
     print(f"hop {hop}: {len(rows)} judged, {sum(1 for row in rows if row.get('admit'))} admitted")
     for row in rows[:WHY_ROWS]:
-        mark = "admit " if row.get("admit") else "refuse"
+        # `expand` is the cap's near miss: on the question, out of the collection, still walked.
+        mark = "admit " if row.get("admit") else ("expand" if row.get("expand") else "refuse")
         print(f"  {mark} {float(row.get('evidence') or 0.0):.2f}  {row.get('reason')}")
         print(f"         {row.get('title') or row.get('identity')}")
     if len(rows) > WHY_ROWS:

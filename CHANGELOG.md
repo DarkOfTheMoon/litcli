@@ -42,6 +42,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 快照重放用例在目录被移走时一次循环都不跑还报绿，fixture 的 `floor` 也没有与 `DEFAULT_FLOOR` 绑定。
 - `test_why_names_the_seed_as_weak` 的 `assertIn("weak")` 被恒在的汇总行满足，逐颗的 `weak` 标记可删；`survey new` 里那条
   `hit 0` 用例与拒绝对例重复，删去。
+- 饱和判据盯错了量：它看的是总分有没有新高，而总分带着时效、经典度与类型，一篇走红但偏题的近期文章能一直刷新它，
+  一篇正好切题而不出名的却刷不动。现在按证据算——这一跳有任何条目过得了地板就不算干跳。与之配套，被准入上限挤掉
+  但过了地板的行不再退出前沿：它们不进集合、不下载，但作为下一步的扩展起点留在前沿（行上带 `expand` 标记，续跑
+  照样重建），`admit` 低于 `frontier` 的空池不再让走查在几条之后「饱和」。`stop` 事件带 `frontier`、
+  `best_evidence` 与 `floor`，`run` 的收尾行与 `status --why` 都显示，`status` JSON 多出 `last_stop_frontier`
+  与 `last_stop_evidence`：同一个 `saturated`，池子真干与留下没展开的活是两回事。
 - `refs`/`citing`/`related` 三个图谱命令 漏掉整类答复错误：`KeyError`（200 而正文空）、`ValueError`/`TypeError`（200 而结构不同）、
   `AttributeError`（正文是列表而不是对象）此前穿过分类捕获把整条命令掀掉，现在与 404 一样只损这一源并换下一个；
   坏掉的 `--backend` 或 `源/` 前缀转成 `BadInput`（退出码 2）而不是「意外错误」。

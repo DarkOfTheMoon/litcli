@@ -171,13 +171,15 @@ resumed and audited.
 |---|---|
 | `litcli survey new "<subject>" [--seed DOI|TITLE]... [--year A-B] [--type T] [--container JOURNAL] [--floor 0..1] [--effort LEVEL]` | create a project; prints only its name; without `--seed` it first searches and takes the first 3 hits as seeds |
 | `litcli survey run <project> [--effort LEVEL] [--format jsonl\|md]` | resume from the last checkpoint; stdout is JSONL events, `--format md` prints one table per hop instead |
-| `litcli survey status <project>` | one JSON line: question, status, floor (`floor_legacy` names a migration from `threshold`), seeds (with their question coverage — `?` when the title is unknown — and `weak`), hops, admitted, last stop, remaining quota; `--why` switches to a text audit view |
+| `litcli survey status <project>` | one JSON line: question, status, floor (`floor_legacy` names a migration from `threshold`), seeds (with their question coverage — `?` when the title is unknown — and `weak`), hops, admitted, last stop (with what it left unexpanded and the best evidence), remaining quota; `--why` switches to a text audit view |
 | `litcli survey stop <project>` | write `$.stop`; the walk ends at its next hop boundary |
 
-The level decides how wide to walk, not how much to collect — a hot subject keeps scoring new
-highs and runs to its quota or saturation, a cold one stops itself after a few quiet hops:
+The level decides how wide to walk, not how much to collect — a hot subject keeps turning up
+above-floor works and runs to its quota or saturation, a cold one stops itself after a few barren
+hops (a row the admit cap demoted but the floor let through stays on the frontier as an expansion
+point — not collected, not downloaded):
 
-| Level | frontier/hop | admit/hop | edges/work | dry hops to stop | openalex cap | arxiv cap | per publisher | max hops |
+| Level | frontier/hop | admit/hop | edges/work | barren hops to stop | openalex cap | arxiv cap | per publisher | max hops |
 |---|---|---|---|---|---|---|---|---|
 | low | 4 | 2 | refs 10 / citing 10 / related 5 | 2 | 40 | 10 | 2 | 6 |
 | medium | 8 | 5 | 20 / 20 / 10 | 3 | 200 | 40 | 6 | 20 |

@@ -139,12 +139,12 @@ shell 补全只有 bash/zsh/fish（PowerShell 下可在 Git Bash 里生成）。
 |---|---|
 | `litcli survey new "<课题>" [--seed DOI|题名]... [--year A-B] [--type T] [--container 刊名] [--floor 0..1] [--effort 档]` | 建项目，只打印项目名；不给 `--seed` 先检索取前 3 条当种子 |
 | `litcli survey run <项目> [--effort 档] [--format jsonl\|md]` | 从最后一个检查点继续；stdout 是 JSONL 事件，`--format md` 换成按跳的表格 |
-| `litcli survey status <项目>` | 一行 JSON：课题、状态、地板（旧项目另带 `floor_legacy` 说明迁移自 `threshold`）、种子（含题目覆盖——题名未知时为 `?`——与 `weak`）、跳数、准入数、最后停因、剩余额度；`--why` 换成文本审计视图 |
+| `litcli survey status <项目>` | 一行 JSON：课题、状态、地板（旧项目另带 `floor_legacy` 说明迁移自 `threshold`）、种子（含题目覆盖——题名未知时为 `?`——与 `weak`）、跳数、准入数、最后停因（连同它留下的未展开数与最好证据）、剩余额度；`--why` 换成文本审计视图 |
 | `litcli survey stop <项目>` | 写 `$.stop`，循环在下一个跳边界收尾 |
 
-档位决定走多宽，不决定收多少条——热的题每跳都有新高分就一直走到额度或饱和，冷的题几跳没动静就自己停：
+档位决定走多宽，不决定收多少条——热的题每跳都还有过地板的新条目就一直走到额度或饱和，冷的题几跳没动静就自己停（被准入上限挤掉的切题条目仍留在前沿当扩展起点，不进集合也不下载）：
 
-| 档 | 前沿/跳 | 准入/跳 | 邻居/条 | 连续无新高即停 | openalex 上限 | arxiv 上限 | 每出版社 | 最长跳 |
+| 档 | 前沿/跳 | 准入/跳 | 邻居/条 | 连续无准入即停 | openalex 上限 | arxiv 上限 | 每出版社 | 最长跳 |
 |---|---|---|---|---|---|---|---|---|
 | low | 4 | 2 | refs 10 / citing 10 / related 5 | 2 | 40 | 10 | 2 | 6 |
 | medium | 8 | 5 | 20 / 20 / 10 | 3 | 200 | 40 | 6 | 20 |

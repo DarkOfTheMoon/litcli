@@ -108,6 +108,64 @@ class SharedReferenceDiscovery(FakeDiscovery):
                             extra={"openalex_type": "article", "referenced_works": refs})
 
 
+class FanDiscovery(FakeDiscovery):
+    """The seed fans out to a fixed list of works; nothing else expands."""
+
+    def __init__(self, titles=None, cited=0):
+        super().__init__()
+        self.titles = titles if titles is not None else [f"Wick boiling in case {letter}"
+                                                         for letter in "ABCD"]
+        self.cited = cited
+
+    @staticmethod
+    def bare(key):
+        # OpenAlex is asked with `doi:<DOI>` for a DOI-keyed row and with the bare DOI for a row
+        # whose key is one: the fake has to accept both spellings.
+        return key[len("doi:"):] if str(key).startswith("doi:") else str(key)
+
+    def references(self, key, limit=5):
+        self.references_calls += 1
+        if self.bare(key) != "10.1002/seed":
+            return []
+        return [AcademicItem(source=self.name, key=f"W{place}", doi=f"10.1002/{place}",
+                             title=title, year="2020", cited_by_count=self.cited,
+                             extra={"openalex_type": "article", "referenced_works": []})
+                for place, title in zip("ABCDEF", self.titles, strict=False)]
+
+
+class ChainDiscovery(FakeDiscovery):
+    """The seed points at one work, which points at one more, which points at nothing."""
+
+    NEXT: ClassVar[dict] = {"10.1002/seed": ("A", 40), "10.1002/A": ("B", 0)}
+
+    def references(self, key, limit=5):
+        self.references_calls += 1
+        nxt = self.NEXT.get(FanDiscovery.bare(key))
+        if nxt is None:
+            return []
+        letter, cited = nxt
+        return [AcademicItem(source=self.name, key=letter, doi=f"10.1002/{letter}",
+                             title=f"Wick boiling in case {letter}", year="2020",
+                             cited_by_count=cited,
+                             extra={"openalex_type": "article", "referenced_works": []})]
+
+
+class NullDiscovery(FakeDiscovery):
+    """Every axis answers, empty: the walk can look anywhere and finds nothing."""
+
+    def references(self, key, limit=5):
+        self.references_calls += 1
+        return []
+
+    def citing(self, key, limit=5):
+        self.citing_calls += 1
+        return []
+
+    def related(self, key, limit=5):
+        self.related_calls += 1
+        return []
+
+
 class NeighbourOnly(FakeDiscovery):
     """A source that answers the neighbour axis alone: one charge per row, not three."""
 
@@ -388,6 +446,10 @@ class SurveyRunTest(unittest.TestCase):
         self.assertIn("rank", rows["doi:10.1002/a"]["reason"])
 
     def test_a_demoted_candidate_is_not_downloaded(self):
+        # A publisher allowance can run out inside one hop, which would mask the rule: keep it
+        # open so the only thing that can stop `A` from being asked is that the cap demoted it
+        # (it is on the frontier, to be expanded, but it never enters the collection).
+        self._envelope(admit=1, publisher_cap=6, max_hops=3)
         self.deps.graph = [RankedDiscovery()]
         asked = []
         real = self.deps.resolve
@@ -395,6 +457,109 @@ class SurveyRunTest(unittest.TestCase):
         survey.run_loop(self.project, self.deps)
         self.assertIn("10.1002/B", asked)
         self.assertNotIn("10.1002/A", asked)
+
+    def _envelope(self, **overrides):
+        """Narrow one envelope cell for a test, on top of whatever level the project asks for."""
+        real = effort.resolve
+
+        def resolve(level, extra=None):
+            row = real(level, extra)
+            row.update(overrides)
+            return row
+
+        patcher = mock.patch.object(survey.effort, "resolve", resolve)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _expanded(self):
+        return [identity for end in self._hop_ends() for identity in end["expanded"]]
+
+    def test_a_demoted_candidate_above_the_floor_is_expanded_on_a_later_hop(self):
+        # The cap decides who enters the collection, not who the walk can still look at: with
+        # `admit` below `frontier` the pool used to drain every hop and the run "saturated"
+        # after five works on a question that had plenty more.
+        self._envelope(admit=2, frontier=4, streak=2, max_hops=6)
+        self.deps.graph = [FanDiscovery()]
+        survey.run_loop(self.project, self.deps)
+        rows = self.hop_rows(1)
+        self.assertEqual(sorted(identity for identity, row in rows.items() if "rank" in
+                                row["reason"]), ["doi:10.1002/c", "doi:10.1002/d"])
+        expanded = self._expanded()
+        self.assertIn("doi:10.1002/c", expanded)
+        self.assertIn("doi:10.1002/d", expanded)
+
+    def test_a_refused_below_floor_candidate_is_not_expanded(self):
+        # The floor is the opposite call: junk stays out of the collection *and* out of the
+        # walk, or every broad question would spend its quota on works about something else.
+        self.project.floor = 0.6
+        self._envelope(admit=2, frontier=4, streak=2, max_hops=4)
+        self.deps.graph = [FanDiscovery(titles=["Wick boiling in a channel",
+                                               "Quantum chromodynamics at finite density"])]
+        survey.run_loop(self.project, self.deps)
+        rows = self.hop_rows(1)
+        self.assertFalse(rows["doi:10.1002/b"]["admit"])
+        self.assertNotIn("expand", rows["doi:10.1002/b"])
+        self.assertNotIn("doi:10.1002/b", self._expanded())
+
+    def test_a_queued_work_keeps_the_walk_alive_through_a_barren_hop(self):
+        # A hop whose one expansion found nothing is not the end while demoted work is still
+        # queued: the old rule stopped on an empty frontier alone.
+        self._envelope(admit=1, frontier=1, streak=2, max_hops=6)
+        self.deps.graph = [FanDiscovery(titles=["Wick boiling one", "Wick boiling two",
+                                               "Wick boiling three"])]
+        survey.run_loop(self.project, self.deps)
+        # Hop 2 found nothing, and hop 3 still ran on the queued work instead of stopping.
+        self.assertEqual(len(self._hop_ends()), 3)
+        self.assertIn("doi:10.1002/b", self._expanded())
+        # The other queued row keeps its mark for a resume: the streak (2) was spent before it
+        # got a hop, which is the envelope saying "enough", not the pool saying "dry".
+        self.assertTrue(self.hop_rows(1)["doi:10.1002/c"]["expand"])
+
+    def test_the_streak_follows_evidence_and_ignores_the_score(self):
+        # `B` is on the question exactly as much as `A` but far less cited, so its total score
+        # is lower: on the old score rule that hop looked dry and ended the walk.
+        self._envelope(admit=1, frontier=1, streak=1, max_hops=6)
+        self.deps.graph = [ChainDiscovery()]
+        survey.run_loop(self.project, self.deps)
+        self.assertEqual(self.seen_for("10.1002/b")["admit"], True)
+        self.assertEqual(len(self._hop_ends()), 3)
+        stop = next(e for e in project.read_trace(self.project) if e["event"] == "stop")
+        self.assertEqual(stop["reason"], "saturated")
+
+    def test_the_stop_event_reports_how_dry_the_pool_was(self):
+        self._envelope(admit=1, frontier=1, streak=1, max_hops=6)
+        self.deps.graph = [NullDiscovery()]
+        survey.run_loop(self.project, self.deps)
+        stop = next(e for e in project.read_trace(self.project) if e["event"] == "stop")
+        self.assertEqual(stop["frontier"], 0)
+        self.assertIn("best_evidence", stop)
+        self.assertEqual(stop["floor"], self.project.floor)
+
+    def _seed_trace_without_the_expansion(self, row):
+        project.append_seen(self.project, row)
+        project.append_trace(self.project, {"event": "start", "hop": 0})
+        project.append_trace(self.project, {"event": "hop_end", "hop": 1, "new": 1,
+                                            "expanded": ["doi:10.1002/seed"]})
+
+    def test_a_resume_rebuilds_a_demoted_row_marked_expandable(self):
+        self._seed_trace_without_the_expansion(
+            {"identity": "doi:10.1002/q", "admit": False, "expand": True, "hop": 1,
+             "key": "Q", "doi": "10.1002/q", "title": "Wick boiling in a gap",
+             "reason": "rank 2 of 2 for cap 1", "score": 0.0, "evidence": 1.0})
+        self.deps.graph = [NullDiscovery()]
+        survey.run_loop(self.project, self.deps)
+        self.assertEqual(self.deps.graph[0].references_calls, 1)
+
+    def test_a_resume_does_not_rebuild_an_old_demoted_row_without_the_mark(self):
+        # Traces written before the mark carry demoted rows too; they must not be expanded on
+        # a resume, or the same row would be read again every run.
+        self._seed_trace_without_the_expansion(
+            {"identity": "doi:10.1002/q", "admit": False, "hop": 1, "key": "Q",
+             "doi": "10.1002/Q", "title": "Wick boiling in a gap",
+             "reason": "rank 2 of 2 for cap 1", "score": 0.0, "evidence": 1.0})
+        self.deps.graph = [NullDiscovery()]
+        survey.run_loop(self.project, self.deps)
+        self.assertEqual(self.deps.graph[0].references_calls, 0)
 
     def test_a_hop_scores_against_the_collection_as_it_stood_at_hop_start(self):
         # Otherwise a candidate's score depends on where in the hop it arrived: the second of
