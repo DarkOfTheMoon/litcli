@@ -133,6 +133,29 @@ def browser_profile_dir() -> Path:
     return _data_dir() / "browser-profile"
 
 
+def user_browser_profile_dir() -> Path:
+    """Where the user's own Chrome keeps its profile: the sign-ins are already in there.
+
+    Nothing is launched into it by default — an existing browser on it is attached to
+    instead, and a closed one is started from it.
+    """
+    if _IS_WINDOWS:
+        base = os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local")
+        return Path(base) / "Google" / "Chrome" / "User Data"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "Google" / "Chrome"
+    return Path.home() / ".config" / "google-chrome"
+
+
+def resolve_browser_profile(value: str | None) -> Path:
+    """``[browser].profile`` as a directory: empty/``user`` is theirs, ``dedicated`` is ours."""
+    if not value or value == "user":
+        return user_browser_profile_dir()
+    if value == "dedicated":
+        return browser_profile_dir()
+    return Path(value).expanduser()
+
+
 def browser_session_file() -> Path:
     """Discovery file of a running browser session (endpoint + pid); absent when none runs."""
     return _data_dir() / "browser-session.json"

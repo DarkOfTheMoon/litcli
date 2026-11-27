@@ -234,6 +234,7 @@ type = "opencitations"
 # (清关绑出口 IP,两边必须同一出口)。
 [browser]
 # enabled = true
-# profile = "~/.config/litcli/browser-profile"   # 独立 profile,不碰主 Chrome
-# headless = false                               # 出版社闸要真浏览器,无头可试但更容易被挡
+# profile = ""                                   # 空=用你自己的 Chrome 登录态;"dedicated"=本工具的独立 profile;或任意路径
+# profile_directory = "Default"                  # 多 profile 的安装,指到已登录的那个子 profile
+# headless = false                               # 用 user profile 时设 true 会让拉起的那只不显示窗口
 # channel = "chrome"                             # 缺 Chrome 时自动退回随包 Chromium

@@ -6,14 +6,58 @@ must not insist on a Chrome that is not installed.
 """
 import os
 import sys
+import tempfile
 import unittest
+from pathlib import Path
 from typing import ClassVar
 from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from litcli import browser
+from litcli import browser, paths
 from litcli.browser import session_from_config
+
+
+class ResolveProfileTest(unittest.TestCase):
+    def setUp(self):
+        self._home = tempfile.TemporaryDirectory()
+        self.addCleanup(self._home.cleanup)
+        patcher = mock.patch.dict(os.environ, {"XDG_DATA_HOME": self._home.name})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        paths.browser_profile_dir().mkdir(parents=True, exist_ok=True)
+
+    def test_empty_and_user_resolve_to_the_platform_default(self):
+        self.assertEqual(paths.resolve_browser_profile(None), paths.user_browser_profile_dir())
+        self.assertEqual(paths.resolve_browser_profile("user"), paths.user_browser_profile_dir())
+
+    def test_dedicated_resolves_to_the_tools_own_dir(self):
+        self.assertEqual(paths.resolve_browser_profile("dedicated"), paths.browser_profile_dir())
+
+    def test_a_path_is_expanded(self):
+        self.assertEqual(paths.resolve_browser_profile("~/elsewhere"),
+                         Path("~/elsewhere").expanduser())
+
+    def test_a_disabled_section_still_yields_none(self):
+        self.assertIsNone(session_from_config({"browser": {"enabled": False}}))
+
+    def test_the_source_is_reported(self):
+        with mock.patch("shutil.which", return_value="/usr/bin/google-chrome"):
+            default = session_from_config({"browser": {"enabled": True}})
+            explicit = session_from_config({"browser": {"enabled": True, "profile": "dedicated"}})
+        self.assertEqual(default._profile_source, "default")
+        self.assertEqual(explicit._profile_source, "config")
+
+    def test_the_migration_notice_fires_only_while_the_key_is_unset(self):
+        cookie_db = paths.browser_profile_dir() / "Default" / "Cookies"
+        cookie_db.parent.mkdir(parents=True, exist_ok=True)
+        cookie_db.write_text("SQLite")
+        with mock.patch("shutil.which", return_value="/usr/bin/google-chrome"), \
+                mock.patch("litcli.debug.notice") as told:
+            session_from_config({"browser": {"enabled": True}})
+            session_from_config({"browser": {"enabled": True, "profile": "dedicated"}})
+        told.assert_called_once()
+        self.assertIn('profile = "dedicated"', told.call_args.args[0])
 
 
 class SessionFromConfigTest(unittest.TestCase):

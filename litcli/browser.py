@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
-from . import paths
+from . import debug, paths
 from .backends._cf_gate import is_challenge_page
 from .browser_broker import (  # noqa: F401 - transitional re-exports until Session moves
     _CHROME_BINARIES,
@@ -37,7 +37,6 @@ from .browser_broker import (  # noqa: F401 - transitional re-exports until Sess
     _wait_gone,
     cdp_ready,
 )
-from .debug import notice
 from .errors import Unavailable
 
 
@@ -167,11 +166,25 @@ def session_from_config(cfg: dict) -> Session | None:
         return None
     channel = section.get("channel", "chrome")
     if channel and not any(shutil.which(binary) for binary in _CHROME_BINARIES):
-        notice("no Chrome found; the browser session falls back to the bundled Chromium")
+        debug.notice("no Chrome found; the browser session falls back to the bundled Chromium")
         channel = None
-    return Session(profile=section.get("profile") or None,
+    profile = section.get("profile") or None
+    if profile is None and _dedicated_profile_left_behind():
+        debug.notice('the browser session now uses your own Chrome profile and the old '
+                      'dedicated one is idle; set `profile = "dedicated"` to keep its sign-ins')
+    return Session(profile=profile,
                    headless=bool(section.get("headless", False)), channel=channel,
-                   proxy=(cfg.get("network") or {}).get("proxy"))
+                   proxy=(cfg.get("network") or {}).get("proxy"),
+                   profile_directory=section.get("profile_directory") or "Default",
+                   profile_source="config" if profile else "default")
+
+
+def _dedicated_profile_left_behind() -> bool:
+    """Whether the old dedicated profile holds a real Chrome cookie store."""
+    try:
+        return (paths.browser_profile_dir() / "Default" / "Cookies").stat().st_size > 0
+    except OSError:
+        return False
 
 
 #: Returned by :func:`_goto_allowing_download` when the navigation became a download.
@@ -210,9 +223,12 @@ _CHALLENGE_POLL = 0.5
 class Session:
     """A shared, persistent Chrome. Cheap to construct; :meth:`start` is the expensive part."""
 
-    def __init__(self, profile: Path | None = None, headless: bool = False,
-                 channel: str | None = None, proxy: str | None = None, launcher=None):
-        self._profile = Path(profile).expanduser() if profile else paths.browser_profile_dir()
+    def __init__(self, profile: str | None = None, headless: bool = False,
+                 channel: str | None = None, proxy: str | None = None, launcher=None,
+                 profile_directory: str = "Default", profile_source: str = "default"):
+        self._profile = paths.resolve_browser_profile(profile)
+        self._profile_directory = profile_directory
+        self._profile_source = profile_source
         self._headless = headless
         self._channel = channel
         self._proxy = proxy
