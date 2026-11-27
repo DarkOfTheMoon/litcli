@@ -13,7 +13,6 @@ the kernel does even when the client is SIGKILLed. The broker is a supervisor, n
 from __future__ import annotations
 
 import contextlib
-import fcntl
 import json
 import os
 import re
@@ -33,10 +32,40 @@ from typing import NamedTuple
 from . import paths
 from .errors import External
 
+try:  # POSIX
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None
+try:  # Windows
+    import msvcrt
+except ImportError:
+    msvcrt = None
+
 PROTOCOL_VERSION = 1
+
+#: The Windows spawn flags, spelled out because ``subprocess`` only defines them there.
+_DETACHED_PROCESS = getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+_CREATE_NEW_PROCESS_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+
+#: Where process command lines are read from; absent outside Linux.
+_PROC = Path("/proc")
 
 #: How long a freshly spawned browser gets to open its debugging port.
 _READY_TIMEOUT = 20.0
+
+
+def _lock(fd: int) -> None:
+    if paths._IS_WINDOWS:
+        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)   # one byte at the start, non-blocking
+    else:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock(fd: int) -> None:
+    if paths._IS_WINDOWS:
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    else:
+        fcntl.flock(fd, fcntl.LOCK_UN)
 
 
 @contextlib.contextmanager
@@ -55,7 +84,7 @@ def profile_lock(profile: Path, timeout: float = 2.0):
     try:
         while True:
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                _lock(fd)
                 break
             except OSError:
                 if time.monotonic() >= deadline:
@@ -65,7 +94,7 @@ def profile_lock(profile: Path, timeout: float = 2.0):
             yield fd
         finally:
             with contextlib.suppress(OSError):
-                fcntl.flock(fd, fcntl.LOCK_UN)
+                _unlock(fd)
     finally:
         os.close(fd)
 
@@ -144,7 +173,7 @@ class BrowserRuntime(NamedTuple):
     context: object | None = None
 
 
-def _running_on(profile: Path, root: Path = Path("/proc")) -> list[tuple[int, int | None]]:
+def _running_on(profile: Path, root: Path | None = None) -> list[tuple[int, int | None]]:
     """``(pid, debugging port)`` for every browser already started on this profile.
 
     Process rows only — a zygote or renderer carries the same command line and would otherwise
@@ -161,7 +190,7 @@ def _running_on(profile: Path, root: Path = Path("/proc")) -> list[tuple[int, in
     marker = f"--user-data-dir={profile}"
     found = []
     try:
-        entries = list(root.iterdir())
+        entries = list((root or _PROC).iterdir())
     except OSError:
         return found  # not Linux: no /proc, and nothing is found (a launch follows)
     for entry in entries:
@@ -205,7 +234,7 @@ def _wait_gone(pid: int, timeout: float = 3.0) -> None:
 def _is_headless(pid: int) -> bool:
     """Whether ``pid`` runs without a window (its command line says so)."""
     try:
-        line = Path(f"/proc/{pid}/cmdline").read_bytes().decode("utf-8", "replace")
+        line = (_PROC / str(pid) / "cmdline").read_bytes().decode("utf-8", "replace")
     except OSError:
         return False
     return "--headless" in line
@@ -715,12 +744,12 @@ def read_session() -> dict | None:
     return info if isinstance(info, dict) and info.get("control_port") else None
 
 
-def _spawn_broker(argv: list[str], spawn=subprocess.Popen):
+def _spawn_broker(argv: list[str], spawn=None):
     """Start a broker of its own, outliving this process (the same reason the browser does)."""
+    spawn = spawn or subprocess.Popen   # looked up late, so a test can stand in for it
     kw: dict = {"stdout": subprocess.DEVNULL, "stderr": subprocess.PIPE, "close_fds": True}
     if paths._IS_WINDOWS:
-        kw["creationflags"] = (subprocess.DETACHED_PROCESS
-                               | subprocess.CREATE_NEW_PROCESS_GROUP)
+        kw["creationflags"] = _DETACHED_PROCESS | _CREATE_NEW_PROCESS_GROUP
     else:
         kw["start_new_session"] = True
     return spawn(argv, **kw)

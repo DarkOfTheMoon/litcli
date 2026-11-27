@@ -310,6 +310,38 @@ class RunningLookupTest(BrokerTest):
                          [(100, 9333), (101, 9444), (104, None)])
 
 
+class WindowsTest(BrokerTest):
+    """The Windows shapes: a detached spawn, a byte lock, and no /proc to read."""
+
+    def test_windows_spawn_is_detached(self):
+        with mock.patch.object(bb.paths, "_IS_WINDOWS", True), \
+                mock.patch.object(bb.subprocess, "Popen") as popen:
+            bb._spawn_broker(["x"])
+        self.assertIn("creationflags", popen.call_args.kwargs)
+        self.assertTrue(popen.call_args.kwargs["close_fds"])
+        self.assertNotIn("start_new_session", popen.call_args.kwargs)
+
+    def test_windows_lock_uses_locking_and_unlocks_on_exit(self):
+        with mock.patch.object(bb.paths, "_IS_WINDOWS", True), \
+                mock.patch.object(bb, "msvcrt") as lock, bb.profile_lock(paths.browser_profile_dir()):
+            pass
+        self.assertEqual([c.args[1] for c in lock.locking.call_args_list],
+                         [lock.LK_NBLCK, lock.LK_UNLCK])
+
+    def test_a_busy_windows_lock_times_out(self):
+        with mock.patch.object(bb.paths, "_IS_WINDOWS", True), \
+                mock.patch.object(bb, "msvcrt") as lock:
+            lock.locking.side_effect = OSError("locked")
+            with self.assertRaises(TimeoutError), bb.profile_lock(paths.browser_profile_dir(), timeout=0.1):
+                pass
+
+    def test_headless_lookup_without_proc_says_headed(self):
+        # /proc is a Linux thing. Without it a leftover reads as headed, which is the safe
+        # way round: a headed browser is left alone.
+        with mock.patch.object(bb, "_PROC", Path("/no/such/proc")):
+            self.assertFalse(bb._is_headless(os.getpid()))
+
+
 def _spawn_that_fails(stderr, code=1):
     def spawn(argv, **kw):
         return mock.Mock(returncode=code, poll=lambda: code,
