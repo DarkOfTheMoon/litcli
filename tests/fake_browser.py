@@ -87,6 +87,7 @@ class FakePage:
         self._solved = None
         self._listeners = {}
         self.url = ""
+        self.gotos: list[str] = []
         self.goto = mock.Mock(side_effect=self._goto)
 
     def on(self, event, handler):
@@ -102,6 +103,7 @@ class FakePage:
         return self._goto(url, **_kw)
 
     def _goto(self, url, **_kw):
+        self.gotos.append(url)
         step = (self._queue.pop(0) if len(self._queue) > 1
                 else self._queue[0] if self._queue else (200, ""))
         if isinstance(step, Exception):

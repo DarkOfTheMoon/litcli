@@ -299,6 +299,31 @@ class SessionTest(_SessionFixture):
             answer = self.s.page("https://x/current.pdf")
         self.assertEqual(answer.url, "https://x/current.pdf")
 
+    def test_a_signed_in_profile_warms_site_root_before_giving_up(self):
+        # The challenge follows the signed-in chain, not the IP: the root loads clean, the
+        # clearance it sets belongs to the next load, and the article then renders.
+        self.s._profile_source = "default"
+        self.s.start()
+        url = "https://www.sciencedirect.com/science/article/pii/S1"
+        challenge = (403, "<html><title>Just a moment...</title></html>")
+        self.runtime.queue.extend([challenge, challenge, (200, "<title>Journal</title>")])
+        with mock.patch.object(browser, "_CHALLENGE_WAIT", 0):
+            answer = self.s.page(url)
+        self.assertEqual(answer.status, 200)
+        self.assertEqual(self.s._page().gotos,
+                         [url] * 2 + ["https://www.sciencedirect.com/", url])
+
+    def test_a_dedicated_profile_does_not_warm(self):
+        self.s = Session(profile="dedicated", profile_source="config",
+                         lease_factory=self.factory)
+        self.s.start()
+        challenge = (403, "<html>Just a moment...</html>")
+        self.runtime.queue.extend([challenge, challenge, challenge])
+        with mock.patch.object(browser, "_CHALLENGE_WAIT", 0):
+            self.s.page("https://www.sciencedirect.com/x")
+        # address, then the one challenge retry — no root in between
+        self.assertEqual(len(self.s._page().gotos), 2)
+
     def test_a_gate_page_is_returned_not_raised(self):
         self.s.start()
         self.runtime.queue.append((403, "<html>__cf_chl</html>"))

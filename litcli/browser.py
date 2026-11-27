@@ -40,6 +40,11 @@ def _still_coming(page) -> bool:
         return True
 
 
+def _site_root(url: str) -> str:
+    """The origin of ``url`` (scheme + host), the page a sign-in clears first."""
+    return urlparse(str(url or ""))._replace(path="/", query="", fragment="").geturl()
+
+
 def looks_like_pdf(url: str) -> bool:
     """True when ``url`` is a file's own address.
 
@@ -229,6 +234,7 @@ class Session:
         self._proxy = proxy
         self._pinned = pinned
         self._lease_factory = lease_factory
+        self._user_profile = False  # computed per lease: the warm-up only applies to theirs
         self._lease: browser_broker.Lease | None = None
         self._runtime: _Runtime | None = None
         self._page_: object | None = None
@@ -276,6 +282,8 @@ class Session:
                              f"speaks {browser_broker.PROTOCOL_VERSION}; run `litcli browser "
                              "stop` to replace it")
         self._lease = lease
+        self._user_profile = (self._profile_source == "default"
+                              or self._profile == paths.user_browser_profile_dir())
 
     def _new_lease(self) -> browser_broker.Lease:
         if self._lease_factory is not None:
@@ -400,8 +408,22 @@ class Session:
             raise BrowserUnavailable(f"the browser session went away: {e}") from e
 
     def page(self, url: str) -> PageResponse:
-        """Navigate and hand back the answer (one rebind-and-retry when the browser left)."""
-        return self._retrying(lambda: self._navigate(url))
+        """Navigate and hand back the answer (one rebind-and-retry when the browser left).
+
+        On the user's own profile a challenge that survives the retry gets one warm-up: the
+        site root, then the address again. The challenge rides the signed-in chain, so the
+        root's own exchange sets the clearance the article then loads with.
+        """
+        return self._retrying(lambda: self._navigate_warm(url))
+
+    def _navigate_warm(self, url: str) -> PageResponse:
+        answer = self._navigate(url)
+        if not (self._user_profile and is_challenge_page(answer.text)):
+            return answer
+        page = self._page()
+        self._goto(page, _site_root(url))
+        self._settle(page)
+        return self._navigate(url)
 
     def _navigate(self, url: str) -> PageResponse:
         """Navigate and hand back the answer (a gate page included; it is not an error here).
