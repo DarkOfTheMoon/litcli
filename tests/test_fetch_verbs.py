@@ -199,3 +199,23 @@ class MalformedTargetTest(unittest.TestCase):
             self.assertEqual(fetch._fetch_fulltext({}, mock.Mock(), "sciencedirect:bogus"), 2)
         self.assertIn("error", err.getvalue())
         self.assertNotIn("AttributeError", err.getvalue())
+
+
+class BusyProfileTest(PastedPdfUrlTest):
+    def test_a_busy_profile_is_named_when_no_file_came(self):
+        # The browser could not even try: somebody else holds it. Falling through the chain is
+        # still right, but the last word must say that instead of only naming the wall.
+        from litcli.browser_broker import ProfileBusy
+        info = {"has_fulltext": True, "kind": "unpaywall", "url": "https://m/x.pdf",
+                "format": "pdf"}
+        browser = mock.Mock()
+        browser.alive.return_value = False
+        browser.start.side_effect = ProfileBusy("someone is using the browser")
+        probe = self._probe(info)._replace(browser=browser)
+        with mock.patch.object(fetch.pdfutil, "download", side_effect=OSError("403")), \
+                mock.patch.object(fetch.fulltext_mod, "resolve_fulltext",
+                                  return_value={"has_fulltext": False}), \
+                mock.patch("sys.stdout"), mock.patch("sys.stderr") as err:
+            self.assertEqual(fetch._emit_fulltext(self._args(), probe), 1)
+        said = "".join(str(c.args[0]) for c in err.write.call_args_list if c.args)
+        self.assertIn("someone is using the browser", said)

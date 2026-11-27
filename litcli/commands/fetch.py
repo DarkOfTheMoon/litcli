@@ -23,6 +23,7 @@ from .. import pdf as pdfutil
 from .. import provenance, unpaywall
 from ..backends.base import Backend, NotSupportedError
 from ..browser import looks_like_pdf, session_from_config
+from ..browser_broker import ProfileBusy
 from ..config import get_all_backends, get_backend
 from ..errors import LitcliError, Unavailable
 from ..paths import target_path
@@ -394,6 +395,10 @@ def _download_any(probe: _Probe, url: str, fmt: str) -> bytes:
         raw = probe.browser.download(url)
         _verify(raw, fmt, url)
         return raw
+    except ProfileBusy:
+        # Not the site's doing and not the browser's failure: a browser exists but somebody
+        # else has it. The caller keeps the sentence to show if nothing else answers.
+        raise
     except (LitcliError, RuntimeError, OSError) as e:
         # The browser is the fallback: when it fails too, the plain failure is what describes
         # the host (a wall says nothing about the browser), so that is the one raised.
@@ -446,6 +451,7 @@ def _emit_fulltext(args, probe: _Probe) -> int:
         return 0
 
     raw = None
+    busy = None
     publisher = publishers.get(kind) or _publisher_for_url(publishers, info["url"])
     # Where to send the reader when no byte comes at all (shown only if the whole chain fails).
     link_hint = f"  open the PDF in your {'entitled ' if publisher else ''}browser: {info['url']}"
@@ -462,6 +468,9 @@ def _emit_fulltext(args, probe: _Probe) -> int:
         # walls plain clients off. A failure here is not yet the answer — the tail still runs.
         try:
             raw = _download_any(probe, info["url"], fmt)
+        except ProfileBusy as e:
+            busy = e
+            raw = None
         except (LitcliError, RuntimeError, OSError):
             raw = None
     if raw is None:
@@ -473,6 +482,8 @@ def _emit_fulltext(args, probe: _Probe) -> int:
         for reason in tail.get("errors") or []:
             note(f"  [skipped] {reason}")
         if not (tail.get("has_fulltext") and tail.get("url")):
+            if busy is not None:
+                note(f"  [browser] {busy}")
             note(link_hint)
             return 1
         info = tail

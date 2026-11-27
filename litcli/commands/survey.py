@@ -32,6 +32,7 @@ from ..backends._entitled import EntitledBackend
 from ..backends.base import GraphSource
 from ..backends.http import RETRY_CODES
 from ..browser import PlaywrightError, PlaywrightTimeoutError, session_from_config
+from ..browser_broker import ProfileBusy
 from ..config import get_all_backends
 from ..errors import BadInput, BotWall, LitcliError, Unavailable
 from ..models import AcademicItem
@@ -416,9 +417,11 @@ def deps_from_config(cfg: dict, survey_project: project.Project) -> Deps:
                 graph=graph, by_name={b.name: b for b in graph},
                 session_alive=_session_alive(session) if session is not None else (lambda: True),
                 browser_fetch=session.download if session is not None else None,
-                # `terminate`, not `close`: a run that started a browser has to stop it, or
-                # every run of many leaves one behind. A browser the user opened is untouched.
-                close=session.terminate if session is not None else (lambda: None))
+                # `terminate(force=False)`, not `close`: a run that started a browser has to
+                # stop it, or every run of many leaves one behind — but gently, so a fetch
+                # still holding a lease in another process keeps its browser.
+                close=(lambda: session.terminate(force=False)) if session is not None
+                else (lambda: None))
 
 
 def _session_alive(session) -> Callable[[], bool]:
@@ -427,11 +430,20 @@ def _session_alive(session) -> Callable[[], bool]:
     Nothing has started it for a survey (``fetch`` does that itself), and a session that was
     never started cannot answer, so the first check is also the launch.
     """
+    noted: list[bool] = []
+
     def alive() -> bool:
         if session.alive():
             return True
         try:
             session.start()
+        except ProfileBusy as e:
+            # The profile is held by a visible browser the user has to deal with: every copy
+            # takes the cookie path, and the check runs at every hop, so say it once.
+            if not noted:
+                noted.append(True)
+                print(f"[warn] [browser] {e}", file=sys.stderr)
+            return False
         except (LitcliError, OSError, RuntimeError, PlaywrightError):
             # Playwright's own Error is none of the above (it comes from the driver, not the
             # machine), and it is exactly what a second engine start raises: a browser that

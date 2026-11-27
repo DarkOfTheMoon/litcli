@@ -209,6 +209,15 @@ class VerboseFlagTest(unittest.TestCase):
             debug.notice("[skipped] x")
         self.assertEqual((out.getvalue(), err.getvalue()), ("", "[skipped] x\n"))
 
+    def test_a_warning_is_shown_without_verbose(self):
+        # A one-off the user has to act on (a switch that changed meaning) is worth a line even
+        # in a quiet run; `notice` stays the verbose-only one.
+        debug._VERBOSE = False
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            debug.warn("x changed")
+        self.assertEqual((out.getvalue(), err.getvalue()), ("", "[warn] x changed\n"))
+
     def test_verbose_does_not_turn_on_the_debug_trace(self):
         self._main(["--verbose", "search", "x"])
         self.assertTrue(debug.verbose())

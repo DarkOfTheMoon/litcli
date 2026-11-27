@@ -61,23 +61,27 @@ class StopTest(_WithDataHome):
                       " ".join(str(c.args[0]) for c in printed.call_args_list if c.args))
 
     def test_a_headless_browser_we_started_is_stopped(self):
-        _state(owns=True, headless=True)
-        with mock.patch.object(cmd.broker, "connect", return_value=FakeLease(owns=True)), \
+        _state(owns=True, headless=True, pid=99)
+        with mock.patch.object(cmd.broker, "connect",
+                               return_value=FakeLease(owns=True, browser_pid=4242)), \
                 mock.patch.object(cmd.broker, "shutdown") as down, \
                 mock.patch("builtins.print") as printed:
             self.assertEqual(cmd.cmd_browser_stop({}, mock.Mock()), 0)
         down.assert_called_once()
-        self.assertIn("stopped (pid 7)", " ".join(str(c.args[0]) for c in printed.call_args_list
-                                                  if c.args))
+        self.assertIn("stopped (pid 4242)",
+                      " ".join(str(c.args[0]) for c in printed.call_args_list if c.args))
 
     def test_a_headed_browser_we_started_is_left_for_the_window(self):
-        _state(owns=True, headless=False)
-        with mock.patch.object(cmd.broker, "connect", return_value=FakeLease(owns=True)), \
+        # The pid in the message has to be the window's: the broker's own dies with the broker.
+        _state(owns=True, headless=False, pid=99)
+        with mock.patch.object(cmd.broker, "connect",
+                               return_value=FakeLease(owns=True, browser_pid=4242)), \
                 mock.patch.object(cmd.broker, "shutdown"), \
                 mock.patch("builtins.print") as printed:
             self.assertEqual(cmd.cmd_browser_stop({}, mock.Mock()), 0)
-        self.assertIn("close the window to end it",
-                      " ".join(str(c.args[0]) for c in printed.call_args_list if c.args))
+        out = " ".join(str(c.args[0]) for c in printed.call_args_list if c.args)
+        self.assertIn("close the window to end it", out)
+        self.assertIn("(pid 4242)", out)
 
     def test_a_stale_file_is_no_session(self):
         _state(control_port=1)
@@ -162,7 +166,8 @@ class LoginTest(_WithDataHome):
     def test_a_headless_browser_in_use_makes_login_wait(self):
         self.session.mode = "launched"
         self.session._lease.headless = True
-        with mock.patch.object(cmd.broker, "status", return_value={"leases": 1}), \
+        # Two leases: ours and somebody else's. The count includes ours, so two means busy.
+        with mock.patch.object(cmd.broker, "status", return_value={"leases": 2}), \
                 mock.patch.object(cmd, "_WAIT_FOR_IDLE", 0.05), \
                 mock.patch("builtins.print") as printed:
             self.assertEqual(cmd.cmd_browser_login({}, mock.Mock(site="ieee")), 2)
@@ -228,16 +233,69 @@ class LoginTest(_WithDataHome):
             self.assertEqual(cmd.cmd_browser_login({}, mock.Mock(site="ieee")), 2)
         self.assertIn("no display", " ".join(str(c.args[0]) for c in printed.call_args_list))
 
+    def test_a_busy_profile_makes_login_exit_1(self):
+        # `someone is using the browser` is a state, not a site refusal: the documented exit
+        # code is 1, and the sentence naming the cause has to be the one printed.
+        from litcli.browser_broker import ProfileBusy
+        self.session.start = mock.Mock(side_effect=ProfileBusy("someone is using the browser"))
+        with mock.patch("builtins.print") as printed:
+            self.assertEqual(cmd.cmd_browser_login({}, mock.Mock(site="ieee")), 1)
+        out = " ".join(str(c.args[0]) for c in printed.call_args_list if c.args)
+        self.assertIn("someone is using the browser", out)
+
+    def test_a_busy_profile_makes_status_exit_1(self):
+        from litcli.browser_broker import ProfileBusy
+        self.session.alive = lambda: False
+        self.session.start = mock.Mock(side_effect=ProfileBusy("someone is using the browser"))
+        with mock.patch("builtins.print") as printed:
+            self.assertEqual(cmd.cmd_browser_status({}, mock.Mock(site="aip")), 1)
+        out = " ".join(str(c.args[0]) for c in printed.call_args_list if c.args)
+        self.assertIn("someone is using the browser", out)
+
+    def test_status_reports_the_broker_even_when_it_only_attached(self):
+        # The broker already runs and the header is the point of the command: attaching only
+        # for the probe used to leave a column of None above the table.
+        class Attached(FakeSession):
+            def start(self):
+                self.started = True
+                self._lease = FakeLease(owns=False)
+
+        session = Attached()
+        session._lease = None
+        info = {"profile": "/p", "source": "default", "profile_directory": "Default",
+                "mode": "attached", "headless": True, "leases": 0}
+        with mock.patch.object(cmd, "_session", return_value=session), \
+                mock.patch.object(cmd.broker, "status", return_value=info), \
+                mock.patch("builtins.print") as printed:
+            self.assertEqual(cmd.cmd_browser_status({}, mock.Mock(site="aip")), 0)
+        out = " ".join(str(a) for c in printed.call_args_list for a in c.args)
+        self.assertIn("source: default", out)
+        self.assertNotIn("profile: None", out)
+
+    def test_the_own_profile_window_needs_a_display(self):
+        # On a server Chrome starts and exits at once; the command then waits on an Enter for a
+        # window nobody can see, and the hint that would have worked is `dedicated`.
+        with mock.patch.object(cmd, "_targets_the_users_own_profile", return_value=True), \
+                mock.patch.dict(os.environ, {"DISPLAY": "", "WAYLAND_DISPLAY": ""}), \
+                mock.patch.object(cmd, "_open_window") as opened, \
+                mock.patch("builtins.input"), \
+                mock.patch("builtins.print") as printed:
+            self.assertEqual(cmd.cmd_browser_login({}, mock.Mock(site="ieee")), 2)
+        opened.assert_not_called()
+        out = " ".join(str(c.args[0]) for c in printed.call_args_list if c.args)
+        self.assertIn("display", out)
+        self.assertIn("dedicated", out)
+
     def test_status_prints_the_profile_header(self):
         self.session.mode = "attached"
         self.session.queue = [(200, "<html>signed in</html>")] * len(cmd.SITES)
         info = {"profile": "/p", "source": "default", "profile_directory": "Profile 1",
-                "mode": "attached", "leases": 2}
+                "mode": "attached", "headless": True, "leases": 2}
         with mock.patch.object(cmd.broker, "status", return_value=info), \
                 mock.patch("builtins.print") as printed:
             self.assertEqual(cmd.cmd_browser_status({}, mock.Mock(site="aip")), 0)
         out = " ".join(str(a) for c in printed.call_args_list for a in c.args)
-        for part in ("/p", "default", "Profile 1", "attached", "2"):
+        for part in ("/p", "default", "Profile 1", "attached", "headless: True", "2"):
             self.assertIn(part, out)
 
     def test_status_classifies_each_site(self):
@@ -326,8 +384,7 @@ class WindowTest(unittest.TestCase):
         cfg = {"browser": {"channel": "google-chrome", "profile_directory": "Profile 1"},
                "network": {"proxy": "http://127.0.0.1:7890"}}
         with mock.patch.object(cmd.broker, "_binary",
-                               return_value="/opt/google/chrome/chrome"), \
-                mock.patch.object(cmd.shutil, "which", return_value="/opt/g"), \
+                               return_value=("/opt/google/chrome/chrome", False)), \
                 mock.patch.object(cmd.subprocess, "Popen") as popen:
             cmd._open_window(cfg, "https://x/")
         argv = popen.call_args.args[0]
@@ -338,11 +395,12 @@ class WindowTest(unittest.TestCase):
     def test_the_profile_directory_is_passed_to_the_bundled_browser(self):
         # The bundled Chromium has no default directory of its own here, so the profile has to
         # be named or the sign-ins would land in a different browser's store.
-        with mock.patch.object(cmd.broker, "_binary", return_value="/b/chromium"), \
-                mock.patch.object(cmd.shutil, "which", return_value=None), \
+        with mock.patch.object(cmd.broker, "_binary",
+                               return_value=("/b/chromium", True)), \
                 mock.patch.object(cmd.paths, "user_browser_profile_dir",
                                   return_value=Path("/u")) as own, \
                 mock.patch.object(cmd.subprocess, "Popen") as popen:
             cmd._open_window({}, "https://x/")
         self.assertIn("--user-data-dir=/u", popen.call_args.args[0])
+        self.assertIn("--no-sandbox", popen.call_args.args[0])
         own.assert_called()

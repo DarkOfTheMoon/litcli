@@ -45,6 +45,11 @@ def notice(message: str) -> None:
         print(message, file=sys.stderr, flush=True)
 
 
+def warn(message: str) -> None:
+    """A one-off the user has to act on (a switch that changed meaning), shown every time."""
+    print(f"[warn] {message}", file=sys.stderr, flush=True)
+
+
 def set_enabled(flag: bool = True) -> None:
     """Turn tracing on (``--debug``); the environment can only turn it on, never off."""
     global _ENABLED

@@ -13,6 +13,7 @@ the kernel does even when the client is SIGKILLed. The broker is a supervisor, n
 from __future__ import annotations
 
 import contextlib
+import http.client
 import json
 import os
 import re
@@ -49,6 +50,9 @@ _CREATE_NEW_PROCESS_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00
 
 #: Where process command lines are read from; absent outside Linux.
 _PROC = Path("/proc")
+
+#: The kill that cannot be caught; Windows has only SIGTERM, which is the same thing there.
+_KILL = getattr(signal, "SIGKILL", signal.SIGTERM)
 
 #: How long a freshly spawned browser gets to open its debugging port.
 _READY_TIMEOUT = 20.0
@@ -130,7 +134,9 @@ def cdp_ready(port: int, timeout: float = 0.5) -> bool:
         with urllib.request.urlopen(f"http://127.0.0.1:{int(port)}/json/version",
                                     timeout=timeout) as answer:
             return answer.status == 200
-    except (OSError, ValueError):
+    except (OSError, ValueError, http.client.HTTPException):
+        # A port that answers something that is not HTTP is not a browser either: a broker's
+        # control port answers one JSON line, which is a BadStatusLine here, not an OSError.
         return False
 
 
@@ -156,9 +162,21 @@ def _attach_engine(port: int):
     return browser.contexts[0], engine.stop
 
 
+#: How long a browser that holds the profile is given to finish disappearing before the
+#: profile is called somebody else's (a replacement arrives while the old browser is leaving).
+_HOLD_SETTLE = 2.0
+#: How long a heal waits for the profile lock, each of its two attempts.
+_LOCK_WAIT = 5.0
 _BUSY_SENTENCE = (
     "your Chrome is already running on this profile without a debugging port - close it, "
     "or start it with --remote-debugging-port=0")
+
+#: The longest a heal can take: two attempts, each a lock wait and a full launch, plus the
+#: settle between them.
+_HEAL_BUDGET = 2 * (_READY_TIMEOUT + _LOCK_WAIT) + _HOLD_SETTLE
+#: How long a hello (and a lease's own status check) waits for its answer. Both heal first,
+#: and a heal may relaunch a browser.
+_HELLO_TIMEOUT = _HEAL_BUDGET + 10.0
 
 #: How a real Chrome is spelled on each platform (the ``chrome`` channel needs one installed).
 _CHROME_BINARIES = ("google-chrome", "google-chrome-stable", "chrome", "chromium", "chromium-browser")
@@ -228,7 +246,7 @@ def _wait_gone(pid: int, timeout: float = 3.0) -> None:
             return
         time.sleep(0.05)
     with contextlib.suppress(OSError):
-        os.kill(pid, signal.SIGKILL)
+        os.kill(pid, _KILL)
 
 
 def _is_headless(pid: int) -> bool:
@@ -240,30 +258,95 @@ def _is_headless(pid: int) -> bool:
     return "--headless" in line
 
 
-def _free_port() -> int:
-    """A port free right now (Chrome fails to start on a taken one)."""
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
+def _port_file(profile: Path) -> Path:
+    return Path(profile) / "DevToolsActivePort"
+
+
+#: The line a browser prints once its debugging port is up.
+_LISTENING = re.compile(r"DevTools listening on ws://127\.0\.0\.1:(\d+)/")
+
+
+def _stop_child(child) -> None:
+    """Kill a browser whose port never came.
+
+    Left alive it holds the profile with a lock and no ``DevToolsActivePort``: nothing can
+    attach, the next launch reads a busy profile, and `browser stop` says "no session" because
+    no session file was ever written.
+    """
+    with contextlib.suppress(OSError):
+        os.kill(child.pid, _KILL)
+    with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+        child.wait(5.0)
+
+
+def _await_port(marker: Path, before: str | None, child, binary: str, start: float) -> int:
+    """The port the new browser announced, or the one it put in its file.
+
+    The announcement is the dependable source: only the first browser on a data directory
+    writes ``DevToolsActivePort``, and the user's own directory is shared with whatever else
+    they have open. The file is the fallback for a build that stays quiet, and only content
+    that changed after the spawn counts (a dead run leaves its own behind).
+    """
+    announced: dict = {}
+
+    def read_announcement() -> None:
+        with contextlib.suppress(OSError, ValueError):
+            for raw in child.stderr:  # a pipe, drained as it comes, so it cannot fill up
+                found = _LISTENING.search(raw.decode("utf-8", "replace"))
+                if found and "port" not in announced:
+                    announced["port"] = int(found.group(1))
+
+    threading.Thread(target=read_announcement, daemon=True).start()
+    deadline = start + _READY_TIMEOUT
+    while time.monotonic() < deadline:
+        if child.poll() is not None:
+            if child.returncode == 0:
+                raise ProfileBusy(_BUSY_SENTENCE)
+            raise BrowserUnavailable(
+                f"{binary} exited at once (code {child.returncode}); a headed browser needs a "
+                "display", hint="litcli backends install-browser")
+        if announced.get("port") and cdp_ready(announced["port"]):
+            return announced["port"]
+        try:
+            after = marker.read_text(encoding="utf-8")
+        except OSError:
+            after = None
+        if after and after != before:
+            with contextlib.suppress(ValueError, IndexError):
+                port = int(after.splitlines()[0])
+                if cdp_ready(port):
+                    return port
+        time.sleep(0.1)
+    raise BrowserUnavailable(
+        f"{binary} never opened its debugging port (pid {child.pid})",
+        hint="litcli backends install-browser")
+
 
 def _launch_detached(binary: str, profile, headless: bool, proxy: str | None,
-                     profile_directory: str | None = None) -> BrowserRuntime:
+                     profile_directory: str | None = None, no_sandbox: bool = False) -> BrowserRuntime:
     """Start a Chrome that outlives this process, then attach to it.
 
     Detached on purpose (``start_new_session``): `browser login` exits and the clearance must
     still be there for the next command, which attaches over CDP from a process of its own.
     """
-    port = _free_port()
     profile = Path(profile)
     profile.mkdir(parents=True, exist_ok=True)
-    argv = [binary]
-    if profile != paths.user_browser_profile_dir():
-        # Chrome refuses remote debugging when --user-data-dir names the platform default data
-        # directory, so the way to point at the user's own profile is to name it the same way
-        # a hand-started Chrome does: not at all.
-        argv.append(f"--user-data-dir={profile}")
-    argv += [f"--remote-debugging-port={port}", "--no-first-run", "--no-default-browser-check",
+    marker = _port_file(profile)
+    try:
+        before = marker.read_text(encoding="utf-8")
+    except OSError:
+        before = None
+    # Always named: a headless Chrome left to pick its own directory works in a throwaway
+    # scoped_dir with an empty cookie store, so nothing the user signed in would be read. The
+    # name alone is not enough on the user's own profile, though -- see ``env`` below.
+    argv = [binary, f"--user-data-dir={profile}"]
+    # Port 0, and Chrome picks: it writes the port it got into DevToolsActivePort, but only
+    # for an automatic port, so a port we pick would leave nothing behind for the next command
+    # (or the one after a broker was killed) to find.
+    argv += ["--remote-debugging-port=0", "--no-first-run", "--no-default-browser-check",
              "about:blank"]
+    if no_sandbox:
+        argv.insert(1, "--no-sandbox")
     if headless:
         argv.insert(1, "--headless=new")
     if profile_directory:
@@ -272,25 +355,36 @@ def _launch_detached(binary: str, profile, headless: bool, proxy: str | None,
         # The clearance is bound to the egress IP, so the browser must leave by the same proxy
         # as httpx or every cookie it earned is worthless to the request path.
         argv.insert(1, f"--proxy-server={proxy}")
+    env = None
+    if profile.resolve() == paths.user_browser_profile_dir().resolve():
+        # Naming the directory is not enough: Chrome opens no debugging port while the named
+        # path is its platform default, and that default is derived from XDG_CONFIG_HOME. A
+        # private config home for the child makes the named path non-default; the cookies are
+        # in the directory either way.
+        env = dict(os.environ)
+        env.pop("XDG_DATA_HOME", None)
+        private = paths.browser_private_xdg()
+        private.mkdir(parents=True, exist_ok=True)
+        env["XDG_CONFIG_HOME"] = str(private)
+    start = time.monotonic()
     try:
         child = subprocess.Popen(argv, start_new_session=True, stdout=subprocess.DEVNULL,
-                                 stderr=subprocess.DEVNULL)
+                                 stderr=subprocess.PIPE, env=env)
     except OSError as e:
         raise BrowserUnavailable(f"could not start {binary}: {e}",
                                  hint="litcli backends install-browser") from e
-    deadline = time.monotonic() + _READY_TIMEOUT
-    while time.monotonic() < deadline and not cdp_ready(port):
-        if child.poll() is not None:
-            if child.returncode == 0:
-                raise ProfileBusy(_BUSY_SENTENCE)
-            raise BrowserUnavailable(
-                f"{binary} exited at once (code {child.returncode}); a headed browser needs a "
-                "display", hint="litcli backends install-browser")
-        time.sleep(0.1)
-    if not cdp_ready(port):
-        raise BrowserUnavailable(
-            f"{binary} never opened its debugging port (pid {child.pid})",
-            hint="litcli backends install-browser")
+    try:
+        port = _await_port(marker, before, child, binary, start)
+    except (BrowserUnavailable, ProfileBusy):
+        _stop_child(child)
+        raise
+    try:
+        known = marker.read_text(encoding="utf-8").splitlines()[:1]
+    except OSError:
+        known = []
+    if known != [str(port)]:  # the next command looks here, and the file may hold another's
+        with contextlib.suppress(OSError):
+            marker.write_text(f"{port}\n", encoding="utf-8")
     context, stop = _attach_engine(port)
     return BrowserRuntime(port, stop, child.pid, context)
 
@@ -309,24 +403,59 @@ def live_port(profile: Path) -> int | None:
     return port if cdp_ready(port, timeout=2.0) else None
 
 
+def _pid_alive(pid: int) -> bool:
+    """Whether ``pid`` exists, without disturbing it.
+
+    ``os.kill(pid, 0)`` is ``TerminateProcess`` on Windows, so it cannot be used as a probe
+    there: the query-and-close below is read-only. Elsewhere signal 0 does nothing at all.
+    """
+    if not paths._IS_WINDOWS:
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return False
+        return True
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        try:
+            code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return False
+            return code.value == 259  # STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    except OSError:
+        return False
+
+
 def profile_holder(profile: Path) -> int | None:
     """The pid a running browser holds ``profile``'s singleton lock with, if any.
 
     The lock is a symlink named ``<hostname>-<pid>``. A lock from another machine names a pid
     that means nothing here, hence the hostname check.
     """
+    lock = Path(profile) / "SingletonLock"
     try:
-        target = os.readlink(Path(profile) / "SingletonLock")
+        target = os.readlink(lock)
     except OSError:
-        return None
+        # Windows writes the lock as a plain file (a symlink needs privilege there); the text
+        # carries the same ``<hostname>-<pid>``.
+        try:
+            target = lock.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            return None
     host, _sep, pid = target.rpartition("-")
     if host != socket.gethostname() or not pid.isdigit():
         return None
-    try:
-        os.kill(int(pid), 0)
-    except OSError:
-        return None
-    return int(pid)
+    # A crashed browser leaves its lock behind and nobody cleans it up, so the pid has to be
+    # checked: a stale lock read as a holder blocks every launch until the number is reused.
+    return int(pid) if _pid_alive(int(pid)) else None
 
 
 def _bundled_binary() -> str:
@@ -345,15 +474,19 @@ def _bundled_binary() -> str:
         engine.stop()
 
 
-def _binary(channel: str | None) -> str:
-    """A Chrome to launch: the configured channel first, then any known name, then bundled."""
+def _binary(channel: str | None) -> tuple[str, bool]:
+    """A Chrome to launch and whether it needs ``--no-sandbox``: channel, known name, bundled.
+
+    Playwright's Chromium ships ``chrome_sandbox`` not setuid, so on a machine that also
+    restricts unprivileged user namespaces it aborts at once with "No usable sandbox".
+    """
     for name in ((channel,) if channel else ()):
         if found := shutil.which(name):
-            return found
+            return found, False
     for name in _CHROME_BINARIES:
         if found := shutil.which(name):
-            return found
-    return _bundled_binary()
+            return found, False
+    return _bundled_binary(), True
 
 
 def _reap(profile: Path, keep: int | None) -> None:
@@ -362,8 +495,13 @@ def _reap(profile: Path, keep: int | None) -> None:
     A headed browser on a profile the user may own is theirs to keep; only the dedicated
     directory has no other user's things in it, so there the old clean sweep still applies.
     """
-    dedicated = Path(profile) == paths.browser_profile_dir()
-    for pid, _port in _running_on(profile):
+    dedicated = Path(profile).resolve() == paths.browser_profile_dir().resolve()
+    found = _running_on(profile)
+    if not found and not _PROC.is_dir():
+        # No /proc: the lock is the only place a leftover can be found there.
+        pid = profile_holder(profile)
+        found = [(pid, None)] if pid is not None else []
+    for pid, _port in found:
         if pid == keep:
             continue
         if not dedicated and not _is_headless(pid):
@@ -376,15 +514,21 @@ def prepare(profile, headless: bool, profile_directory: str | None, channel: str
             proxy: str | None) -> Backend:
     """Attach, report, or launch -- the three states, in that order of preference."""
     profile = Path(profile)
-    port = live_port(profile)
-    if port is not None:
-        _context, stop = _attach_engine(port)
-        return Backend(port, False, stop)
-    holder = profile_holder(profile)
-    if holder is not None:
-        raise ProfileBusy(_BUSY_SENTENCE)
+    deadline = time.monotonic() + _HOLD_SETTLE
+    while True:
+        port = live_port(profile)
+        if port is not None:
+            _context, stop = _attach_engine(port)
+            return Backend(port, False, stop)
+        if profile_holder(profile) is None:
+            break
+        if time.monotonic() >= deadline:
+            raise ProfileBusy(_BUSY_SENTENCE)
+        time.sleep(0.05)
     _reap(profile, keep=None)
-    rt = _launch_detached(_binary(channel), profile, headless, proxy, profile_directory)
+    binary, no_sandbox = _binary(channel)
+    rt = _launch_detached(binary, profile, headless, proxy, profile_directory,
+                          no_sandbox=no_sandbox)
     return Backend(rt.port, True, rt.stop, rt.pid)
 
 
@@ -393,12 +537,18 @@ class Broker:
 
     def __init__(self, *, profile: Path, headless: bool = False,
                  profile_directory: str | None = None, source: str = "default",
-                 pinned: bool = False, idle_minutes: float = 10.0, backend=None,
-                 clock=time.monotonic):
+                 pinned: bool = False, idle_minutes: float = 10.0, channel: str | None = None,
+                 proxy: str | None = None, backend=None, clock=time.monotonic):
         self.profile = Path(profile)
-        self.headless = headless
+        # The user's own profile is their Chrome's home: a visible window of ours there would
+        # shadow it, so the shared browser on it is always hidden whatever the caller asked.
+        # `browser login` is the one place a window is due, and it starts a browser of its own
+        # instead of a broker. Everywhere else the caller's choice stands.
+        self.headless = headless or self.profile.resolve() == paths.user_browser_profile_dir().resolve()
         self.profile_directory = profile_directory
         self.source = source
+        self.channel = channel
+        self.proxy = proxy
         self.pinned = pinned
         self.idle_minutes = idle_minutes
         self._backend = backend
@@ -412,6 +562,7 @@ class Broker:
         self._leases: set[socket.socket] = set()
         self._last_release = clock()
         self._stopping = False
+        self._torn_down = False
         self._exited = False
         self.control_port = 0
 
@@ -449,17 +600,43 @@ class Broker:
             return
         if self._clock() - self._last_release < self.idle_minutes * 60:
             return
+        with self._locked() as locked:
+            if not locked:
+                return  # somebody is deciding right now; the next tick sees where it landed
+            if self.leases or self._stopping:
+                return
+            self._leave()
+            # The teardown stays under this lock: a client arriving now must not read the
+            # file, join, and be handed the browser that is being killed this second.
+            self._teardown_locked()
+
+    @contextlib.contextmanager
+    def _locked(self, timeout: float = 2.0):
+        """``profile_lock`` as a context, yielding whether it was actually taken.
+
+        A lock that cannot be had is not an error here: the caller's clients take it again a
+        moment later and re-read the world, so giving up is safe.
+        """
         try:
-            with profile_lock(self.profile, timeout=2.0):
-                if self.leases or self._stopping:
-                    return
-                self._leave()
+            with profile_lock(self.profile, timeout=timeout):
+                yield True
         except TimeoutError:
-            pass  # somebody is deciding right now; the next tick sees where it landed
+            yield False
 
     def _leave(self) -> None:
         self._stopping = True
         self._exited = True
+
+    def _teardown_locked(self) -> None:
+        if self._torn_down:
+            return
+        self._teardown()
+        self._torn_down = True
+
+    def _finish(self) -> None:
+        """Tear down for good, holding the profile lock while the browser goes."""
+        with self._locked():
+            self._teardown_locked()
 
     def stop(self, *, join: float | None = 5.0) -> None:
         """Leave the loop; idempotent, and safe from another thread.
@@ -479,7 +656,16 @@ class Broker:
             self.bind("127.0.0.1", 0)
         assert self._listener is not None
         self._selector.register(self._listener, selectors.EVENT_READ, "listener")
-        be = self._be = self._bring_up()
+        try:
+            be = self._be = self._bring_up()
+        except BrowserUnavailable as e:
+            # Nobody reads this process's stderr directly -- it is a pipe read by the spawning
+            # client -- but an escaping exception would print nothing at all: no line and a
+            # traceback on an unread pipe. The sentence and the code are what the client shows.
+            print(str(e), file=sys.stderr)
+            self._close_listener()
+            self._exited = True
+            return e.exit_code
         if be is None:
             self._close_listener()
             self._exited = True
@@ -488,20 +674,25 @@ class Broker:
         try:
             self._loop()
         finally:
-            self._teardown(be)
+            self._finish()
         return 0
 
-    def _bring_up(self) -> Backend | None:
-        """Ask the injected backend for a browser; a busy profile becomes exit code 1."""
+    def _bring_up(self, quiet: bool = False) -> Backend | None:
+        """Ask the injected backend for a browser; a busy profile becomes exit code 1.
+
+        ``quiet`` keeps the busy sentence off stderr for a first attempt that will be retried.
+        """
         if self._backend is None:
             from .browser_broker import prepare  # own module: keeps the name patchable
 
             self._backend = (lambda: prepare(self.profile, self.headless,
-                                             self.profile_directory, None, None))
+                                             self.profile_directory, self.channel,
+                                             self.proxy))
         try:
             return self._backend()
         except ProfileBusy as e:
-            print(str(e), file=sys.stderr)
+            if not quiet:
+                print(str(e), file=sys.stderr)
             return None
 
     def _loop(self) -> None:
@@ -575,14 +766,66 @@ class Broker:
 
     # -- commands --------------------------------------------------------------
 
+    def _heal(self) -> str | None:
+        """Replace a backend whose browser is gone, before a client is told its port.
+
+        An attached browser dies whenever the user closes its window or Chrome crashes; the
+        broker would otherwise keep handing out the stale port and every later command would
+        fail until it idled out. A browser of our own is checked the same way -- a crashed one
+        leaves exactly the same corpse. Returns why it could not, or ``None`` when it healed
+        (or had nothing to heal).
+        """
+        be = self._be
+        if be is None or cdp_ready(be.port, timeout=0.5):
+            return None
+        if cdp_ready(be.port, timeout=2.0):
+            return None  # a busy browser, not a dead one: a page loading can outlast a probe
+        with contextlib.suppress(Exception):
+            if be.stop is not None:
+                be.stop()
+        new, failure = None, None
+        for attempt in range(2):
+            try:
+                with profile_lock(self.profile, timeout=_LOCK_WAIT):
+                    new = self._bring_up(quiet=attempt == 0)
+            except (BrowserUnavailable, TimeoutError) as e:
+                failure = e
+            if new is not None:
+                break
+            if attempt == 0:
+                # A hold that clears itself (the old browser still letting go, or the user
+                # opening Chrome right now) is not worth the broker every client is on.
+                time.sleep(_HOLD_SETTLE)
+        if new is None:
+            # A busy profile was reported on stderr already; a failed relaunch says why the
+            # same way. Either way this broker has no browser it can serve, so it leaves and
+            # the next client starts a fresh one. The reply carries the same reason: the
+            # stderr pipe of a detached broker has no reader.
+            reason = str(failure) if failure is not None else "the browser is gone"
+            print(reason, file=sys.stderr)
+            self._leave()
+            return reason
+        self._be = new
+        self._write_session(new)
+        return None
+
     def _cmd_hello(self, conn: socket.socket, msg: dict) -> None:
+        reason = self._heal()
+        if reason is not None:
+            self._reply(conn, {"error": reason})
+            return
         assert self._be is not None
         self._leases.add(conn)
         self._reply(conn, {"cdp_port": self._be.port, "broker_pid": os.getpid(),
+                           "browser_pid": self._be.pid,
                            "headless": self.headless, "pinned": self.pinned,
                            "owns": self._be.owns, "version": PROTOCOL_VERSION})
 
     def _cmd_status(self, conn: socket.socket, msg: dict) -> None:
+        reason = self._heal()
+        if reason is not None:
+            self._reply(conn, {"error": reason})
+            return
         assert self._be is not None
         self._reply(conn, {"cdp_port": self._be.port, "pid": os.getpid(),
                            "headless": self.headless, "leases": self.leases,
@@ -594,14 +837,15 @@ class Broker:
 
     def _cmd_shutdown(self, conn: socket.socket, msg: dict) -> None:
         force = bool(msg.get("force"))
-        try:
-            with profile_lock(self.profile, timeout=2.0):
-                stopped = force or not self.leases
-        except TimeoutError:
-            stopped = force  # a forced stop does not wait for a decidier that is busy
-        self._reply(conn, {"ok": True, "stopped": stopped})
-        if stopped:
+        with self._locked() as locked:
+            # A forced stop does not wait for a decidier that is busy.
+            if not (force or locked) or (not force and self.leases):
+                self._reply(conn, {"ok": True, "stopped": False})
+                return
+            # The reply goes first: the teardown drops this connection.
+            self._reply(conn, {"ok": True, "stopped": True})
             self._leave()
+            self._teardown_locked()
 
     def _cmd_pin(self, conn: socket.socket, msg: dict) -> None:
         self._reply(conn, {"ok": True, "pinned": self.pin(bool(msg.get("pinned", True)))})
@@ -610,7 +854,7 @@ class Broker:
 
     def _session_fields(self, be: Backend) -> dict:
         return {"pid": os.getpid(), "control_port": self.control_port,
-                "cdp_port": be.port, "profile": str(self.profile),
+                "cdp_port": be.port, "browser_pid": be.pid, "profile": str(self.profile),
                 "profile_directory": self.profile_directory, "source": self.source,
                 "owns": be.owns, "version": PROTOCOL_VERSION, "headless": self.headless,
                 "pinned": self.pinned, "started": time.time(), "leases": self.leases}
@@ -625,20 +869,29 @@ class Broker:
             json.dump(self._session_fields(be), fh)
         os.replace(tmp, path)
 
-    def _teardown(self, be: Backend) -> None:
+    def _teardown(self) -> None:
+        # ``self._be``, not the one ``serve`` started with: a backend replaced by ``_heal``
+        # is the live one, and the old one was detached when it was replaced.
+        be = self._be
         for conn in list(self._conns):
             self._drop(conn)
-        with contextlib.suppress(OSError):
-            paths.browser_session_file().unlink()
-        self._close_listener()
-        if be.stop is not None:
-            with contextlib.suppress(Exception):
-                be.stop()
-        if be.owns and self.headless and be.pid:
-            # Only a headless browser we started is invisible enough to be nobody's to close.
+        if be is not None:
+            if be.stop is not None:
+                with contextlib.suppress(Exception):
+                    be.stop()
+            if be.owns and self.headless and be.pid:
+                # Only a headless browser we started is invisible enough to be nobody's to close.
+                with contextlib.suppress(OSError):
+                    os.kill(be.pid, _KILL)
+                with contextlib.suppress(OSError):
+                    _wait_gone(be.pid)
+        # The browser is gone now, so the file may follow it: a reader that finds it still
+        # gets a broker whose browser answers. It is only removed while it is still ours.
+        info = read_session()
+        if info is None or info.get("control_port") == self.control_port:
             with contextlib.suppress(OSError):
-                os.kill(be.pid, signal.SIGTERM)
-            _wait_gone(be.pid)
+                paths.browser_session_file().unlink()
+        self._close_listener()
         self._exited = True
 
     def _close_listener(self) -> None:
@@ -657,7 +910,8 @@ class Lease:
     """A held-open control connection: the release is its EOF, which the kernel does for us."""
 
     def __init__(self, sock: socket.socket, reader, control_port: int, cdp_port: int, owns: bool,
-                 pinned: bool, version: int, headless: bool = False):
+                 pinned: bool, version: int, headless: bool = False,
+                 browser_pid: int | None = None):
         self._sock: socket.socket | None = sock
         self._reader = reader
         self.control_port = control_port
@@ -666,6 +920,7 @@ class Lease:
         self.pinned = pinned
         self.version = version
         self.headless = headless   # the broker's browser, not what this caller asked for
+        self.browser_pid = browser_pid  # the window, when there is one; gone with stop
 
     def live(self) -> bool:
         """Whether the broker still answers on this lease's connection."""
@@ -673,7 +928,9 @@ class Lease:
             return False
         try:
             self._sock.sendall(b'{"cmd":"status"}\n')
-            self._sock.settimeout(1.0)
+            # The broker serves one connection at a time and ``status`` heals first: the wait
+            # is the heal's budget, or a healthy broker reads as dead for the whole of it.
+            self._sock.settimeout(_HELLO_TIMEOUT)
             line = self._reader.readline()
             return bool(line) and isinstance(json.loads(line), dict)
         except (OSError, ValueError):
@@ -694,14 +951,24 @@ def _conn(control_port: int, timeout: float = 2.0):
     return sock, sock.makefile("rb")
 
 
+def _error_of(answer: dict) -> str | None:
+    """The broker's reason out of a reply, when it answered with one instead of data."""
+    error = answer.get("error")
+    return error if isinstance(error, str) and error else None
+
+
 def _exchange(control_port: int, msg: dict, timeout: float = 2.0) -> dict:
     sock, reader = _conn(control_port, timeout)
     try:
         sock.sendall((json.dumps(msg) + "\n").encode())
-        return json.loads(reader.readline())
+        answer = json.loads(reader.readline())
     finally:
         with contextlib.suppress(OSError):
             sock.close()
+    error = _error_of(answer) if isinstance(answer, dict) else None
+    if error is not None:
+        raise BrokerUnavailable(error)
+    return answer
 
 
 def connect(control_port, *, version: int = PROTOCOL_VERSION, headless: bool,
@@ -709,6 +976,9 @@ def connect(control_port, *, version: int = PROTOCOL_VERSION, headless: bool,
     """Take a lease on an existing broker; a busy or dead port raises ``BrokerUnavailable``."""
     sock, reader = _conn(control_port, timeout)
     try:
+        # The broker heals before answering a hello, and a heal may relaunch the browser: as
+        # long a wait as a cold launch, not the 2 s a broker with nothing to do needs.
+        sock.settimeout(_HELLO_TIMEOUT)
         sock.sendall((json.dumps({"cmd": "hello", "version": version,
                                   "headless": headless, "pid": os.getpid()}) + "\n").encode())
         answer = json.loads(reader.readline())
@@ -716,10 +986,16 @@ def connect(control_port, *, version: int = PROTOCOL_VERSION, headless: bool,
         with contextlib.suppress(OSError):
             sock.close()
         raise BrokerUnavailable(f"the broker on port {control_port} did not answer: {e}") from e
+    error = _error_of(answer) if isinstance(answer, dict) else None
+    if error is not None:
+        with contextlib.suppress(OSError):
+            sock.close()
+        raise BrokerUnavailable(error)
     return Lease(sock, reader, int(control_port), int(answer["cdp_port"]),
                  bool(answer.get("owns")), bool(answer.get("pinned")),
                  int(answer.get("version", PROTOCOL_VERSION)),
-                 bool(answer.get("headless")))
+                 bool(answer.get("headless")),
+                 answer.get("browser_pid"))
 
 
 def shutdown(control_port, *, force: bool = False) -> dict:
@@ -730,8 +1006,13 @@ def pin(control_port, *, pinned: bool = True) -> dict:
     return _exchange(control_port, {"cmd": "pin", "pinned": pinned})
 
 
-def status(control_port, *, timeout: float = 2.0) -> dict:
-    """One status snapshot of the broker on ``control_port``."""
+def status(control_port, *, timeout: float = _HELLO_TIMEOUT) -> dict:
+    """One status snapshot of the broker on ``control_port``.
+
+    The default is the heal budget: the broker heals before it answers, and a caller that gave
+    up sooner reads a healing broker as absent -- `_others_on` would then replace it under its
+    own clients.
+    """
     return _exchange(control_port, {"cmd": "status"}, timeout)
 
 
@@ -772,13 +1053,49 @@ def _broker_argv(profile: Path, *, headless: bool, profile_directory, source,
     return argv
 
 
-def _join(info: dict | None, version: int, headless: bool) -> Lease | None:
+def _same_profile(spelled, profile) -> bool:
+    """Whether a discovery file's profile is ``profile``, however each is spelled.
+
+    ``/p/``, ``/p/.`` and a symlinked ``/p`` are one directory; a string compare spends a
+    healthy broker (and the browser it holds) on a spelling.
+    """
+    if spelled in (None, ""):
+        return True  # older files carry no field; guessing "different" replaces needlessly
+    try:
+        return Path(spelled).resolve() == Path(profile).resolve()
+    except OSError:
+        return str(spelled) == str(profile)
+
+
+def _join(info: dict | None, version: int, headless: bool,
+          profile: Path | None = None) -> Lease | None:
+    """A lease on the broker ``info`` names -- unless it serves another profile.
+
+    ``[browser].profile`` can be edited while a broker runs. Joining it anyway would hand back
+    the old profile's port and the new setting would silently do nothing.
+    """
     if not info:
+        return None
+    if profile is not None and not _same_profile(info.get("profile"), profile):
         return None
     try:
         return connect(info["control_port"], version=version, headless=headless)
     except BrokerUnavailable:
         return None
+
+
+def _await_retired(control_port: int, timeout: float = 10.0) -> None:
+    """Wait for a broker that was told to leave, and the browser it goes down with.
+
+    Its teardown removes the discovery file only once the browser is gone, so the file
+    disappearing (or changing hands) is what says the profile is free again.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        info = read_session()
+        if info is None or info.get("control_port") != control_port:
+            return
+        time.sleep(0.05)
 
 
 def _child_stderr(child) -> str:
@@ -799,14 +1116,21 @@ def ensure_lease(profile, *, headless: bool, profile_directory=None, source: str
     profile is free and both launch a browser into it.
     """
     profile = Path(profile)
-    lease = _join(read_session(), version, headless)
+    lease = _join(read_session(), version, headless, profile)
     if lease is not None:
         return lease
     try:
         with profile_lock(profile, timeout=wait):
-            lease = _join(read_session(), version, headless)
+            info = read_session()
+            lease = _join(info, version, headless, profile)
             if lease is not None:
                 return lease
+            if info and not _same_profile(info.get("profile"), profile):
+                # It serves another profile: stop it (nobody there can use it for this one)
+                # and wait for its browser before a new broker comes up on ours.
+                with contextlib.suppress(BrokerUnavailable, OSError):
+                    shutdown(info["control_port"], force=True)
+                _await_retired(info["control_port"])
             child = _spawn_broker(_broker_argv(
                 profile, headless=headless, profile_directory=profile_directory,
                 source=source, idle_minutes=idle_minutes, channel=channel, proxy=proxy,
@@ -844,9 +1168,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     broker = Broker(profile=Path(args.profile), headless=args.headless,
                     profile_directory=args.profile_directory, source=args.source,
-                    pinned=args.pinned, idle_minutes=args.idle_minutes)
+                    pinned=args.pinned, idle_minutes=args.idle_minutes,
+                    channel=args.channel, proxy=args.proxy)
     return broker.serve()
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # `-m` makes this file __main__: a second module with a second copy of every class, while
+    # the relative imports inside it hand back the package's copies. Every `isinstance` and
+    # `except` across that seam compares two different classes and quietly misses. Entering
+    # through the package's own module keeps one copy of each.
+    from .browser_broker import main as package_main
+
+    sys.exit(package_main())

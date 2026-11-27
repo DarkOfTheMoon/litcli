@@ -99,3 +99,21 @@ class CliSurfaceTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BrokerModuleTest(unittest.TestCase):
+    """``litcli -m litcli.browser_broker ...``: how a frozen build starts its broker.
+
+    A frozen executable has no ``python -m``: ``sys.executable`` is litcli itself, so the broker
+    is spawned with the module flag in front (``browser_broker._broker_argv``). The top-level
+    parser has to recognise it, or every browser command of an installed build dies on exit 2.
+    """
+
+    def test_the_module_flag_reaches_the_broker(self):
+        from unittest import mock
+
+        from litcli import browser_broker
+        with mock.patch.object(browser_broker, "main", return_value=0) as ran:
+            self.assertEqual(cli.main(["-m", "litcli.browser_broker", "--profile", "/p",
+                                       "--headless"]), 0)
+        ran.assert_called_once_with(["--profile", "/p", "--headless"])

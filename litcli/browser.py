@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import contextlib
 import shutil
+import socket
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -161,17 +162,18 @@ def session_from_config(cfg: dict, *, pinned: bool = False) -> Session | None:
         return None
     channel = section.get("channel", "chrome")
     if channel and not any(shutil.which(binary) for binary in _CHROME_BINARIES):
-        debug.notice("no Chrome found; the browser session falls back to the bundled Chromium")
+        debug.warn("no Chrome found; the browser session falls back to the bundled Chromium")
         channel = None
     profile = section.get("profile") or None
     if profile is None and _dedicated_profile_left_behind():
-        debug.notice('the browser session now uses your own Chrome profile and the old '
-                      'dedicated one is idle; set `profile = "dedicated"` to keep its sign-ins')
+        debug.warn('the browser session now uses your own Chrome profile and the old '
+                   'dedicated one is idle; set `profile = "dedicated"` to keep its sign-ins')
     return Session(profile=profile,
                    headless=bool(section.get("headless", False)), channel=channel,
                    proxy=(cfg.get("network") or {}).get("proxy"),
                    profile_directory=section.get("profile_directory") or "Default",
-                   profile_source="config" if profile else "default", pinned=pinned)
+                   profile_source="config" if profile else "default", pinned=pinned,
+                   idle_minutes=float(section.get("idle_minutes", 10.0)))
 
 
 def _dedicated_profile_left_behind() -> bool:
@@ -215,6 +217,33 @@ _CHALLENGE_WAIT = 30.0
 _CHALLENGE_POLL = 0.5
 
 
+def _wait_replaced(control_port: int, profile, timeout: float = 8.0) -> None:
+    """Wait for a broker that was told to leave, and the browser it was taking down with it.
+
+    The shutdown reply comes before the teardown runs, and the teardown's SIGTERM needs a
+    moment: asking for the next broker at once would meet a browser still holding the profile.
+    A browser that stays (one the user started) answers on its port, and that ends the wait.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if browser_broker.live_port(profile) is not None:
+            return
+        try:
+            socket.create_connection(("127.0.0.1", control_port), timeout=0.2).close()
+        except OSError:
+            if browser_broker.profile_holder(profile) is None:
+                return
+        time.sleep(0.05)
+
+
+def _others_on(control_port: int) -> int:
+    """How many leases the broker serves besides ours; 0 when it cannot say (so: replace)."""
+    with contextlib.suppress(browser_broker.BrokerUnavailable, OSError, ValueError, KeyError,
+                             TypeError):
+        return int(browser_broker.status(control_port)["leases"]) - 1
+    return 0
+
+
 class Session:
     """A client of the browser broker: it holds a lease, and the browser is the broker's.
 
@@ -225,7 +254,7 @@ class Session:
     def __init__(self, profile: str | None = None, headless: bool = False,
                  channel: str | None = None, proxy: str | None = None,
                  profile_directory: str = "Default", profile_source: str = "default",
-                 pinned: bool = False, lease_factory=None):
+                 pinned: bool = False, lease_factory=None, idle_minutes: float = 10.0):
         self._profile = paths.resolve_browser_profile(profile)
         self._profile_directory = profile_directory
         self._profile_source = profile_source
@@ -233,6 +262,7 @@ class Session:
         self._channel = channel
         self._proxy = proxy
         self._pinned = pinned
+        self._idle_minutes = idle_minutes
         self._lease_factory = lease_factory
         self._user_profile = False  # computed per lease: the warm-up only applies to theirs
         self._lease: browser_broker.Lease | None = None
@@ -271,14 +301,16 @@ class Session:
         """Take a lease on the profile's broker, starting one when there is none."""
         lease = self._new_lease()
         if lease.version != browser_broker.PROTOCOL_VERSION:
-            if not lease.owns:
-                # An older broker of another process: replace it, nobody else can read ours.
+            if _others_on(lease.control_port) == 0:
+                # Nobody else is reading it: replace it rather than leave a broker this
+                # version cannot talk to. The browser itself is found again by its port.
                 with contextlib.suppress(browser_broker.BrokerUnavailable, OSError):
                     browser_broker.shutdown(lease.control_port, force=True)
                 lease.close()
+                _wait_replaced(lease.control_port, self._profile)
                 lease = self._new_lease()
             if lease.version != browser_broker.PROTOCOL_VERSION:
-                debug.notice(f"the browser broker answers protocol {lease.version}, this litcli "
+                debug.warn(f"the browser broker answers protocol {lease.version}, this litcli "
                              f"speaks {browser_broker.PROTOCOL_VERSION}; run `litcli browser "
                              "stop` to replace it")
         self._lease = lease
@@ -290,11 +322,13 @@ class Session:
             return self._lease_factory(profile=self._profile, headless=self._headless,
                                        profile_directory=self._profile_directory,
                                        source=self._profile_source, pinned=self._pinned,
-                                       channel=self._channel, proxy=self._proxy)
+                                       channel=self._channel, proxy=self._proxy,
+                                       idle_minutes=self._idle_minutes)
         return browser_broker.ensure_lease(
             self._profile, headless=self._headless,
             profile_directory=self._profile_directory, source=self._profile_source,
-            pinned=self._pinned, channel=self._channel, proxy=self._proxy)
+            pinned=self._pinned, channel=self._channel, proxy=self._proxy,
+            idle_minutes=self._idle_minutes)
 
     def start(self) -> None:
         """Make sure a browser session is up and bind this session's driver to it."""
@@ -370,6 +404,10 @@ class Session:
             return
         with contextlib.suppress(browser_broker.BrokerUnavailable, OSError):
             browser_broker.shutdown(port, force=force)
+        if force:
+            # A forced stop takes the browser with it; the caller usually starts a new one at
+            # once, and it must not arrive while the old one still holds the profile.
+            _wait_replaced(port, self._profile)
 
     def alive_elsewhere(self) -> bool:
         """Whether some other process currently holds a lease on the broker."""
@@ -410,20 +448,30 @@ class Session:
     def page(self, url: str) -> PageResponse:
         """Navigate and hand back the answer (one rebind-and-retry when the browser left).
 
-        On the user's own profile a challenge that survives the retry gets one warm-up: the
+        On the user's own profile a challenge that survives the retry gets warm-up cycles: the
         site root, then the address again. The challenge rides the signed-in chain, so the
         root's own exchange sets the clearance the article then loads with.
         """
         return self._retrying(lambda: self._navigate_warm(url))
 
+    #: Warm-up cycles a challenge on the user's profile gets. The clearance the root sets lands
+    #: on the load after it, so a single cycle can come back challenged; a second is what a
+    #: bare re-run of the command would have given it, without the caller having to know.
+    _WARM_CYCLES = 2
+
     def _navigate_warm(self, url: str) -> PageResponse:
         answer = self._navigate(url)
-        if not (self._user_profile and is_challenge_page(answer.text)):
-            return answer
         page = self._page()
-        self._goto(page, _site_root(url))
-        self._settle(page)
-        return self._navigate(url)
+        for _ in range(self._WARM_CYCLES):
+            if not (self._user_profile and is_challenge_page(answer.text)):
+                break
+            try:
+                self._goto(page, _site_root(url))
+                self._settle(page)
+            except PlaywrightError:
+                pass  # the challenge reloads its own document over the warm-up; the address tries
+            answer = self._navigate(url)
+        return answer
 
     def _navigate(self, url: str) -> PageResponse:
         """Navigate and hand back the answer (a gate page included; it is not an error here).

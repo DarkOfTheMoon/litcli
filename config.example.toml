@@ -236,5 +236,7 @@ type = "opencitations"
 # enabled = true
 # profile = ""                                   # 空=用你自己的 Chrome 登录态;"dedicated"=本工具的独立 profile;或任意路径
 # profile_directory = "Default"                  # 多 profile 的安装,指到已登录的那个子 profile
-# headless = false                               # 用 user profile 时设 true 会让拉起的那只不显示窗口
+# headless = false                               # 独立 profile 用:true 时拉起的那只不显示窗口;
+                                                 # 在你自己的 profile 上无论如何都是无头(可见的 Chrome 在那里不开调试口)
+# idle_minutes = 10                              # 没人用的会话监督进程多久自行退出;0=不按空闲退
 # channel = "chrome"                             # 缺 Chrome 时自动退回随包 Chromium

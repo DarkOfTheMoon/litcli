@@ -8,7 +8,7 @@ whatever browser the user would still want.
 from __future__ import annotations
 
 import contextlib
-import shutil
+import os
 import subprocess
 import sys
 import time
@@ -115,6 +115,10 @@ def cmd_browser_login(cfg, args) -> int:
         if session.mode == "launched":
             broker.pin(session._lease.control_port, pinned=True)  # no idle exit mid sign-in
         session.page(SITES[site])
+    except broker.ProfileBusy as e:
+        # Nothing malfunctioned: a browser is up and somebody else holds it.
+        print(f"[error] {e}", file=sys.stderr)
+        return e.exit_code
     except BrowserUnavailable as e:
         print(f"[error] {e}", file=sys.stderr)
         return 2
@@ -146,9 +150,9 @@ def _open_window(cfg: dict, url: str) -> None:
     The sign-ins still land in that profile, which is all the headless reader needs.
     """
     section = cfg.get("browser") or {}
-    binary = broker._binary(section.get("channel", "chrome"))
-    argv = [binary]
-    if not any(shutil.which(name) for name in broker._CHROME_BINARIES):
+    binary, no_sandbox = broker._binary(section.get("channel", "chrome"))
+    argv = [binary] + (["--no-sandbox"] if no_sandbox else [])
+    if no_sandbox:
         # The bundled Chromium has no default store of its own here: name the profile or the
         # sign-ins would land in a browser nothing else opens.
         argv.append(f"--user-data-dir={paths.resolve_browser_profile(section.get('profile'))}")
@@ -168,6 +172,12 @@ def _open_window(cfg: dict, url: str) -> None:
 
 def _login_in_window(cfg: dict, site: str) -> int:
     """The own-profile path: a plain window, no session, no probing."""
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        # Over SSH or on a bare server Chrome starts and exits at once; the prompt below would
+        # wait on an Enter for a window that never appeared.
+        print("[error] no display here for a window; set `profile = \"dedicated\"` to use the "
+              "headless browser instead", file=sys.stderr)
+        return 2
     try:
         _open_window(cfg, SITES[site])
     except BrowserUnavailable as e:
@@ -183,11 +193,14 @@ def _login_in_window(cfg: dict, site: str) -> int:
 
 
 def _wait_released(control_port: int) -> bool:
-    """Wait for every other lease on the broker to go, up to :data:`_WAIT_FOR_IDLE`."""
+    """Wait for every other lease on the broker to go, up to :data:`_WAIT_FOR_IDLE`.
+
+    ``leases`` counts our own lease too, so only a count of one means nobody else is there.
+    """
     deadline = time.monotonic() + _WAIT_FOR_IDLE
     while True:
         try:
-            if not broker.status(control_port).get("leases"):
+            if broker.status(control_port).get("leases", 1) <= 1:
                 return True
         except (broker.BrokerUnavailable, OSError, ValueError):
             return True  # no broker left to wait for
@@ -211,7 +224,8 @@ def cmd_browser_stop(cfg, args) -> int:
     except broker.BrokerUnavailable:
         print("no session")
         return 0
-    owns, headless, pid = bool(state.get("owns")), bool(state.get("headless")), state.get("pid")
+    owns, headless = bool(state.get("owns")), bool(state.get("headless"))
+    pid = lease.browser_pid or state.get("pid")  # the window's pid, not the broker's own
     try:
         with contextlib.suppress(BrowserUnavailable, OSError, ValueError):
             broker.shutdown(lease.control_port, force=True)  # gone already is the same outcome
@@ -230,16 +244,21 @@ def cmd_browser_status(cfg, args) -> int:
     """Report, per site, whether the live session gets through — and its gates."""
     session = _session(cfg)
     try:
-        if not session.alive():
+        if not session.alive() or session._lease is None:
+            # The header is the point of this command, and attaching is what gives it: a
+            # broker that already runs would otherwise leave a column of empty values.
             session.start()
         info = broker.status(session._lease.control_port) if session._lease else {}
-        for name in ("profile", "source", "profile_directory", "mode", "leases"):
+        for name in ("profile", "source", "profile_directory", "mode", "headless", "leases"):
             value = info.get(name)
             if name == "mode":
                 value = session.mode
             print(f"{name}: {value}")
         print()
         rows = [(site, _probe(session, url)) for site, url in SITES.items()]
+    except broker.ProfileBusy as e:
+        print(f"[error] {e}", file=sys.stderr)
+        return e.exit_code
     except BrowserUnavailable as e:
         print(f"[error] {e}", file=sys.stderr)
         return 2

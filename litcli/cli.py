@@ -132,6 +132,12 @@ def main(argv=None) -> int:
     # ``--debug`` is accepted anywhere (before or after the subcommand): strip it first, then let
     # argparse see the rest. It is registered on the root parser so it shows up in --help.
     raw = list(sys.argv[1:] if argv is None else argv)
+    if raw[:2] == ["-m", "litcli.browser_broker"]:
+        # A frozen build has no ``python -m``: the broker is spawned as ``litcli -m
+        # litcli.browser_broker ...`` against this same executable, and the flag is not part of
+        # the parser's surface. Hand its arguments straight to the module.
+        from .browser_broker import main as broker_main
+        return broker_main(raw[2:])
     parser = build_parser()
     quiet, debug_flag, verbose_flag = _split_global_flags(raw, _value_options(parser))
     args = parser.parse_args(quiet)

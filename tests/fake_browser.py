@@ -203,8 +203,9 @@ class FakeLease:
     """A held control connection: ``live`` is a flag the test flips, ``close`` the release."""
 
     def __init__(self, cdpport=41_000, owns=False, pinned=False, control_port=43_000,
-                 headless=False):
+                 headless=False, browser_pid=None):
         self.cdpport, self.owns, self.pinned = cdpport, owns, pinned
+        self.browser_pid = browser_pid
         self.control_port = control_port
         self.headless = headless
         self.version = PROTOCOL_VERSION

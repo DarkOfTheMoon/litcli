@@ -186,10 +186,50 @@ class SessionTest(_SessionFixture):
         down.assert_called_once_with(stale.control_port, force=True)
         self.assertEqual(self.s._lease.version, browser.browser_broker.PROTOCOL_VERSION)
 
-    def test_an_older_broker_this_session_owns_only_warns(self):
+    def test_an_older_broker_without_other_leases_is_replaced_even_if_it_owns_the_browser(self):
+        # The rule is lease-count, not ownership: nobody else can read our protocol, and the
+        # browser itself is found again by its port after the replacement.
+        stale = FakeLease(owns=True)
+        stale.version = 0
+        leases = iter([stale, self.lease])
+
+        def factory(**_kw):
+            return next(leases)
+
+        self.s = Session(lease_factory=factory)
+        with mock.patch.object(browser.debug, "warn") as told, \
+                mock.patch.object(browser.browser_broker, "status", return_value={"leases": 1}), \
+                mock.patch.object(browser.browser_broker, "shutdown") as down:
+            self.s.start()
+        down.assert_called_once_with(stale.control_port, force=True)
+        down.assert_called_once()
+        told.assert_not_called()
+        self.assertEqual(self.s._lease.version, browser.browser_broker.PROTOCOL_VERSION)
+
+    def test_the_replaced_broker_is_waited_for_before_the_next_lease(self):
+        # A shutdown reply is sent before the teardown runs; asking for a new broker at once
+        # lands in the middle of the old one killing its browser.
+        stale = FakeLease(owns=True)
+        stale.version = 0
+        order = []
+        leases = iter([stale, self.lease])
+
+        def factory(**_kw):
+            order.append("lease")
+            return next(leases)
+
+        self.s = Session(lease_factory=factory)
+        with mock.patch.object(browser.browser_broker, "status", return_value={"leases": 1}), \
+                mock.patch.object(browser.browser_broker, "shutdown"), \
+                mock.patch.object(browser, "_wait_replaced",
+                                  side_effect=lambda *_a: order.append("wait")):
+            self.s.start()
+        self.assertEqual(order, ["lease", "wait", "lease"])
+
+    def test_an_older_broker_someone_else_holds_is_kept_and_named_once(self):
         self.lease.version = 0
-        self.lease.owns = True
-        with mock.patch.object(browser.debug, "notice") as told, \
+        with mock.patch.object(browser.debug, "warn") as told, \
+                mock.patch.object(browser.browser_broker, "status", return_value={"leases": 2}), \
                 mock.patch.object(browser.browser_broker, "shutdown") as down:
             self.s.start()
         down.assert_not_called()
@@ -204,6 +244,20 @@ class SessionTest(_SessionFixture):
 
     def test_close_when_never_started_is_quiet(self):
         self.s.close()
+
+    def test_terminate_waits_for_a_forced_stop_to_be_over(self):
+        self.s.start()
+        with mock.patch.object(browser.browser_broker, "shutdown"), \
+                mock.patch.object(browser, "_wait_replaced") as waited:
+            self.s.terminate()
+        waited.assert_called_once_with(self.lease.control_port, self.s._profile)
+
+    def test_terminate_without_force_does_not_wait(self):
+        self.s.start()
+        with mock.patch.object(browser.browser_broker, "shutdown"), \
+                mock.patch.object(browser, "_wait_replaced") as waited:
+            self.s.terminate(force=False)
+        waited.assert_not_called()
 
     def test_terminate_when_never_started_still_asks_the_broker(self):
         with mock.patch.object(browser.browser_broker, "shutdown") as down:
@@ -312,6 +366,53 @@ class SessionTest(_SessionFixture):
         self.assertEqual(answer.status, 200)
         self.assertEqual(self.s._page().gotos,
                          [url] * 2 + ["https://www.sciencedirect.com/", url])
+
+    def test_a_warm_up_that_is_interrupted_still_tries_the_address(self):
+        # The challenge reloads its own document, so the root navigation can die under it with
+        # "interrupted by another navigation". That is the warm-up failing, not the session:
+        # the address still gets its turn rather than the whole read raising.
+        self.s._profile_source = "default"
+        self.s.start()
+        url = "https://www.sciencedirect.com/science/article/pii/S1"
+        challenge = mock.Mock(status=403, headers={}, url=url)
+        good = mock.Mock(status=200, headers={}, url=url)
+        answers = iter([challenge, challenge, browser.PlaywrightError("interrupted"), good])
+
+        page = mock.MagicMock()
+        page.url = url
+        page.content.return_value = "<html><title>Just a moment...</title></html>"
+
+        def goto(address, **kw):
+            answer = next(answers)
+            if isinstance(answer, Exception):
+                raise answer
+            page.content.return_value = ("<html><title>Just a moment...</title></html>"
+                                         if answer is challenge else "<title>Journal</title>")
+            return answer
+
+        page.goto.side_effect = goto
+        with mock.patch.object(self.s, "_page", return_value=page), \
+                mock.patch.object(browser, "_CHALLENGE_WAIT", 0):
+            answer = self.s.page(url)
+        self.assertEqual(answer.status, 200)
+
+    def test_a_challenge_still_up_after_one_warm_cycle_gets_a_second(self):
+        # The root's clearance is set asynchronously and belongs to the load after it, so a
+        # first warm cycle can come back challenged too. One more cycle is what a bare
+        # second command would have given it, without the caller having to know.
+        self.s._profile_source = "default"
+        self.s.start()
+        url = "https://www.sciencedirect.com/science/article/pii/S1"
+        challenge = (403, "<html><title>Just a moment...</title></html>")
+        root = "https://www.sciencedirect.com/"
+        self.runtime.queue.extend([challenge, challenge, (200, "<title>Journal</title>"),
+                                   challenge, challenge, (200, "<title>Journal</title>"),
+                                   (200, "<title>Article</title>")])
+        with mock.patch.object(browser, "_CHALLENGE_WAIT", 0):
+            answer = self.s.page(url)
+        self.assertEqual(answer.status, 200)
+        gotos = self.s._page().gotos
+        self.assertEqual(gotos.count(root), 2, gotos)
 
     def test_a_dedicated_profile_does_not_warm(self):
         self.s = Session(profile="dedicated", profile_source="config",

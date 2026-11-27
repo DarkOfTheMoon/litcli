@@ -124,6 +124,17 @@ def project_root() -> Path:
     return _data_dir() / "projects"
 
 
+def browser_private_xdg() -> Path:
+    """A private ``XDG_CONFIG_HOME`` for a browser started on the user's own profile.
+
+    Chrome refuses a debugging port while ``--user-data-dir`` resolves to its platform
+    default, and it works that default out from ``XDG_CONFIG_HOME``. Handing the child a
+    private one makes the named directory non-default again; the cookie store stays the real
+    one, since the cookies live in the directory, not under the config home.
+    """
+    return _data_dir() / "browser-xdg"
+
+
 def browser_profile_dir() -> Path:
     """The one Chrome profile every entitled publisher shares.
 

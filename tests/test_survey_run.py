@@ -217,8 +217,9 @@ class FakeLiveSession:
     def close(self):
         self._up = False
 
-    def terminate(self):
+    def terminate(self, force=True):
         self.terminations += 1
+        self.forced = force
         self.close()
 
 
@@ -344,6 +345,33 @@ class DepsFromConfigTest(unittest.TestCase):
         deps.session_alive()
         deps.close()
         self.assertEqual(session.terminations, 1)
+
+    def test_the_run_ends_with_a_gentle_stop(self):
+        # A gentle stop leaves a browser alone when somebody else is still using it: a fetch
+        # running in another process keeps its lease, and a lone run still leaves nothing
+        # behind (the broker exits on its own once the lease is let go).
+        session = FakeLiveSession()
+        with mock.patch.object(survey, "session_from_config", lambda cfg: session):
+            deps = self.build({"browser": {"enabled": True}}, {"openalex": mock.Mock()})
+        deps.close()
+        self.assertIs(session.forced, False)
+
+    def test_a_profile_held_elsewhere_is_noted_once_for_the_whole_run(self):
+        # The check runs at every hop, so a note per check would bury the walk in the same
+        # line; a person needs to read it once and know every copy went cookie-only.
+        class Busy(FakeLiveSession):
+            def start(self):
+                raise broker.ProfileBusy("the browser profile is in use by a visible browser")
+
+        session = Busy()
+        with mock.patch.object(survey, "session_from_config", lambda cfg: session), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            deps = self.build({"browser": {"enabled": True}}, {"openalex": mock.Mock()})
+            for _ in range(3):
+                self.assertFalse(deps.session_alive())
+        lines = [line for line in err.getvalue().splitlines() if "[browser]" in line]
+        self.assertEqual(len(lines), 1)
+        self.assertIn("in use", lines[0])
 
     def test_a_reused_publisher_session_is_stopped_by_the_run_too(self):
         from litcli.backends._entitled import EntitledBackend

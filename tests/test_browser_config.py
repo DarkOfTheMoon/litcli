@@ -48,12 +48,12 @@ class ResolveProfileTest(unittest.TestCase):
         self.assertEqual(default._profile_source, "default")
         self.assertEqual(explicit._profile_source, "config")
 
-    def test_the_migration_notice_fires_only_while_the_key_is_unset(self):
+    def test_the_migration_warning_fires_only_while_the_key_is_unset(self):
         cookie_db = paths.browser_profile_dir() / "Default" / "Cookies"
         cookie_db.parent.mkdir(parents=True, exist_ok=True)
         cookie_db.write_text("SQLite")
         with mock.patch("shutil.which", return_value="/usr/bin/google-chrome"), \
-                mock.patch("litcli.debug.notice") as told:
+                mock.patch("litcli.debug.warn") as told:
             session_from_config({"browser": {"enabled": True}})
             session_from_config({"browser": {"enabled": True, "profile": "dedicated"}})
         told.assert_called_once()
@@ -83,6 +83,22 @@ class SessionFromConfigTest(unittest.TestCase):
         with mock.patch("shutil.which", return_value="/usr/bin/google-chrome"):
             session = session_from_config(cfg)
         self.assertEqual(str(session._profile), os.path.expanduser("~/elsewhere"))
+
+    def test_the_idle_minutes_reach_the_broker(self):
+        # The idle exit takes its delay from the config, the same way as the profile: an
+        # install that wants a shorter-lived supervisor writes it once and every spawn obeys.
+        cfg = {"browser": {"enabled": True, "idle_minutes": 0.5}}
+        with mock.patch("shutil.which", return_value="/usr/bin/google-chrome"):
+            session = session_from_config(cfg)
+        seen = {}
+
+        def factory(**kw):
+            seen.update(kw)
+            return mock.Mock()
+
+        session._lease_factory = factory
+        session._new_lease()
+        self.assertEqual(seen["idle_minutes"], 0.5)
 
     def test_missing_chrome_falls_back_to_the_bundled_browser(self):
         with mock.patch("shutil.which", return_value=None):
