@@ -98,6 +98,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ——整轮走查跟着那个源的排序走（实测「reduced-order models for turbulent combustion」被 arXiv 带回的一篇
   lattice-Boltzmann 论文带偏，OpenAlex 等其余源一次都没问）。现在问遍所有源，按 `search` 用的同一套相关度
   合并排序、按身份去重后取前三，同一问题得到的三篇种子全部直指该题。
+- 浏览器引擎可能被起两遍：Playwright 的同步 API 一个线程只容一只活引擎，第二只 `sync_playwright().start()`
+  直接抛「using Playwright Sync API inside the asyncio loop」，而 `Session.start()` 在浏览器已经没了时
+  （同一 profile 上并行的 `survey run` 会在启动时把别人的浏览器收掉）不停旧的 runtime 就重启；抛出的
+  `Error` 又不属于 `_session_alive` 捕获的几类，于是整条走查以「意外错误」崩掉、项目停在 `running`。
+  现在 `start()` 与取页都先问 runtime 自己是否还答得上，死掉的先停掉再接手或重开（会话发现文件是全局的，
+  真活着的那只原样留着、记录写回），`download` 的时钟设置也移进捕获、收尾不再在死 context 上二次抛出，
+  `_session_alive` 一并接住 Playwright 自己的错误——代价只是那一份副本改走 cookie 路径。实测：崩掉的
+  三臂之一原地续跑到 6 跳、`max_hops`、退出 0。
 
 ### Known gaps
 

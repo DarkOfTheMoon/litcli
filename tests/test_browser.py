@@ -21,7 +21,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import litcli.browser as browser
 import litcli.paths as paths
 from litcli.browser import Session
-from tests.fake_browser import FakeDownload, FakeLauncher
+from tests.fake_browser import FakeDownload, FakeLauncher, FakeRuntime
+
+#: A pid no process has: the runtime's browser was reaped under it.
+DEAD_PID = 999999
+
+
+def kill_unless_gone(pid, *_args):
+    """``os.kill`` stand-in: the dead pid has gone, everything else still answers."""
+    if int(pid) == DEAD_PID:
+        raise ProcessLookupError(pid)
 
 
 class FakeClock:
@@ -523,6 +532,92 @@ class SessionTest(unittest.TestCase):
             self.s.start()
         self.assertEqual(self.launcher.calls, 1)
         killed.assert_any_call(4242, signal.SIGTERM)
+
+    def test_a_record_from_another_command_does_not_hide_a_dead_runtime(self):
+        # The discovery file is one path for every process on the profile: a parallel run reaps
+        # this browser and writes its own record straight away, so `alive()` reads true while
+        # the runtime points at a dead browser. The runtime, not the file, has to decide — the
+        # old context raised TargetClosedError out of every later page.
+        self.s.start()
+        self.s._runtime.pid = DEAD_PID
+        paths.browser_session_file().write_text(json.dumps(
+            {"pid": os.getpid(), "port": 9333, "profile": str(paths.browser_profile_dir())}))
+        attached = FakeRuntime([])
+        with mock.patch.object(browser, "_running_on", lambda profile: []), \
+                mock.patch("litcli.browser.os.kill", kill_unless_gone), \
+                mock.patch.object(browser, "cdp_ready", lambda port, timeout=0.5: True), \
+                mock.patch.object(browser, "_attach_engine",
+                                  lambda port: (attached, lambda: None)):
+            self.s.page("https://e.test/a.pdf")
+        self.assertIs(self.s._runtime.context, attached)
+
+    def test_a_dead_runtime_with_nothing_to_attach_to_is_unavailable(self):
+        # No replacement and no port on record: the copy is unavailable, which the walk knows
+        # how to record — not the driver's TargetClosedError unwinding out of it.
+        self.s.start()
+        self.s._runtime.pid = DEAD_PID
+        with mock.patch.object(browser, "_running_on", lambda profile: []), \
+                mock.patch("litcli.browser.os.kill", kill_unless_gone), \
+                self.assertRaises(browser.BrowserUnavailable):
+            self.s.download("https://e.test/a.pdf")
+
+    def test_a_live_runtime_is_kept_and_owned_when_the_file_was_lost(self):
+        # `cdp_ready` can answer no under load while the browser is fine. Its runtime is what
+        # says so: the browser is kept, the record is put back, and it stays this process's to
+        # stop at the end (losing `_owned` would leave it running).
+        self.s.start()
+        stopped = []
+        self.s._runtime.stop = lambda: stopped.append(True)
+        with mock.patch.object(browser, "_running_on", lambda profile: [(5151, 9292)]), \
+                mock.patch("litcli.browser.os.kill", side_effect=kill_unless_gone) as killed, \
+                mock.patch.object(browser, "_wait_gone", lambda pid, timeout=3.0: None):
+            self.s.alive = lambda: False
+            self.s.start()
+            self.assertEqual(stopped, [])  # still talking to the browser: not dropped
+            self.assertEqual(self.launcher.calls, 1)
+            info = json.loads(paths.browser_session_file().read_text())
+            self.assertEqual(info["pid"], os.getpid())  # and back in the record
+            self.s.terminate()
+            killed.assert_any_call(os.getpid(), signal.SIGTERM)
+
+    def test_a_relaunch_after_the_browser_was_lost_stops_the_old_engine(self):
+        # Playwright's sync API takes one engine per thread: while the first engine is up, a
+        # second `sync_playwright().start()` raises "using Playwright Sync API inside the
+        # asyncio loop". Another command reaping this browser off the shared profile sends
+        # start() down the launch path with the old engine still alive, and the Error that
+        # used to come out of it ended a live walk mid-hop.
+        order = []
+
+        def launch(*args):
+            order.append("launch")
+            launched = self.launcher(*args)
+            launched.stop = lambda: order.append("stop")
+            return launched
+
+        self.s = Session(launcher=launch)
+        self.s.start()
+        self.s._runtime.pid = DEAD_PID  # the browser went away under the runtime
+        with mock.patch.object(browser, "_running_on", lambda profile: []), \
+                mock.patch("litcli.browser.os.kill", kill_unless_gone):
+            self.s.alive = lambda: False
+            self.s.start()
+        self.assertEqual(order, ["launch", "stop", "launch"])  # stopped, then the next engine
+
+    def test_adopting_a_replacement_browser_stops_the_lost_runtimes_engine(self):
+        # The lost browser can also be replaced by one another command started: the session is
+        # adopted rather than relaunched, and the runtime pointing at the dead browser must not
+        # stay — its context is what every later page would go through.
+        self.s = Session(headless=True, launcher=self.launcher)
+        self.s.start()
+        stopped = []
+        self.s._runtime.stop = lambda: stopped.append(True)
+        self.s._runtime.pid = DEAD_PID
+        with mock.patch.object(browser, "_running_on", lambda profile: [(4242, 9333)]), \
+                mock.patch("litcli.browser.os.kill", kill_unless_gone):
+            self.s.alive = lambda: False
+            self.s.start()
+        self.assertEqual(stopped, [True])  # the engine went before the browser was adopted
+        self.assertEqual(self.launcher.calls, 1)
 
     def test_a_stale_pid_is_not_alive_and_is_replaced(self):
         paths.browser_session_file().write_text('{"pid": 999999, "profile": "/x"}')

@@ -425,6 +425,22 @@ class Session:
         found on the profile but missing from the discovery file is put back in it rather than
         followed by a second one, and anything else left over on the profile is stopped.
         """
+        # The session file is one path for the whole profile, and a parallel command writes its
+        # own record the moment it reaps ours: `alive()` can be true with this runtime's
+        # browser long dead, so the runtime is what says whether there still is one.
+        if self._runtime is not None and not self._runtime_live():
+            # A dead runtime's Playwright engine cannot drive anything else, and a second
+            # ``sync_playwright().start()`` while one is up raises "using Playwright Sync API
+            # inside the asyncio loop": both paths below (adopting a replacement, launching
+            # one) need it stopped first.
+            self._drop_runtime()
+        if self._runtime is not None:
+            # Ours is alive but the file was lost or taken (a peer reaped and re-recorded):
+            # put ours back rather than launch beside it.
+            if not self.alive():
+                self._record(getattr(self._runtime, "pid", None),
+                             getattr(self._runtime, "port", None))
+            return
         if self.alive():
             return
         self._profile.mkdir(parents=True, exist_ok=True)
@@ -508,6 +524,44 @@ class Session:
             return  # the browser is its own process: the file still describes a real session
         paths.browser_session_file().unlink(missing_ok=True)
 
+    def _drop_runtime(self) -> None:
+        """Stop and forget a runtime whose browser went away.
+
+        Only the engine goes: the browser behind an attached runtime was already found dead,
+        and ``stop`` on that one detaches rather than closing a shared browser. What this
+        process started is no longer its to terminate afterwards, so ``_owned`` goes too.
+        """
+        runtime, self._runtime = self._runtime, None
+        self._owned = False
+        if runtime is not None:
+            with contextlib.suppress(Exception):
+                runtime.stop()
+
+    def _runtime_live(self) -> bool:
+        """Whether the browser behind this session's runtime still answers.
+
+        ``alive()`` answers for the profile, not for this process: the file it reads is
+        shared, so a true there can describe some other command's browser. The runtime's own
+        pid, or the port it is attached to, is what answers for this one. (The driver's own
+        objects do not: ``context.pages`` is a local list and stays readable once the browser
+        is gone.)
+        """
+        if self._runtime is None:
+            return True
+        # The port first: a killed browser stays a zombie until this process reaps it, and a
+        # zombie still answers `kill(pid, 0)`. Where there is no port (the bundled, in-process
+        # browser) that is all there is to look at.
+        port = getattr(self._runtime, "port", None)
+        if port:
+            return cdp_ready(port)
+        pid = getattr(self._runtime, "pid", None)
+        if pid:
+            try:
+                os.kill(int(pid), 0)
+            except OSError:
+                return False
+        return True
+
     def terminate(self, force: bool = False) -> None:
         """Disconnect, and stop the browser if this process started it.
 
@@ -563,6 +617,8 @@ class Session:
     # -- work ------------------------------------------------------------------
 
     def _page(self):
+        if self._runtime is not None and not self._runtime_live():
+            self._drop_runtime()  # a true `alive()` may only be describing another command
         if not self.alive():
             raise BrowserUnavailable(
                 "no browser session is running — run `litcli browser login <site>` first "
@@ -668,8 +724,10 @@ class Session:
         # back (the other waits of the session keep their 30 s). The artifact itself has no
         # timeout of its own and is awaited until it lands: a slow transfer is a wait, not a no.
         context = self._runtime.context
-        context.set_default_timeout(_DOWNLOAD_WAIT * 1000)
         try:
+            # Inside the try: a browser closed between the page and here fails this copy, not
+            # the walk.
+            context.set_default_timeout(_DOWNLOAD_WAIT * 1000)
             page.on("download", collect)
             #: The whole item runs against one clock, so no stage can spend the next one's. The
             #: navigation takes its own share of it, and at most the clock whole (a test pins
@@ -722,6 +780,6 @@ class Session:
             # a failed download, not a crash of the whole command.
             raise Unavailable(f"the session browser failed during the download: {e}") from e
         finally:
-            context.set_default_timeout(None)  # back to the library default
             with contextlib.suppress(PlaywrightError):
+                context.set_default_timeout(None)  # back to the library default
                 page.remove_listener("download", collect)

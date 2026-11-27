@@ -31,7 +31,7 @@ from ..aggregate import identity
 from ..backends._entitled import EntitledBackend
 from ..backends.base import GraphSource
 from ..backends.http import RETRY_CODES
-from ..browser import PlaywrightTimeoutError, session_from_config
+from ..browser import PlaywrightError, PlaywrightTimeoutError, session_from_config
 from ..config import get_all_backends
 from ..errors import BadInput, BotWall, LitcliError, Unavailable
 from ..models import AcademicItem
@@ -432,7 +432,10 @@ def _session_alive(session) -> Callable[[], bool]:
             return True
         try:
             session.start()
-        except (LitcliError, OSError, RuntimeError):
+        except (LitcliError, OSError, RuntimeError, PlaywrightError):
+            # Playwright's own Error is none of the above (it comes from the driver, not the
+            # machine), and it is exactly what a second engine start raises: a browser that
+            # cannot come up costs that copy the cookie path, not the walk.
             return False
         return True
     return alive

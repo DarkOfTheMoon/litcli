@@ -243,6 +243,24 @@ class DepsFromConfigTest(unittest.TestCase):
         self.assertEqual(session.starts, 1)
         self.assertEqual(deps.browser_fetch("https://e.test/x.pdf"), b"%PDF-1.4\nbrowser\n")
 
+    def test_a_browser_that_cannot_start_is_just_no_browser_for_the_copy(self):
+        # Starting the session is the first check's job, and Playwright can refuse it for
+        # reasons of its own (its Error is neither LitcliError nor OSError, and it escaped the
+        # hop loop when it came out of here): the copy takes the cookie path, the walk goes on.
+        class DriverError(Exception):
+            """Playwright's Error shape: not a LitcliError, not an OSError, not RuntimeError."""
+
+        class Broken(FakeLiveSession):
+            def start(self):
+                raise DriverError(
+                    "It looks like you are using Playwright Sync API inside the asyncio loop.")
+
+        session = Broken()
+        with mock.patch.object(survey, "session_from_config", lambda cfg: session), \
+                mock.patch.object(survey, "PlaywrightError", DriverError):
+            deps = self.build({"browser": {"enabled": True}}, {"openalex": mock.Mock()})
+            self.assertFalse(deps.session_alive())  # inside the patch: the clause is read now
+
     def test_the_graph_sources_follow_a_fixed_preference(self):
         # OpenAlex first (it has the richest graph), then the services that can stand in when
         # its shared budget is gone: S2's graph, then the CC0 link service, then the deposits.
