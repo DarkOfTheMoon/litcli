@@ -106,6 +106,7 @@ def build_parser() -> argparse.ArgumentParser:
     bl = bsub.add_parser("login", help="open a site in the shared profile to sign in; the browser stays up")
     bl.add_argument("site", nargs="?", help="site name (see `browser status`)")
     bsub.add_parser("status", help="per-site state of the live session: signed in / signed out / gated")
+    bsub.add_parser("stop", help="stop the browser session this tool started")
 
     # --- data: local store CRUD (write · requires decision) ---
     d = sub.add_parser("data", help="local store operations (CRUD; read-only backends are reported)")

@@ -227,8 +227,14 @@ def _launch_detached(binary: str, profile, headless: bool, proxy: str | None,
     port = _free_port()
     profile = Path(profile)
     profile.mkdir(parents=True, exist_ok=True)
-    argv = [binary, f"--user-data-dir={profile}", f"--remote-debugging-port={port}",
-            "--no-first-run", "--no-default-browser-check", "about:blank"]
+    argv = [binary]
+    if profile != paths.user_browser_profile_dir():
+        # Chrome refuses remote debugging when --user-data-dir names the platform default data
+        # directory, so the way to point at the user's own profile is to name it the same way
+        # a hand-started Chrome does: not at all.
+        argv.append(f"--user-data-dir={profile}")
+    argv += [f"--remote-debugging-port={port}", "--no-first-run", "--no-default-browser-check",
+             "about:blank"]
     if headless:
         argv.insert(1, "--headless=new")
     if profile_directory:
@@ -622,7 +628,7 @@ class Lease:
     """A held-open control connection: the release is its EOF, which the kernel does for us."""
 
     def __init__(self, sock: socket.socket, reader, control_port: int, cdp_port: int, owns: bool,
-                 pinned: bool, version: int):
+                 pinned: bool, version: int, headless: bool = False):
         self._sock: socket.socket | None = sock
         self._reader = reader
         self.control_port = control_port
@@ -630,6 +636,7 @@ class Lease:
         self.owns = owns
         self.pinned = pinned
         self.version = version
+        self.headless = headless   # the broker's browser, not what this caller asked for
 
     def live(self) -> bool:
         """Whether the broker still answers on this lease's connection."""
@@ -682,7 +689,8 @@ def connect(control_port, *, version: int = PROTOCOL_VERSION, headless: bool,
         raise BrokerUnavailable(f"the broker on port {control_port} did not answer: {e}") from e
     return Lease(sock, reader, int(control_port), int(answer["cdp_port"]),
                  bool(answer.get("owns")), bool(answer.get("pinned")),
-                 int(answer.get("version", PROTOCOL_VERSION)))
+                 int(answer.get("version", PROTOCOL_VERSION)),
+                 bool(answer.get("headless")))
 
 
 def shutdown(control_port, *, force: bool = False) -> dict:
@@ -691,6 +699,11 @@ def shutdown(control_port, *, force: bool = False) -> dict:
 
 def pin(control_port, *, pinned: bool = True) -> dict:
     return _exchange(control_port, {"cmd": "pin", "pinned": pinned})
+
+
+def status(control_port, *, timeout: float = 2.0) -> dict:
+    """One status snapshot of the broker on ``control_port``."""
+    return _exchange(control_port, {"cmd": "status"}, timeout)
 
 
 def read_session() -> dict | None:

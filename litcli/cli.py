@@ -42,6 +42,7 @@ _SURVEY_COMMANDS = {
 _BROWSER_COMMANDS = {
     "login": browser_cmd.cmd_browser_login,
     "status": browser_cmd.cmd_browser_status,
+    "stop": browser_cmd.cmd_browser_stop,
 }
 
 _DATA_COMMANDS = {

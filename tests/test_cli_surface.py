@@ -26,7 +26,7 @@ EXPECTED = {
 EXPECTED_PARENTS = {
     "data": {"get", "add", "set", "del", "attach", "tree", "members"},
     "backends": {"list", "status", "authorize", "install-browser"},
-    "browser": {"login", "status"},
+    "browser": {"login", "status", "stop"},
     "survey": {"new", "run", "status", "stop"},
 }
 

@@ -202,9 +202,11 @@ class _Launched:
 class FakeLease:
     """A held control connection: ``live`` is a flag the test flips, ``close`` the release."""
 
-    def __init__(self, cdpport=41_000, owns=False, pinned=False, control_port=43_000):
+    def __init__(self, cdpport=41_000, owns=False, pinned=False, control_port=43_000,
+                 headless=False):
         self.cdpport, self.owns, self.pinned = cdpport, owns, pinned
         self.control_port = control_port
+        self.headless = headless
         self.version = PROTOCOL_VERSION
         self.alive_flag = True
 
@@ -216,7 +218,7 @@ class FakeLease:
 
 
 class FakeSession:
-    """The four methods a caller uses, with no lifetime at all."""
+    """The methods a caller uses, with no lifetime at all."""
 
     def __init__(self):
         self.urls: list[str] = []
@@ -224,9 +226,12 @@ class FakeSession:
         self.alive = lambda: True   # tests reassign it: a dead session takes the cookie path
         self.closed = False
         self.terminated = False
+        self.started = False
+        self.mode = "launched"
+        self._lease = FakeLease(owns=True)
 
     def start(self):
-        pass
+        self.started = True
 
     def page(self, url):
         self.urls.append(url)

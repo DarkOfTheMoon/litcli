@@ -235,6 +235,31 @@ class PrepareTest(BrokerTest):
         self.assertIn("--profile-directory=Profile 1", argv)
         self.assertIn("--headless=new", argv)
 
+    def test_a_default_profile_is_started_without_the_user_data_dir_switch(self):
+        # Chrome opens no debugging port when --user-data-dir names the platform default data
+        # directory (remote_debugging_server.cc, IsUsingDefaultDataDirectory). The user's own
+        # profile IS that directory, so pointing at it means leaving the switch out.
+        with mock.patch.object(bb.paths, "user_browser_profile_dir",
+                               return_value=paths.browser_profile_dir()), \
+                mock.patch.object(bb.subprocess, "Popen") as popen, \
+                mock.patch.object(bb, "cdp_ready", return_value=True), \
+                mock.patch.object(bb, "_attach_engine", return_value=(object(), None)):
+            popen.return_value.poll.return_value = None
+            bb._launch_detached("/bin/true", paths.browser_profile_dir(), True, None, "Default")
+        argv = popen.call_args.args[0]
+        self.assertNotIn("--user-data-dir", " ".join(argv))
+
+    def test_any_other_profile_keeps_the_user_data_dir_switch(self):
+        with mock.patch.object(bb.paths, "user_browser_profile_dir",
+                               return_value=Path("/nowhere/at/all")), \
+                mock.patch.object(bb.subprocess, "Popen") as popen, \
+                mock.patch.object(bb, "cdp_ready", return_value=True), \
+                mock.patch.object(bb, "_attach_engine", return_value=(object(), None)):
+            popen.return_value.poll.return_value = None
+            bb._launch_detached("/bin/true", paths.browser_profile_dir(), True, None, "Default")
+        argv = popen.call_args.args[0]
+        self.assertIn(f"--user-data-dir={paths.browser_profile_dir()}", argv)
+
     def test_without_any_chrome_the_bundled_browser_is_launched(self):
         with mock.patch.object(bb.shutil, "which", return_value=None), \
                 mock.patch.object(bb, "_bundled_binary", return_value="/b/chrome"), \

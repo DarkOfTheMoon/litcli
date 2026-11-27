@@ -149,7 +149,7 @@ class _Runtime:
                 self._stopper()
 
 
-def session_from_config(cfg: dict) -> Session | None:
+def session_from_config(cfg: dict, *, pinned: bool = False) -> Session | None:
     """The session ``[browser]`` asks for, or ``None`` when the section is off.
 
     ``[network].proxy`` is passed on: the clearance is bound to the egress IP, so the browser
@@ -171,7 +171,7 @@ def session_from_config(cfg: dict) -> Session | None:
                    headless=bool(section.get("headless", False)), channel=channel,
                    proxy=(cfg.get("network") or {}).get("proxy"),
                    profile_directory=section.get("profile_directory") or "Default",
-                   profile_source="config" if profile else "default")
+                   profile_source="config" if profile else "default", pinned=pinned)
 
 
 def _dedicated_profile_left_behind() -> bool:

@@ -1,16 +1,30 @@
-"""`litcli browser login` / `litcli browser status` — the human end of the shared session.
+"""`litcli browser login` / `status` / `stop` — the human end of the shared session.
 
 Signing in once in the one shared profile is what replaces copying cookies per site. ``login``
 opens the site in that profile and leaves the browser running; ``status`` reads each site's
-answer and says whether the live session reaches it.
+answer and says whether the live session reaches it; ``stop`` ends the session and leaves
+whatever browser the user would still want.
 """
 from __future__ import annotations
 
 import contextlib
+import shutil
+import subprocess
 import sys
+import time
 
+from .. import browser_broker as broker
+from .. import paths
 from ..backends._cf_gate import is_challenge_page, is_sign_in_page, is_waf_page
-from ..browser import BrowserUnavailable, PlaywrightTimeoutError, Session, session_from_config
+from ..browser import (
+    BrowserUnavailable,
+    PlaywrightTimeoutError,
+    Session,
+    session_from_config,
+)
+
+#: How long ``login`` waits for other leases on a headless broker before giving up.
+_WAIT_FOR_IDLE = 30.0
 
 #: Where each publisher's sign-in leaves the session usable. The probe is the site root: it is
 #: served to every visitor, so its answer tells entitlement state without naming an article.
@@ -60,7 +74,7 @@ def _probe(session: Session, url: str) -> str:
     return state
 
 
-def _session(cfg: dict) -> Session:
+def _session(cfg: dict, *, pinned: bool = False) -> Session:
     """The session these two commands open: the configured one, enabled or not.
 
     ``browser login`` is how the session gets set up, so it cannot depend on the switch that
@@ -69,7 +83,7 @@ def _session(cfg: dict) -> Session:
     """
     section = dict(cfg.get("browser") or {})
     section["enabled"] = True
-    return session_from_config({**cfg, "browser": section})
+    return session_from_config({**cfg, "browser": section}, pinned=pinned)
 
 
 def cmd_browser_login(cfg, args) -> int:
@@ -82,9 +96,24 @@ def cmd_browser_login(cfg, args) -> int:
         print(f"[error] unknown site {site}; choose one of: {', '.join(SITES)}",
               file=sys.stderr)
         return 2
-    session = _session(cfg)
+    if _targets_the_users_own_profile(cfg):
+        return _login_in_window(cfg, site)
+    session = _session(cfg, pinned=True)
     try:
         session.start()
+        headless = bool(session._lease and session._lease.headless)
+        if session.mode != "attached" and headless:
+            # A hidden browser has no window to sign in through. One nobody else holds can be
+            # replaced by a visible one; one in use has to be waited for.
+            if not _wait_released(session._lease.control_port):
+                print("[error] someone is using the browser, try again later", file=sys.stderr)
+                return 2
+            session.terminate()
+            session = _session(cfg, pinned=True)
+            session._headless = False
+            session.start()
+        if session.mode == "launched":
+            broker.pin(session._lease.control_port, pinned=True)  # no idle exit mid sign-in
         session.page(SITES[site])
     except BrowserUnavailable as e:
         print(f"[error] {e}", file=sys.stderr)
@@ -103,25 +132,122 @@ def cmd_browser_login(cfg, args) -> int:
     return 0
 
 
+def _targets_the_users_own_profile(cfg: dict) -> bool:
+    """Whether ``[browser].profile`` resolves to the platform's default Chrome profile."""
+    return (paths.resolve_browser_profile((cfg.get("browser") or {}).get("profile"))
+            == paths.user_browser_profile_dir())
+
+
+def _open_window(cfg: dict, url: str) -> None:
+    """Start a Chrome on the user's own profile, detached, with ``url`` already open.
+
+    No debugging port is asked for, and none is reported: Chrome will not open one while
+    ``--user-data-dir`` names its default data directory, which is what the user's profile is.
+    The sign-ins still land in that profile, which is all the headless reader needs.
+    """
+    section = cfg.get("browser") or {}
+    binary = broker._binary(section.get("channel", "chrome"))
+    argv = [binary]
+    if not any(shutil.which(name) for name in broker._CHROME_BINARIES):
+        # The bundled Chromium has no default store of its own here: name the profile or the
+        # sign-ins would land in a browser nothing else opens.
+        argv.append(f"--user-data-dir={paths.resolve_browser_profile(section.get('profile'))}")
+    if section.get("profile_directory"):
+        argv.append(f"--profile-directory={section['profile_directory']}")
+    proxy = (cfg.get("network") or {}).get("proxy")
+    if proxy:
+        argv.append(f"--proxy-server={proxy}")
+    argv += ["--no-first-run", "--no-default-browser-check", url]
+    try:
+        subprocess.Popen(argv, start_new_session=True, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
+    except OSError as e:
+        raise BrowserUnavailable(f"could not start {binary}: {e}",
+                                 hint="litcli backends install-browser") from e
+
+
+def _login_in_window(cfg: dict, site: str) -> int:
+    """The own-profile path: a plain window, no session, no probing."""
+    try:
+        _open_window(cfg, SITES[site])
+    except BrowserUnavailable as e:
+        print(f"[error] {e}", file=sys.stderr)
+        return 2
+    print(f"Sign in to {site} in the window that just opened.")
+    print("Then press Enter here, in the terminal (not in the browser window) — that is what "
+          "ends this command.")
+    print("The sign-in stays in your browser profile: later commands read it from there.")
+    with contextlib.suppress(EOFError):
+        input()
+    return 0
+
+
+def _wait_released(control_port: int) -> bool:
+    """Wait for every other lease on the broker to go, up to :data:`_WAIT_FOR_IDLE`."""
+    deadline = time.monotonic() + _WAIT_FOR_IDLE
+    while True:
+        try:
+            if not broker.status(control_port).get("leases"):
+                return True
+        except (broker.BrokerUnavailable, OSError, ValueError):
+            return True  # no broker left to wait for
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.25)
+
+
+def cmd_browser_stop(cfg, args) -> int:
+    """Stop the broker; what happens to the browser is decided by who owns it.
+
+    A browser the user opened is theirs and is left running; one we started headless is
+    invisible and goes; one we started with a window is closed by closing it.
+    """
+    state = broker.read_session()
+    if not state:
+        print("no session")
+        return 0
+    try:
+        lease = broker.connect(state["control_port"], headless=False)
+    except broker.BrokerUnavailable:
+        print("no session")
+        return 0
+    owns, headless, pid = bool(state.get("owns")), bool(state.get("headless")), state.get("pid")
+    try:
+        with contextlib.suppress(BrowserUnavailable, OSError, ValueError):
+            broker.shutdown(lease.control_port, force=True)  # gone already is the same outcome
+    finally:
+        lease.close()
+    if not owns:
+        print("your Chrome was left running")
+    elif headless:
+        print(f"stopped (pid {pid})")
+    else:
+        print(f"left running (pid {pid}) - close the window to end it")
+    return 0
+
+
 def cmd_browser_status(cfg, args) -> int:
     """Report, per site, whether the live session gets through — and its gates."""
     session = _session(cfg)
-    started = not session.alive()
     try:
-        if started:
+        if not session.alive():
             session.start()
+        info = broker.status(session._lease.control_port) if session._lease else {}
+        for name in ("profile", "source", "profile_directory", "mode", "leases"):
+            value = info.get(name)
+            if name == "mode":
+                value = session.mode
+            print(f"{name}: {value}")
+        print()
         rows = [(site, _probe(session, url)) for site, url in SITES.items()]
     except BrowserUnavailable as e:
         print(f"[error] {e}", file=sys.stderr)
         return 2
     finally:
         # Also when the browser was already running and only attached here: the attach leaves a
-        # Playwright driver active in this process, and the next session start would collide. A
-        # browser this command started is stopped again — a probe is not worth leaving one for.
-        if started:
-            session.terminate()
-        else:
-            session.close()
+        # Playwright driver active in this process, and the next session start would collide.
+        # The broker keeps running either way — it idles out on its own.
+        session.close()
     width = max(len(site) for site, _ in rows)
     for site, state in rows:
         print(f"{site:<{width}}  {state}")
