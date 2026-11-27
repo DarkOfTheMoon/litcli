@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   旧项目的 2.5 是分数单位，不说明就会被当成 0.2 的证据地板静默沿用。
 - `--seed` 收题名：题名是只有检索能落地的写法，原样存着既没有 DOI 也没有 work id，整轮永远展不开、审计还把它读成 0 覆盖。
   现在先按题名查一次并改存查到的 work id／题名；查不到的保留题名原样并说明。`status` 里题名未知的种子报 `?`（不是 0.00）、种子身份改用 `seen.jsonl` 行上的那个，可以对着 join。
+- 同一课题的不同写法按同一个词计：方法（reduced-order / low-order / ROM / PCA / POD / LES / manifold / surrogate）、
+  场景（combustor / combustion、microchannel / microfluidic）、温度与热（temperature / thermal / heat）、机器学习（ML / machine
+  learning）各成一组；题名里的 `principal component analysis` 等词组先压成缩写再比。排行与走查的题目覆盖都走这一层，
+  47 行快照里六条此前记 `known_miss` 的行随之关闭（`known_admit` 的 Model Combustor 行仍在别的腿上差一截）；
+  组是按课题画的，不伸成通用同义词表。
 - `tests/fixtures/ranking/` 与 `tests/test_ranking_snapshot.py`：三次实测走查里的人工判读快照（三次走查、47 行，
   带 `known_miss`/`known_admit` 标记当前缺口），重放题目侧判定。它是某一刻的快照，只防回归，不证明更好。
 

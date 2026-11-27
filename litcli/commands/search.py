@@ -16,6 +16,23 @@ from .render import print_items
 
 _TOKEN_RE = re.compile(r"\w+", re.UNICODE)
 
+#: Method names that are written out in a title and abbreviated in a question (and the other
+#: way round): compressed to one token on both sides so the acronym and the phrase meet. Only
+#: names whose spelled-out form is unambiguous are here — "analysis" alone would carry the
+#: word into half the literature.
+_PHRASES = (
+    (re.compile(r"\bprincipal component analys[ie]s\b"), "pca"),
+    (re.compile(r"\bproper orthogonal decomposition\b"), "pod"),
+    (re.compile(r"\blarge eddy simulations?\b"), "les"),
+)
+
+
+def _phrased(text: str) -> str:
+    text = (text or "").lower()
+    for pattern, acronym in _PHRASES:
+        text = pattern.sub(acronym, text)
+    return text
+
 #: Words that stand in nearly every title, so matching one says nothing about the topic. Left
 #: in, they hand any record a share of every question that happens to use them.
 _STOPWORDS = frozenset({
@@ -35,6 +52,32 @@ _LEG_JOINERS = frozenset({"for", "in", "of", "on", "onto", "using", "via", "with
 #: the parts that need the full algorithm. Titles and questions disagree on number constantly,
 #: and a literal comparison throws away the half of the question that happens to be plural.
 _SUFFIXES = (("ies", "y"), ("es", ""), ("s", ""), ("ing", ""), ("ed", ""))
+
+#: Words that stand for each other inside a survey question — one group per topic, and a word
+#: joins a group only if a title carrying it answers that leg. The literature spells the same
+#: method three ways ("reduced-order models", "low-order models", "ROM", "PCA", "LES") and the
+#: same setting two ways ("microfluidic flow" / "microchannel"); a question spelled one way
+#: otherwise loses every title spelled another, which is what the ranking fixture records as
+#: misses. They are deliberately short groups: a broad thesaurus ("analysis", "study") would
+#: hand out a hit for words that say nothing about the topic.
+_SYNONYMS: dict[str, frozenset[str]] = {
+    # A reduced-order model, and the decompositions and simulations it is built from.
+    "rom": frozenset({"rom", "roms", "reduced", "order", "low", "manifold", "manifolds", "pca",
+                      "pod", "les", "model", "models", "modeling", "modelling", "surrogate",
+                      "surrogates"}),
+    # The fire and the rig it burns in.
+    "combust": frozenset({"combustion", "combustor", "combustors", "combusting", "burner",
+                          "burners"}),
+    # The device scale and the channel inside it.
+    "micro": frozenset({"microfluidic", "microfluidics", "microchannel", "microchannels"}),
+    # Heat transport under its three usual names.
+    "therm": frozenset({"thermal", "temperature", "thermohydraulic", "thermohydraulics", "heat"}),
+    # Learning under its acronym and its two adjectives.
+    "ml": frozenset({"ml", "machine", "learning", "deep"}),
+}
+#: Reverse index of ``_SYNONYMS``: word -> its group.
+_SYNONYMS_OF: dict[str, frozenset[str]] = {w: group for group in _SYNONYMS.values()
+                                           for w in group}
 
 #: Share of a long question's parts that must be carried to count as an answer. Elasticsearch's
 #: ``minimum_should_match`` conditional form (``2<75%``): every part of a one- or two-part
@@ -85,8 +128,7 @@ def _fan_out(backends: dict, query: str, limit: int, filters: dict,
 
 
 def _tokens(query: str) -> list[str]:
-    return [t for t in (w.lower() for w in _TOKEN_RE.findall(query or ""))
-            if t not in _STOPWORDS]
+    return [t for t in _TOKEN_RE.findall(_phrased(query)) if t not in _STOPWORDS]
 
 
 def _stem(word: str) -> str:
@@ -97,16 +139,23 @@ def _stem(word: str) -> str:
 
 
 def _same(a: str, b: str) -> bool:
-    """Whether two words are the same word: equal stems, or one inside the other.
+    """Whether two words are the same word: equal stems, one inside the other, or one group.
 
     The containment covers compounding — ``nanofluidic`` carries ``fluidic``, and
     ``viscoelastic`` carries the ``elastic`` a title may spell on its own. It needs four
     characters at the shorter end, or the article ``a`` sits inside half the query.
+
+    The groups (see ``_SYNONYMS``) cover what neither does: the same method and the same
+    setting written several ways. They are topic groups, not a thesaurus, and they are
+    symmetric — being in one makes every pair of members the same word.
     """
     if _stem(a) == _stem(b):
         return True
     short, long_ = (a, b) if len(a) <= len(b) else (b, a)
-    return len(short) >= 4 and short in long_
+    if len(short) >= 4 and short in long_:
+        return True
+    group = _SYNONYMS_OF.get(a)
+    return group is not None and group is _SYNONYMS_OF.get(b)
 
 
 def legs(query: str) -> list[list[str]]:
@@ -117,8 +166,7 @@ def legs(query: str) -> list[list[str]]:
     parts separately weighable, so one of them cannot be bought with the other's words.
     """
     parts: list[list[str]] = [[]]
-    for word in _TOKEN_RE.findall(query or ""):
-        word = word.lower()
+    for word in _TOKEN_RE.findall(_phrased(query)):
         if word in _LEG_JOINERS:
             parts.append([])
         elif word not in _STOPWORDS:
@@ -159,8 +207,8 @@ def _leg_coverage(item: AcademicItem, part: list[str]) -> float:
     work to be about. Matching is by substring, so a query word inside a longer one still
     counts (``wick`` in ``wicking``) — cheap, and close enough for ranking.
     """
-    title = _TOKEN_RE.findall((item.title or "").lower())
-    abstract = _TOKEN_RE.findall((item.abstract or "").lower())
+    title = _TOKEN_RE.findall(_phrased(item.title))
+    abstract = _TOKEN_RE.findall(_phrased(item.abstract))
     hits = sum(1 for w in part if any(_same(w, t) for t in title))
     hits += 0.5 * sum(1 for w in part if any(_same(w, t) for t in abstract))
     return min(1.0, hits / max(2, len(part)))
@@ -207,9 +255,9 @@ def relevance(item: AcademicItem, query: str) -> tuple:
     shares a word; citation count breaks ties, then year and title make the order stable.
     """
     tokens = _tokens(query)
-    title = _TOKEN_RE.findall((item.title or "").lower())
-    abstract = _TOKEN_RE.findall((item.abstract or "").lower())
-    container = _TOKEN_RE.findall((item.container_title or "").lower())
+    title = _TOKEN_RE.findall(_phrased(item.title))
+    abstract = _TOKEN_RE.findall(_phrased(item.abstract))
+    container = _TOKEN_RE.findall(_phrased(item.container_title))
     score = sum(3 for t in tokens if any(_same(t, w) for w in title))
     score += sum(2 for t in tokens if any(_same(t, w) for w in container))
     score += sum(1 for t in tokens if any(_same(t, w) for w in abstract))

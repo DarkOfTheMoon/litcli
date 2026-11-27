@@ -109,9 +109,50 @@ class RelevanceTest(unittest.TestCase):
             search.overlap(_item("Instability of channel flow"),
                            "instabilities of channel flows"), singular)
 
+    def test_an_acronym_carries_the_method_it_stands_for(self):
+        # The literature writes the same method three ways ("reduced-order models", "low-order
+        # models", "ROM", "PCA", "LES"); a question spelled one way loses every title spelled
+        # another. The acronym stands for the whole leg, so it matches its words.
+        self.assertTrue(search._same("pca", "reduced"))
+        self.assertTrue(search._same("les", "order"))
+        self.assertTrue(search._same("manifold", "models"))
+
+    def test_an_acronym_alone_carries_the_leg(self):
+        # No "models" in the title: the acronym has to hold the part up by itself, which is
+        # what the group member buys over the shared "model" word.
+        q = "reduced-order models for turbulent combustion"
+        self.assertGreater(search.overlap(
+            _item("Principal component analysis of turbulent combustion"), q), 0.0)
+
+    def test_a_low_order_model_answers_a_reduced_order_question(self):
+        q = "reduced-order models for turbulent combustion"
+        self.assertGreater(search.overlap(
+            _item("Low-order modeling of combustion instability"), q), 0.2)
+
+    def test_a_method_word_is_not_a_synonym_of_everything(self):
+        # The groups are per-topic, not a thesaurus: "large" only stands for "LES" when the
+        # question says so, and combustion words do not answer a ROM leg.
+        self.assertFalse(search._same("large", "les"))
+        self.assertFalse(search._same("combustion", "manifold"))
+
     def test_a_compound_word_carries_its_part(self):
         self.assertGreater(search.overlap(_item("Purely elastic instability"),
                                           "viscoelastic instabilities"), 0.0)
+
+    def test_a_combustor_carries_combustion(self):
+        # The fixture labels the ROM question's "Model Combustor" row off, and it stays off on
+        # the second part alone; here the point is only that the noun form is the same topic.
+        self.assertTrue(search._same("combustor", "combustion"))
+        self.assertGreater(search.overlap(_item("Combustion instability in a model combustor"),
+                                          "turbulent combustion"), 0.0)
+
+    def test_a_temperature_is_thermal(self):
+        self.assertTrue(search._same("temperature", "thermal"))
+
+    def test_a_microchannel_is_a_microfluidic_flow(self):
+        # The transient question says "microfluidic flows"; a paper working in a microchannel
+        # is the same setting spelled from the geometry side.
+        self.assertTrue(search._same("microchannel", "microfluidic"))
 
     def test_citations_break_a_tie(self):
         weak = _item("Graph analysis")

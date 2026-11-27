@@ -75,10 +75,9 @@
    "title": "A hybrid machine learning approach for improving fuel temperature prediction of research reactors under mix convection regime",
    "year": "2022",
    "label": "on",
-   "evidence": 0.1406,
-   "known_miss": true,
-   "note": "ML on a reactor coolant quantity",
-   "overlap": 0.0625,
+   "evidence": 0.3281,
+   "note": "ML on a reactor coolant quantity ; closed by the synonym groups",
+   "overlap": 0.25,
    "coupling": 0.0,
    "citers": 0.0781
   },

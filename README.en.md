@@ -118,7 +118,10 @@ holding the command. `search`, `fetch`, `export`, `refs`, `citing`, `related` ar
 
 The table adds a short abstract snippet under each title (160 chars), because a title alone cannot be judged.
 Results are ordered by relevance (a title hit outweighs an abstract hit, covering every token adds more, ties go
-to citations then year), so `--limit` keeps the rows that answer the query rather than whichever source replied
+to citations then year). Spellings of one thing count as the same word: plurals, a part of a compound
+(`viscoelastic` carries `elastic`), and same-topic aliases of a method or setting (reduced-order / low-order / ROM /
+PCA / LES, combustor / combustion, microchannel / microfluidic), with a spelled-out method name
+(`principal component analysis`) compressed to its acronym before comparing, so `--limit` keeps the rows that answer the query rather than whichever source replied
 first; `--sort cited` switches to a pure citation ranking. Field filters are sent to the backends and re-checked
 locally, so a source that ignores one cannot leak records. A citation badge reads `[cited N via source]` and says
 `(sources disagree)` when sources report different counts.
