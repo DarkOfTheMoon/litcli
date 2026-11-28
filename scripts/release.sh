@@ -133,6 +133,22 @@ publish_release() {
       echo "  - no Release for v$ver yet (Gitee answers a missing one with an empty 200)"
     fi
   fi
+  # An existing Release keeps the body it was created with; the loop below only replaces assets.
+  # A re-release is run precisely because the last notes or artifacts were wrong, so refresh the
+  # notes too — otherwise the page ships installers that carry a fix it never mentions.
+  if [ -n "$id" ]; then
+    NOTES="$notes" python3 - "$payload" "$ver" <<'PAYLOAD'
+import json, os, sys
+json.dump({"tag_name": f"v{sys.argv[2]}", "name": f"litcli v{sys.argv[2]}",
+           "body": os.environ["NOTES"], "prerelease": False},
+          open(sys.argv[1], "w", encoding="utf-8"), ensure_ascii=False)
+PAYLOAD
+    curl -sS -f --connect-timeout 10 --max-time 60 -X PATCH "$GITEE_API/repos/$GITEE_PROJECT/releases/$id" \
+      --config "$auth" -H "Content-Type: application/json" \
+      --data-binary "@$payload" > "$resp" || {
+        echo "  ✗ Release body update failed" >&2; return 1; }
+    echo "  ✓ Release body refreshed"
+  fi
   if [ -z "$id" ]; then
     NOTES="$notes" python3 - "$payload" "$ver" <<'PAYLOAD'
 import json, os, sys
@@ -262,6 +278,14 @@ if [ "$RELEASE_ONLY" = 1 ]; then
     case "$(uname -s)" in
       Linux) sh scripts/build_binary.sh ;;
       *) echo "  ! no local binary build on $(uname -s); both installers must be supplied or fetched" ;;
+    esac
+    # dist/bin survives from earlier runs, exactly when a re-release happens. The local platform's
+    # installer was just rebuilt, but the other one is from whenever that run happened (or from
+    # whatever commit CI built it on) and missing_installers() would take it at face value. Drop it
+    # so it is always re-cut — from --installer, or by the CI fetch below.
+    case "$(uname -s)" in
+      Linux) rm -f dist/bin/*-windows-* ;;
+      *) rm -f dist/bin/*-linux-* ;;
     esac
     for p in ${EXTRA_INSTALLERS[@]+"${EXTRA_INSTALLERS[@]}"}; do
       cp "$p" dist/bin/ || { echo "  ✗ cannot copy --installer $p" >&2; exit 1; }
