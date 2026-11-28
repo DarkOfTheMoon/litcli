@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-28
+
 ### Changed
 
 - 浏览器会话默认改用**你自己的 Chrome profile**（`[browser].profile` 留空或 `user`；`dedicated` 仍指本工具的专用目录）。
