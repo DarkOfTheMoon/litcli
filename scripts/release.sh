@@ -37,6 +37,10 @@
 #                                                               bumped, committed or pushed. Requires
 #                                                               HEAD == the tag on a clean tree, rebuilds
 #                                                               dist/ and runs the consumer check.
+#                                                               Takes --binary (and --installer) the
+#                                                               same way the full path does; this is
+#                                                               how a package-only release is later
+#                                                               given its installers.
 #
 # Environment:
 #   GITEE_TOKEN   Gitee personal access token (releases scope), falls back to
@@ -250,9 +254,22 @@ if [ "$RELEASE_ONLY" = 1 ]; then
   fi
   if [ -d "$keep/bin" ]; then mkdir -p dist/bin && cp -a "$keep/bin/." dist/bin/; fi
   rm -rf "$keep"
-  echo "  ✓ dist/ rebuilt (installers are only attached if already in dist/bin/)"
+  echo "  ✓ dist/ rebuilt"
+  # Same binary step as the full path: a re-release of a package-only release is exactly where
+  # --binary is used, so it must not depend on dist/bin already having something in it.
+  if [ "$DO_BINARY" = 1 ]; then
+    mkdir -p dist/bin
+    case "$(uname -s)" in
+      Linux) sh scripts/build_binary.sh ;;
+      *) echo "  ! no local binary build on $(uname -s); both installers must be supplied or fetched" ;;
+    esac
+    for p in ${EXTRA_INSTALLERS[@]+"${EXTRA_INSTALLERS[@]}"}; do
+      cp "$p" dist/bin/ || { echo "  ✗ cannot copy --installer $p" >&2; exit 1; }
+      echo "  ✓ added $(basename "$p")"
+    done
+  fi
   # A Release that lists installers must list both platforms; top up from CI before publishing.
-  if ls dist/bin/*-* >/dev/null 2>&1; then
+  if [ "$DO_BINARY" = 1 ] || ls dist/bin/*-* >/dev/null 2>&1; then
     if [ -n "$(missing_installers)" ] && [ -n "$GITHUB_PROJECT" ] && command -v gh >/dev/null 2>&1; then
       fetch_ci_installer "$(git rev-parse "v$REL_VER^{commit}")" || exit 1
     fi
