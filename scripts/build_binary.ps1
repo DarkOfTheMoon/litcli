@@ -39,6 +39,30 @@ if ($LASTEXITCODE -ne 0) { throw "pyinstaller failed" }
 Write-Host "==> smoke-test the frozen tree"
 $exe = Join-Path $Stage "litcli\litcli.exe"
 if ((& $exe --version).Trim() -ne "litcli $Version") { throw "frozen build does not answer --version" }
+# Backends are imported by name at run time, which is what the spec's hiddenimports is for.
+# Ask the registry for every one of them: a module that did not survive the freeze is listed
+# as ``[unavailable]``, and a config that failed to load would print a single line instead.
+$BackendsToml = Join-Path $Work "backends.toml"
+$env:LITCLI_BACKENDS_TOML = $BackendsToml
+# A literal here-string: nothing in this program is subject to PowerShell escaping, so the
+# TOML it writes stays valid (a double-quoted one turned `"acm"` into `acm"`).
+& "$Venv\Scripts\python.exe" -c @'
+import os
+from litcli.config import _registry
+with open(os.environ['LITCLI_BACKENDS_TOML'], 'w', encoding='utf-8') as f:
+    for n in sorted(_registry()):
+        f.write('[backends.%s]\ntype = "%s"\n' % (n, n))
+'@
+if ($LASTEXITCODE -ne 0) { throw "cannot enumerate the backend registry" }
+if (-not (Test-Path $BackendsToml)) { throw "the backend config was not written" }
+$env:LITCLI_CONFIG = $BackendsToml
+$backendsOut = & $exe backends list
+$unavailable = $backendsOut | Where-Object { $_ -match '\[unavailable\]' }
+if ($unavailable) { $unavailable | Write-Host; throw "the frozen build cannot import the backends above (spec hiddenimports?)" }
+$want = [int](& "$Venv\Scripts\python.exe" -c "from litcli.config import _registry; print(len(_registry()))")
+$have = @($backendsOut | Where-Object { $_ }).Count
+if ($have -ne $want) { throw "backends list printed $have rows for $want backends" }
+Remove-Item Env:\LITCLI_CONFIG
 
 Write-Host "==> compile the installer"
 & $Iscc "/DVersion=$Version" "/DStaging=$(Join-Path $Stage 'litcli')" "packaging\installer\litcli.iss"

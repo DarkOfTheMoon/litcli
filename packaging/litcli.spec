@@ -11,7 +11,7 @@ installers offer that step. ``jieba`` is the CNKI keyword splitter.
 import os
 import sys
 
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 # PyInstaller resolves Analysis paths against this spec's own directory.
 ROOT = os.path.dirname(SPECPATH)
@@ -23,6 +23,11 @@ for package in ("playwright", "jieba"):
     datas += pkg_datas
     binaries += pkg_binaries
     hiddenimports += pkg_hidden
+
+# Every backend module is imported by name at run time (``litcli.backends.load_module``), so
+# PyInstaller's static analysis cannot see them; without this the frozen build answers --version
+# and then fails every search with "No module named 'litcli.backends.<x>'".
+hiddenimports += collect_submodules("litcli.backends")
 
 a = Analysis(
     [os.path.join(SPECPATH, "entry.py")],

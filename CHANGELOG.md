@@ -65,6 +65,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- 二进制安装包（Linux `.run`、Windows `setup.exe`）里全部检索 backend 模块都缺：backend 按名字在运行时导入，
+  PyInstaller 的静态分析看不见，冻结后 `--version` 正常、一搜索就报
+  `backend 'crossref' failed to build: ModuleNotFoundError`。spec 现在收集 `litcli.backends` 的全部子模块，两个
+  构建脚本的冒烟也改成枚举注册表里每个 backend 并要求一个 `[unavailable]` 都没有（原来只测 `--version`）。
 - 第二次 Ctrl-C 抬的是 `KeyboardInterrupt` 而不是 `SystemExit`：第一下之后装回的是信号原来的处理器，SIGINT 的默认处理器会抛
   `KeyboardInterrupt`，而走查四周的检查点保存只认 `SystemExit`——双击之后在手的副本不记 `error:interrupted`、不写 `stop`
   事件、项目状态停在 `running`（锁却已删）。现在第二下装的是自己的处理器：先把信号交给调用方原来的处理器（若有），

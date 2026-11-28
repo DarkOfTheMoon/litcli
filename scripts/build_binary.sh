@@ -45,6 +45,26 @@ echo "==> smoke-test the frozen tree"
 "$STAGE/litcli/litcli" --version | grep -qx "litcli $VERSION" \
     || { echo "frozen build does not answer --version" >&2; exit 1; }
 "$STAGE/litcli/litcli" backends install-browser --help >/dev/null
+# Backends are imported by name at run time, which is what the spec's hiddenimports is for.
+# Ask the registry for every one of them: a module that did not survive the freeze is listed
+# as ``[unavailable]``, and a config that failed to load would print a single line instead.
+"$VENV/bin/python" - "$WORK/backends.toml" <<'PY'
+import sys
+from litcli.config import _registry
+with open(sys.argv[1], "w") as f:
+    for n in sorted(_registry()):
+        f.write(f'[backends.{n}]\ntype = "{n}"\n')
+PY
+backends_out="$(LITCLI_CONFIG="$WORK/backends.toml" "$STAGE/litcli/litcli" backends list)"
+if printf '%s\n' "$backends_out" | grep -q '\[unavailable\]'; then
+    printf '%s\n' "$backends_out" | grep '\[unavailable\]' >&2
+    echo "the frozen build cannot import the backends above (spec hiddenimports?)" >&2
+    exit 1
+fi
+want="$("$VENV/bin/python" -c 'from litcli.config import _registry; print(len(_registry()))')"
+have="$(printf '%s\n' "$backends_out" | grep -c .)"
+[ "$have" = "$want" ] \
+    || { echo "backends list printed $have rows for $want backends" >&2; exit 1; }
 
 echo "==> assemble $OUT"
 # Both placeholders are filled: @PREFIX@ with the runtime shell variable the header defines
